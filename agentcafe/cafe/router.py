@@ -1,0 +1,323 @@
+"""Cafe router — GET /cafe/menu and POST /cafe/order endpoints.
+
+These are the agent-facing endpoints. Agents interact only with these.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
+
+import httpx
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from agentcafe.cafe.menu import get_full_menu
+from agentcafe.cafe.passport import validate_passport_jwt
+from agentcafe.db.engine import get_db
+
+router = APIRouter(prefix="/cafe", tags=["cafe"])
+
+# Module-level config flag (set during app startup via configure_router)
+_use_real_passport: bool = False
+
+
+def configure_router(use_real_passport: bool) -> None:
+    """Set runtime config for the router. Called once at startup."""
+    global _use_real_passport
+    _use_real_passport = use_real_passport
+
+# Shared HTTP client for proxying requests to backends.
+# Reuses TCP connections instead of creating one per request.
+_http_client: httpx.AsyncClient | None = None
+
+
+async def get_http_client() -> httpx.AsyncClient:
+    """Return the shared httpx client, creating it on first use."""
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(timeout=30.0)
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """Close the shared httpx client (call on shutdown)."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+class OrderRequest(BaseModel):
+    """The locked order format: service_id + action_id + passport + inputs."""
+    service_id: str
+    action_id: str
+    passport: str
+    inputs: dict
+
+
+# ---------------------------------------------------------------------------
+# GET /cafe/menu — Browse the Menu
+# ---------------------------------------------------------------------------
+
+@router.get("/menu")
+async def browse_menu():
+    """Return the full AgentCafe Menu.
+
+    Agents browse freely — no Passport required.
+    The Menu is semantic, lightweight, and agent-friendly.
+    No HTTP methods, no paths, no backend details.
+    """
+    db = await get_db()
+    menu = await get_full_menu(db)
+    return menu
+
+
+# ---------------------------------------------------------------------------
+# POST /cafe/order — Place an order
+# ---------------------------------------------------------------------------
+
+@router.post("/order")
+async def place_order(req: OrderRequest):
+    """Place an order through the Cafe proxy.
+
+    Double validation:
+    1. Human Passport validation (scope + authorization)
+    2. Company Policy validation (rate limit, action enabled, inputs)
+
+    Then proxy the request to the backend.
+    """
+    db = await get_db()
+
+    # --- Look up the proxy config for this service_id + action_id ---
+    cursor = await db.execute(
+        """SELECT backend_url, backend_path, backend_method, backend_auth_header,
+                  scope, human_auth_required, rate_limit
+           FROM proxy_configs
+           WHERE service_id = ? AND action_id = ?""",
+        (req.service_id, req.action_id),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "action_not_found",
+                "message": f"No action '{req.action_id}' found for service '{req.service_id}'.",
+            },
+        )
+
+    backend_url = row["backend_url"]
+    backend_path = row["backend_path"]
+    backend_method = row["backend_method"]
+    backend_auth_header = row["backend_auth_header"]
+    scope = row["scope"]
+    human_auth_required = bool(row["human_auth_required"])
+    _rate_limit = row["rate_limit"]
+
+    # --- GATE 1: Passport Validation ---
+    if _use_real_passport:
+        # Real JWT validation (Phase 2)
+        valid, error_code = await validate_passport_jwt(
+            req.passport, req.service_id, req.action_id, human_auth_required
+        )
+        if not valid:
+            status_map = {
+                "passport_invalid": 401,
+                "passport_expired": 401,
+                "passport_revoked": 401,
+                "scope_missing": 403,
+                "human_auth_required": 403,
+            }
+            status_code = status_map.get(error_code, 401)
+            message_map = {
+                "passport_invalid": "Invalid or expired Passport.",
+                "passport_expired": "Passport has expired.",
+                "passport_revoked": "Passport has been revoked.",
+                "scope_missing": f"Your Passport is missing the required scope: '{scope}'.",
+                "human_auth_required": "This action requires explicit human authorization in your Passport.",
+            }
+            await _audit_log(db, req, error_code, status_code)
+            raise HTTPException(
+                status_code=status_code,
+                detail={"error": error_code, "message": message_map.get(error_code, "Passport validation failed.")},
+            )
+    else:
+        # MVP: Accept "demo-passport" as a valid passport with all scopes.
+        passport_valid, passport_scopes = _validate_passport_mvp(req.passport)
+        if not passport_valid:
+            await _audit_log(db, req, "passport_invalid", 401)
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "passport_invalid", "message": "Invalid or expired Passport."},
+            )
+
+        # Check required scope
+        if scope not in passport_scopes:
+            await _audit_log(db, req, "scope_missing", 403)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "scope_missing",
+                    "message": f"Your Passport is missing the required scope: '{scope}'.",
+                },
+            )
+
+        # Check human authorization
+        if human_auth_required:
+            has_human_auth = _check_human_authorization_mvp(req.passport, req.service_id, req.action_id)
+            if not has_human_auth:
+                await _audit_log(db, req, "human_auth_required", 403)
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "human_auth_required",
+                        "message": "This action requires explicit human authorization in your Passport.",
+                    },
+                )
+
+    # --- GATE 2: Company Policy Validation ---
+    # Check the service is live and get menu entry for input validation
+    svc_cursor = await db.execute(
+        "SELECT status, menu_entry_json FROM published_services WHERE service_id = ?",
+        (req.service_id,),
+    )
+    svc_row = await svc_cursor.fetchone()
+    if svc_row is None or svc_row["status"] != "live":
+        await _audit_log(db, req, "service_unavailable", 503)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "service_unavailable", "message": "This service is currently unavailable."},
+        )
+
+    # Validate required inputs are present
+    menu_entry = json.loads(svc_row["menu_entry_json"])
+    action_def = next((a for a in menu_entry.get("actions", []) if a["action_id"] == req.action_id), None)
+    if action_def:
+        required_names = {inp["name"] for inp in action_def.get("required_inputs", [])}
+        provided_names = set(req.inputs.keys())
+        missing = required_names - provided_names
+        if missing:
+            await _audit_log(db, req, "missing_inputs", 422)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "missing_inputs",
+                    "message": f"Missing required inputs: {', '.join(sorted(missing))}",
+                    "missing": sorted(missing),
+                },
+            )
+
+    # MVP: Rate limiting deferred to Phase 2 (will use sliding window per passport+action)
+
+    # --- PROXY: Forward to backend ---
+    # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])
+    resolved_path = backend_path
+    for key, value in req.inputs.items():
+        resolved_path = resolved_path.replace(f"{{{key}}}", str(value))
+
+    target_url = f"{backend_url}{resolved_path}"
+
+    headers = {}
+    if backend_auth_header:
+        headers["Authorization"] = backend_auth_header
+
+    start_time = datetime.now(timezone.utc)
+
+    try:
+        client = await get_http_client()
+        if backend_method.upper() == "GET":
+            resp = await client.get(target_url, headers=headers)
+        elif backend_method.upper() == "POST":
+            resp = await client.post(target_url, json=req.inputs, headers=headers)
+        elif backend_method.upper() == "PUT":
+            resp = await client.put(target_url, json=req.inputs, headers=headers)
+        elif backend_method.upper() == "DELETE":
+            resp = await client.delete(target_url, headers=headers)
+        else:
+            resp = await client.post(target_url, json=req.inputs, headers=headers)
+    except httpx.RequestError as exc:
+        await _audit_log(db, req, "backend_error", 502)
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "backend_error", "message": "The service backend is temporarily unreachable."},
+        ) from exc
+
+    latency_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+
+    # Audit log
+    outcome = "success" if 200 <= resp.status_code < 400 else "backend_error"
+    await _audit_log(db, req, outcome, resp.status_code, latency_ms)
+
+    # Return the backend response to the agent
+    try:
+        body = resp.json()
+    except (ValueError, KeyError):
+        body = {"raw": resp.text}
+
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=body)
+
+    return body
+
+
+# ---------------------------------------------------------------------------
+# MVP Passport helpers (kept for backward compatibility, USE_REAL_PASSPORT=false)
+# ---------------------------------------------------------------------------
+
+def _validate_passport_mvp(passport: str) -> tuple[bool, list[str]]:
+    """MVP passport validation.
+
+    Accepts "demo-passport" as a valid passport with all scopes.
+    Scopes use the locked {service_id}:{action_id} format.
+    """
+    if passport == "demo-passport":
+        # Demo passport has all scopes
+        return True, [
+            "stayright-hotels:search-availability", "stayright-hotels:get-room-details",
+            "stayright-hotels:book-room", "stayright-hotels:cancel-booking",
+            "quickbite-delivery:browse-menu", "quickbite-delivery:place-order",
+            "quickbite-delivery:track-order", "quickbite-delivery:cancel-order",
+            "fixright-home:search-providers", "fixright-home:book-appointment",
+            "fixright-home:reschedule-appointment", "fixright-home:cancel-appointment",
+        ]
+    return False, []
+
+
+def _check_human_authorization_mvp(passport: str, service_id: str, action_id: str) -> bool:
+    """MVP human authorization check.
+
+    In the demo, "demo-passport" is pre-authorized for everything.
+    When USE_REAL_PASSPORT is true, this function is not called.
+    """
+    _ = (service_id, action_id)
+    return passport == "demo-passport"
+
+
+async def _audit_log(
+    db, req: OrderRequest, outcome: str, response_code: int, latency_ms: int = 0
+) -> None:
+    """Write an entry to the audit log."""
+    await db.execute(
+        """INSERT INTO audit_log (id, timestamp, service_id, action_id, passport_hash,
+                                   inputs_hash, outcome, response_code, latency_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            str(uuid.uuid4()),
+            datetime.now(timezone.utc).isoformat(),
+            req.service_id,
+            req.action_id,
+            hashlib.sha256(req.passport.encode()).hexdigest()[:16],
+            hashlib.sha256(json.dumps(req.inputs, sort_keys=True).encode()).hexdigest()[:16],
+            outcome,
+            response_code,
+            latency_ms,
+        ),
+    )
+    await db.commit()
