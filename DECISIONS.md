@@ -129,3 +129,14 @@
 5. **Health checks** on all four containers using `urllib.request` (no extra dependencies). Cafe waits for all three backends to be healthy before starting (`depends_on: condition: service_healthy`).
 6. **Local `python -m agentcafe.main`** still works unchanged — runs all four servers in one process for quick development.
 **Rationale:** Single image avoids maintaining four Dockerfiles for identical code. The lifespan pattern is idiomatic FastAPI and cleanly separates "standalone server" from "test harness" initialization. Backend host env vars are the minimal change needed — no config file refactoring, no service discovery overhead.
+
+### ADR-014: Company Policy engine — rate limiting via audit_log + type inference from Menu examples
+
+**Date:** February 22, 2026
+**Context:** `proxy_configs` has a `rate_limit` column (e.g., `"60/minute"`) that was seeded but never enforced. Input validation only checked presence of required fields, not their types. The onboarding wizard architecture anticipated a `policy.py` module.
+**Decision:**
+1. **Rate limiting**: Sliding-window counter using the existing `audit_log` table. Counts entries matching `(passport_hash, service_id, action_id)` within the window. No new tables — the audit log already indexes `passport_hash` and `(service_id, action_id)`. Returns HTTP 429 when exceeded.
+2. **Input type validation**: Infers expected types from the `example` field in each `required_input` in the Menu schema. String examples expect strings, numeric examples accept int or float (not bool), bool examples require bools, etc. Returns HTTP 422 with per-field error details.
+3. **Module**: `agentcafe/cafe/policy.py` — pure functions for type validation, async function for rate limiting. Imported by `router.py` Gate 2.
+4. **Rate limit parsing**: Supports `N/minute`, `N/hour`, `N/day` formats. Invalid formats log a warning and skip enforcement (fail-open for malformed config).
+**Rationale:** Reusing the audit_log avoids a separate rate-limit counter table and keeps the schema simple. The audit_log already has the right indexes. Type inference from examples is zero-config — companies don't need to define a separate type schema; the Menu format already carries enough information. Fail-open on malformed rate limits prevents a config typo from blocking all traffic.

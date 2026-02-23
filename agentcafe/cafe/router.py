@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from agentcafe.cafe.menu import get_full_menu
 from agentcafe.cafe.passport import validate_passport_jwt
+from agentcafe.cafe.policy import check_rate_limit, validate_input_types
 from agentcafe.db.engine import get_db
 
 router = APIRouter(prefix="/cafe", tags=["cafe"])
@@ -200,7 +201,8 @@ async def place_order(req: OrderRequest):
     menu_entry = json.loads(svc_row["menu_entry_json"])
     action_def = next((a for a in menu_entry.get("actions", []) if a["action_id"] == req.action_id), None)
     if action_def:
-        required_names = {inp["name"] for inp in action_def.get("required_inputs", [])}
+        required_inputs = action_def.get("required_inputs", [])
+        required_names = {inp["name"] for inp in required_inputs}
         provided_names = set(req.inputs.keys())
         missing = required_names - provided_names
         if missing:
@@ -214,7 +216,27 @@ async def place_order(req: OrderRequest):
                 },
             )
 
-    # MVP: Rate limiting deferred to Phase 2 (will use sliding window per passport+action)
+        # Validate input types against Menu example values
+        types_ok, type_errors = validate_input_types(req.inputs, required_inputs)
+        if not types_ok:
+            await _audit_log(db, req, "invalid_input_types", 422)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "invalid_input_types",
+                    "message": f"Input type errors: {'; '.join(type_errors)}",
+                    "type_errors": type_errors,
+                },
+            )
+
+    # Rate limiting — sliding window per passport + action
+    passport_hash = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
+    rate_ok, rate_error = await check_rate_limit(
+        db, passport_hash, req.service_id, req.action_id, _rate_limit,
+    )
+    if not rate_ok:
+        await _audit_log(db, req, "rate_limit_exceeded", 429)
+        raise HTTPException(status_code=429, detail=rate_error)
 
     # --- PROXY: Forward to backend ---
     # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])

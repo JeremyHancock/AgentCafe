@@ -1,6 +1,6 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 2.0–2.2 + 2.4–2.5 complete, Docker Compose (2.1) complete. Remaining: Company Policy engine (2.3).  
+**Current Status:** Phase 2 complete. All sub-phases done (2.0–2.5 including Docker Compose and Company Policy engine).  
 **Last Updated:** February 22, 2026
 
 **MVP Success Criteria**
@@ -32,13 +32,13 @@ We can run end-to-end locally:
 - ✅ Menu discovery: `GET /cafe/menu` returns locked format from database
 - ✅ Order proxy: `POST /cafe/order` with double validation (MVP passport) + audit logging
 - ✅ Database seeding: 3 services, 12 proxy configs, auto-seeded on startup
-- ✅ Tests: 27 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation)
+- ✅ Tests: 46 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation)
 
-**Phase 2: Core Cafe Foundation** ← IN PROGRESS
+**Phase 2: Core Cafe Foundation** ✅
 - ✅ **2.0 Passport System Design** — locked in `docs/passport/design.md` (Grok + Claude collaboration)
 - ✅ 2.1 Docker Compose: Cafe + 3 demo backends in separate containers, real HTTP proxying, health checks, configurable backend hosts
 - ✅ 2.2 Real Passport validation — JWT (HS256), scopes (`{service_id}:{action_id}`), wildcard (`{service_id}:*`), expiry, revocation via `revoked_jtis` table
-- ⬜ 2.3 Company Policy engine (enforce rate limits from proxy_configs, type validation)
+- ✅ 2.3 Company Policy engine: sliding-window rate limiting (per passport+action from audit_log), input type validation (inferred from Menu example values)
 - ✅ 2.4 Migration flag `USE_REAL_PASSPORT` routes between MVP and real JWT validation in `place_order`
 - ✅ 2.5 Passport issuance (`POST /passport/issue`, API-key protected) + revocation (`POST /cafe/revoke`)
 

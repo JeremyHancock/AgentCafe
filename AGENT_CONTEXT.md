@@ -78,6 +78,7 @@ AgentCafe/
 │   ├── cafe/
 │   │   ├── menu.py                 # Assembles the locked Menu from published_services
 │   │   ├── passport.py             # JWT Passport: issuance, validation, revocation (Phase 2)
+│   │   ├── policy.py               # Company Policy: rate limiting + input type validation (Phase 2.3)
 │   │   └── router.py               # GET /cafe/menu + POST /cafe/order (proxy + double validation + audit)
 │   └── demo_backends/
 │       ├── hotel.py                # StayRight Hotels — 4 endpoints, in-memory data
@@ -87,7 +88,8 @@ AgentCafe/
 │   ├── conftest.py                 # Shared fixtures: in-memory DB, ASGI test client
 │   ├── test_menu.py                # 7 tests: format compliance, actions, auth requirements
 │   ├── test_order.py               # 8 tests: rejection + input validation + happy-path proxy (MVP mode)
-│   └── test_passport.py            # 12 tests: JWT issuance, scope/wildcard/authorization validation, revocation
+│   ├── test_passport.py            # 12 tests: JWT issuance, scope/wildcard/authorization validation, revocation
+│   └── test_policy.py              # 19 tests: rate limiting (unit + integration), input type validation
 ├── docs/
 │   ├── design/                     # Service specs, menu format, onboarding wizard design
 │   └── passport/                   # Passport system design + threat model (v1.4, locked)
@@ -109,7 +111,7 @@ AgentCafe/
 | Demo backends (hotel, lunch, home) | **Real mock data** | In-memory, realistic responses, no persistence across restarts |
 | Passport validation | **Real (behind flag)** | `USE_REAL_PASSPORT=true` enables JWT validation (HS256, scopes, expiry, revocation). Default: MVP mode (`"demo-passport"`). |
 | Human authorization check | **Real (behind flag)** | JWT `authorizations` array with per-action mandates and `valid_until` enforcement. Default: MVP mode. |
-| Rate limiting | **Not implemented** | Scope/limits defined in proxy_configs but not enforced yet. Phase 2. |
+| Rate limiting | **Real** | Sliding-window per passport+action using audit_log. Enforces `rate_limit` from proxy_configs (e.g., `60/minute`). |
 | Company Onboarding Wizard | **Designed only** | Full design in `docs/design/onboarding-wizard/`. Implementation is Phase 3. |
 | Audit log | **Real** | Every order writes to `audit_log` table (hashed passport, hashed inputs, outcome, latency) |
 | DB encryption for backend creds | **Not implemented** | Backend auth headers stored as plaintext in MVP. Phase 4. |
@@ -131,7 +133,7 @@ python -m agentcafe.main           # Starts all 4 servers in one process
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # Passport: POST http://127.0.0.1:8000/passport/issue + POST /cafe/revoke
-pytest tests/ -v                   # 27 tests, all passing
+pytest tests/ -v                   # 46 tests, all passing
 ```
 
 ## 9. Architecture Notes (Phase 1 Cleanup)
