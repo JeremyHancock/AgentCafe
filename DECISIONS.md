@@ -139,4 +139,15 @@
 2. **Input type validation**: Infers expected types from the `example` field in each `required_input` in the Menu schema. String examples expect strings, numeric examples accept int or float (not bool), bool examples require bools, etc. Returns HTTP 422 with per-field error details.
 3. **Module**: `agentcafe/cafe/policy.py` — pure functions for type validation, async function for rate limiting. Imported by `router.py` Gate 2.
 4. **Rate limit parsing**: Supports `N/minute`, `N/hour`, `N/day` formats. Invalid formats log a warning and skip enforcement (fail-open for malformed config).
-**Rationale:** Reusing the audit_log avoids a separate rate-limit counter table and keeps the schema simple. The audit_log already has the right indexes. Type inference from examples is zero-config — companies don't need to define a separate type schema; the Menu format already carries enough information. Fail-open on malformed rate limits prevents a config typo from blocking all traffic.
+**Rationale:** Reusing the audit_log avoids a separate rate-limit counter table and keeps the schema simple. The audit_log already has the right indexes. Fail-open on malformed rate limits prevents a config typo from blocking all traffic.
+
+### ADR-015: Explicit `type` field in Menu `required_inputs`
+
+**Date:** February 22, 2026
+**Context:** ADR-014 introduced input type validation by inferring types from `example` values. This is ambiguous — e.g., `"2"` could be a string or a number that happens to be quoted. The backend APIs expect specific types, and guessing from examples is unnecessary when we can ask companies to declare the type at onboarding.
+**Decision:**
+1. Add an explicit `"type"` key to every `required_input` in the Menu schema. Values use JSON Schema type names: `string`, `integer`, `number`, `boolean`, `array`, `object`.
+2. `policy.py` uses the `type` field for validation when present. Falls back to inferring from `example` only when `type` is absent (backward compatibility for any legacy entries).
+3. This is an **additive** schema change per ADR-009 — no breaking changes to existing consumers. Agents and tools that ignore the field continue to work.
+4. The Onboarding Wizard (Phase 3) will collect `type` as a required field during service registration, so all new entries will always have it.
+**Rationale:** Explicit types eliminate ambiguity, produce clearer error messages, and align with what the backend API actually expects. Collecting type at onboarding is trivial (a dropdown) and far more reliable than heuristic inference.

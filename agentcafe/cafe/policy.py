@@ -102,27 +102,33 @@ def _python_type_name(value) -> str:
     return "unknown"
 
 
-def _types_compatible(expected_example, actual_value) -> bool:
-    """Check if actual_value is type-compatible with the expected example.
+# Maps the explicit "type" field values to Python type-check functions.
+# Uses JSON Schema type names (string, integer, number, boolean, array, object).
+_TYPE_CHECKERS: dict[str, callable] = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "array": lambda v: isinstance(v, list),
+    "object": lambda v: isinstance(v, dict),
+}
 
-    Rules:
-    - string example → actual must be a string
-    - int/float example → actual must be int or float (not bool)
-    - bool example → actual must be bool
-    - list example → actual must be a list
-    - dict example → actual must be a dict
-    """
-    if isinstance(expected_example, bool):
-        return isinstance(actual_value, bool)
-    if isinstance(expected_example, (int, float)):
-        return isinstance(actual_value, (int, float)) and not isinstance(actual_value, bool)
-    if isinstance(expected_example, str):
-        return isinstance(actual_value, str)
-    if isinstance(expected_example, list):
-        return isinstance(actual_value, list)
-    if isinstance(expected_example, dict):
-        return isinstance(actual_value, dict)
-    return True
+
+def _infer_type_from_example(example) -> str | None:
+    """Infer a type name from an example value (fallback when 'type' is absent)."""
+    if isinstance(example, bool):
+        return "boolean"
+    if isinstance(example, int):
+        return "integer"
+    if isinstance(example, float):
+        return "number"
+    if isinstance(example, str):
+        return "string"
+    if isinstance(example, list):
+        return "array"
+    if isinstance(example, dict):
+        return "object"
+    return None
 
 
 def validate_input_types(
@@ -131,24 +137,34 @@ def validate_input_types(
 ) -> tuple[bool, list[str] | None]:
     """Validate that provided input values match expected types from the Menu schema.
 
-    Infers expected types from the `example` field in each required_input.
-    Only validates inputs that are present AND have an example in the schema.
+    Uses the explicit `type` field if present (e.g., "string", "integer", "array").
+    Falls back to inferring from the `example` field if `type` is absent.
+    Only validates inputs that are present AND have a resolvable type.
     Returns (True, None) if all types match, or (False, error_list) with details.
     """
     errors = []
 
     for spec in required_inputs:
         name = spec.get("name")
-        example = spec.get("example")
-
-        if name is None or example is None:
+        if name is None or name not in inputs:
             continue
-        if name not in inputs:
+
+        # Resolve expected type: explicit 'type' field preferred, fall back to example
+        expected_type = spec.get("type")
+        if expected_type is None:
+            example = spec.get("example")
+            if example is None:
+                continue
+            expected_type = _infer_type_from_example(example)
+            if expected_type is None:
+                continue
+
+        checker = _TYPE_CHECKERS.get(expected_type)
+        if checker is None:
             continue
 
         actual = inputs[name]
-        if not _types_compatible(example, actual):
-            expected_type = _python_type_name(example)
+        if not checker(actual):
             actual_type = _python_type_name(actual)
             errors.append(
                 f"'{name}': expected {expected_type}, got {actual_type}"

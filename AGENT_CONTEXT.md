@@ -133,7 +133,7 @@ python -m agentcafe.main           # Starts all 4 servers in one process
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # Passport: POST http://127.0.0.1:8000/passport/issue + POST /cafe/revoke
-pytest tests/ -v                   # 46 tests, all passing
+pytest tests/ -v                   # 48 tests, all passing
 ```
 
 ## 9. Architecture Notes (Phase 1 Cleanup)

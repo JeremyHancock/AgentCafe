@@ -87,8 +87,8 @@ def test_parse_rate_limit_invalid():
 def test_validate_types_all_correct():
     """Correct types should pass."""
     schema = [
-        {"name": "city", "example": "Austin"},
-        {"name": "guests", "example": 2},
+        {"name": "city", "type": "string", "example": "Austin"},
+        {"name": "guests", "type": "integer", "example": 2},
     ]
     ok, errors = validate_input_types({"city": "Dallas", "guests": 4}, schema)
     assert ok is True
@@ -97,7 +97,7 @@ def test_validate_types_all_correct():
 
 def test_validate_types_string_as_int():
     """Passing a string where an int is expected should fail."""
-    schema = [{"name": "guests", "example": 2}]
+    schema = [{"name": "guests", "type": "integer", "example": 2}]
     ok, errors = validate_input_types({"guests": "two"}, schema)
     assert ok is False
     assert len(errors) == 1
@@ -106,7 +106,7 @@ def test_validate_types_string_as_int():
 
 def test_validate_types_int_as_string():
     """Passing an int where a string is expected should fail."""
-    schema = [{"name": "city", "example": "Austin"}]
+    schema = [{"name": "city", "type": "string", "example": "Austin"}]
     ok, errors = validate_input_types({"city": 123}, schema)
     assert ok is False
     assert "'city'" in errors[0]
@@ -114,30 +114,46 @@ def test_validate_types_int_as_string():
 
 def test_validate_types_float_for_int():
     """Float should be accepted where int is expected (both are numbers)."""
-    schema = [{"name": "guests", "example": 2}]
+    schema = [{"name": "guests", "type": "integer", "example": 2}]
     ok, errors = validate_input_types({"guests": 2.5}, schema)
     assert ok is True
 
 
 def test_validate_types_bool_not_number():
     """Bool should not be accepted where a number is expected."""
-    schema = [{"name": "guests", "example": 2}]
+    schema = [{"name": "guests", "type": "integer", "example": 2}]
     ok, errors = validate_input_types({"guests": True}, schema)
     assert ok is False
 
 
 def test_validate_types_missing_input_skipped():
     """Inputs not present should be silently skipped (missing_inputs catches those)."""
-    schema = [{"name": "city", "example": "Austin"}]
+    schema = [{"name": "city", "type": "string", "example": "Austin"}]
     ok, errors = validate_input_types({}, schema)
     assert ok is True
 
 
-def test_validate_types_no_example_skipped():
-    """Inputs without an example in the schema should be skipped."""
+def test_validate_types_no_type_or_example_skipped():
+    """Inputs without a type or example in the schema should be skipped."""
     schema = [{"name": "city"}]
     ok, errors = validate_input_types({"city": 123}, schema)
     assert ok is True
+
+
+def test_validate_types_explicit_type_preferred_over_example():
+    """Explicit type field should take precedence over example inference."""
+    schema = [{"name": "count", "type": "string", "example": 42}]
+    ok, errors = validate_input_types({"count": "hello"}, schema)
+    assert ok is True
+    ok2, errors2 = validate_input_types({"count": 42}, schema)
+    assert ok2 is False
+
+
+def test_validate_types_fallback_to_example():
+    """When type field is absent, should fall back to inferring from example."""
+    schema = [{"name": "guests", "example": 2}]
+    ok, errors = validate_input_types({"guests": "two"}, schema)
+    assert ok is False
 
 
 # ---------------------------------------------------------------------------

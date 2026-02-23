@@ -32,7 +32,7 @@ We can run end-to-end locally:
 - ✅ Menu discovery: `GET /cafe/menu` returns locked format from database
 - ✅ Order proxy: `POST /cafe/order` with double validation (MVP passport) + audit logging
 - ✅ Database seeding: 3 services, 12 proxy configs, auto-seeded on startup
-- ✅ Tests: 46 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation)
+- ✅ Tests: 48 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation)
 
 **Phase 2: Core Cafe Foundation** ✅
 - ✅ **2.0 Passport System Design** — locked in `docs/passport/design.md` (Grok + Claude collaboration)

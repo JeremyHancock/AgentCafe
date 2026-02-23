@@ -23,21 +23,25 @@
           "required_inputs": [
             {
               "name": "city",
+              "type": "string",
               "description": "City to search for hotels",
               "example": "Austin"
             },
             {
               "name": "check_in",
+              "type": "string",
               "description": "Check-in date in ISO 8601 format",
               "example": "2026-03-15"
             },
             {
               "name": "check_out",
+              "type": "string",
               "description": "Check-out date in ISO 8601 format",
               "example": "2026-03-18"
             },
             {
               "name": "guests",
+              "type": "integer",
               "description": "Number of guests (1-10)",
               "example": 2
             }
@@ -69,6 +73,7 @@
           "required_inputs": [
             {
               "name": "room_id",
+              "type": "string",
               "description": "Unique room identifier from search results",
               "example": "sr-austin-k420"
             }
@@ -98,26 +103,31 @@
           "required_inputs": [
             {
               "name": "room_id",
+              "type": "string",
               "description": "Room to book (from search results)",
               "example": "sr-austin-k420"
             },
             {
               "name": "check_in",
+              "type": "string",
               "description": "Check-in date in ISO 8601 format",
               "example": "2026-03-15"
             },
             {
               "name": "check_out",
+              "type": "string",
               "description": "Check-out date in ISO 8601 format",
               "example": "2026-03-18"
             },
             {
               "name": "guest_name",
+              "type": "string",
               "description": "Full name of the primary guest",
               "example": "Jane Smith"
             },
             {
               "name": "guest_email",
+              "type": "string",
               "description": "Contact email for booking confirmation",
               "example": "jane@example.com"
             }
@@ -146,6 +156,7 @@
           "required_inputs": [
             {
               "name": "booking_id",
+              "type": "string",
               "description": "Booking identifier from the original booking confirmation",
               "example": "BK-2026-0315-A7X9"
             }
@@ -177,6 +188,7 @@
           "required_inputs": [
             {
               "name": "delivery_address",
+              "type": "string",
               "description": "Delivery address to find nearby restaurants",
               "example": "200 Congress Ave, Austin, TX 78701"
             }
@@ -209,21 +221,25 @@
           "required_inputs": [
             {
               "name": "items",
+              "type": "array",
               "description": "Array of items to order, each with item_id and quantity",
               "example": [{"item_id": "qb-ceasar-lg-001", "quantity": 1}]
             },
             {
               "name": "delivery_address",
+              "type": "string",
               "description": "Full delivery address",
               "example": "200 Congress Ave, Suite 400, Austin, TX 78701"
             },
             {
               "name": "contact_name",
+              "type": "string",
               "description": "Name for the delivery",
               "example": "Jane Smith"
             },
             {
               "name": "contact_phone",
+              "type": "string",
               "description": "Phone number for delivery updates",
               "example": "+1-512-555-0199"
             }
@@ -260,6 +276,7 @@
           "required_inputs": [
             {
               "name": "order_id",
+              "type": "string",
               "description": "Order identifier from the order confirmation",
               "example": "QB-20260315-H8K2"
             }
@@ -284,6 +301,7 @@
           "required_inputs": [
             {
               "name": "order_id",
+              "type": "string",
               "description": "Order identifier from the order confirmation",
               "example": "QB-20260315-H8K2"
             }
@@ -315,11 +333,13 @@
           "required_inputs": [
             {
               "name": "service_type",
+              "type": "string",
               "description": "Type of service needed: plumbing, electrical, cleaning, hvac, handyman, painting, or landscaping",
               "example": "plumbing"
             },
             {
               "name": "address",
+              "type": "string",
               "description": "Address where the service is needed",
               "example": "742 Evergreen Terrace, Austin, TX 78704"
             }
@@ -358,31 +378,37 @@
           "required_inputs": [
             {
               "name": "provider_id",
+              "type": "string",
               "description": "Provider to book (from search results)",
               "example": "fr-plumb-austin-047"
             },
             {
               "name": "appointment_time",
+              "type": "string",
               "description": "Selected time slot in ISO 8601 format (from provider's available_slots)",
               "example": "2026-03-15T14:00:00Z"
             },
             {
               "name": "service_address",
+              "type": "string",
               "description": "Address where the service is needed",
               "example": "742 Evergreen Terrace, Austin, TX 78704"
             },
             {
               "name": "contact_name",
+              "type": "string",
               "description": "Name of the person at the service location",
               "example": "Jane Smith"
             },
             {
               "name": "contact_phone",
+              "type": "string",
               "description": "Phone number for the provider to call",
               "example": "+1-512-555-0199"
             },
             {
               "name": "problem_description",
+              "type": "string",
               "description": "Description of the issue to be addressed",
               "example": "Kitchen faucet leaking from the base, constant drip"
             }
@@ -412,11 +438,13 @@
           "required_inputs": [
             {
               "name": "appointment_id",
+              "type": "string",
               "description": "Appointment identifier from the original booking",
               "example": "FR-20260315-P7R2"
             },
             {
               "name": "new_appointment_time",
+              "type": "string",
               "description": "New desired appointment time in ISO 8601 format",
               "example": "2026-03-16T10:00:00Z"
             }
@@ -446,6 +474,7 @@
           "required_inputs": [
             {
               "name": "appointment_id",
+              "type": "string",
               "description": "Appointment identifier from the original booking",
               "example": "FR-20260315-P7R2"
             }

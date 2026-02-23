@@ -11,6 +11,7 @@
       "required_inputs": [
         {
           "name": "delivery_address",
+          "type": "string",
           "description": "Delivery address to find nearby restaurants",
           "example": "200 Congress Ave, Austin, TX 78701"
         }
@@ -43,21 +44,25 @@
       "required_inputs": [
         {
           "name": "items",
+          "type": "array",
           "description": "Array of items to order, each with item_id and quantity",
           "example": [{"item_id": "qb-ceasar-lg-001", "quantity": 1}]
         },
         {
           "name": "delivery_address",
+          "type": "string",
           "description": "Full delivery address",
           "example": "200 Congress Ave, Suite 400, Austin, TX 78701"
         },
         {
           "name": "contact_name",
+          "type": "string",
           "description": "Name for the delivery",
           "example": "Jane Smith"
         },
         {
           "name": "contact_phone",
+          "type": "string",
           "description": "Phone number for delivery updates",
           "example": "+1-512-555-0199"
         }
@@ -94,6 +99,7 @@
       "required_inputs": [
         {
           "name": "order_id",
+          "type": "string",
           "description": "Order identifier from the order confirmation",
           "example": "QB-20260315-H8K2"
         }
@@ -118,6 +124,7 @@
       "required_inputs": [
         {
           "name": "order_id",
+          "type": "string",
           "description": "Order identifier from the order confirmation",
           "example": "QB-20260315-H8K2"
         }

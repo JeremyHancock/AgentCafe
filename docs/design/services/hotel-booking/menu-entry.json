@@ -11,21 +11,25 @@
       "required_inputs": [
         {
           "name": "city",
+          "type": "string",
           "description": "City to search for hotels",
           "example": "Austin"
         },
         {
           "name": "check_in",
+          "type": "string",
           "description": "Check-in date in ISO 8601 format",
           "example": "2026-03-15"
         },
         {
           "name": "check_out",
+          "type": "string",
           "description": "Check-out date in ISO 8601 format",
           "example": "2026-03-18"
         },
         {
           "name": "guests",
+          "type": "integer",
           "description": "Number of guests (1-10)",
           "example": 2
         }
@@ -57,6 +61,7 @@
       "required_inputs": [
         {
           "name": "room_id",
+          "type": "string",
           "description": "Unique room identifier from search results",
           "example": "sr-austin-k420"
         }
@@ -86,26 +91,31 @@
       "required_inputs": [
         {
           "name": "room_id",
+          "type": "string",
           "description": "Room to book (from search results)",
           "example": "sr-austin-k420"
         },
         {
           "name": "check_in",
+          "type": "string",
           "description": "Check-in date in ISO 8601 format",
           "example": "2026-03-15"
         },
         {
           "name": "check_out",
+          "type": "string",
           "description": "Check-out date in ISO 8601 format",
           "example": "2026-03-18"
         },
         {
           "name": "guest_name",
+          "type": "string",
           "description": "Full name of the primary guest",
           "example": "Jane Smith"
         },
         {
           "name": "guest_email",
+          "type": "string",
           "description": "Contact email for booking confirmation",
           "example": "jane@example.com"
         }
@@ -134,6 +144,7 @@
       "required_inputs": [
         {
           "name": "booking_id",
+          "type": "string",
           "description": "Booking identifier from the original booking confirmation",
           "example": "BK-2026-0315-A7X9"
         }
