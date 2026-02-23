@@ -22,7 +22,14 @@ Upload your existing API spec → answer a few guided questions → preview how 
 
 Completely free to join. You stay in full control of what agents can do, and every call is protected by double validation (human authorization + your policy).
 
-### Quick Start
+### Quick Start (Docker)
+
+```bash
+docker compose up --build
+curl http://localhost:8000/cafe/menu
+```
+
+### Quick Start (Local)
 
 ```bash
 python3 -m venv .venv
@@ -65,6 +72,8 @@ AgentCafe/
 ├── docs/
 │   ├── design/             # Service specs, menu format, onboarding wizard
 │   └── passport/           # Passport system design + threat model
+├── Dockerfile              # Single image, multi-service
+├── docker-compose.yml      # 4 containers: Cafe + 3 demo backends
 ├── AGENT_CONTEXT.md        # Project bible for AI contributors (read first)
 ├── DECISIONS.md            # Architectural decisions log
 ├── DEVELOPMENT-PLAN.md     # Ordered phases with completion status
@@ -81,6 +90,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 2 complete — Cafe runs end-to-end with 3 demo services, Menu discovery, proxy ordering, and JWT-based Passport validation (behind migration flag). 27 tests passing.
+**Status:** Phase 2.1 complete — Cafe runs end-to-end with 3 demo services in separate Docker containers, Menu discovery, proxy ordering over real HTTP, and JWT-based Passport validation (behind migration flag). 27 tests passing.
 **Next:** Phase 3 (Human accounts with passkey enrollment, activation code flow, standing mandates, Layer 3 async confirmation — see `docs/passport/` for full architecture)
 **Built for:** The inevitable agent economy

@@ -1,0 +1,75 @@
+# AgentCafe — Docker Compose (Phase 2.1)
+#
+# Runs the Cafe and 3 demo backends as separate containers on a shared network.
+# The Cafe proxies requests to backends by service name (real HTTP, not in-process).
+#
+# Usage:
+#   docker compose up --build
+#   curl http://localhost:8000/cafe/menu
+#   docker compose down
+
+services:
+  cafe:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - CAFE_HOST=0.0.0.0
+      - CAFE_PORT=8000
+      - HOTEL_BACKEND_HOST=hotel
+      - HOTEL_BACKEND_PORT=8001
+      - LUNCH_BACKEND_HOST=lunch
+      - LUNCH_BACKEND_PORT=8002
+      - HOME_SERVICE_BACKEND_HOST=home-service
+      - HOME_SERVICE_BACKEND_PORT=8003
+      - CAFE_DESIGN_DIR=/app/docs/design
+      - CAFE_DB_PATH=/app/agentcafe.db
+    depends_on:
+      hotel:
+        condition: service_healthy
+      lunch:
+        condition: service_healthy
+      home-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  hotel:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.hotel:app", "--host", "0.0.0.0", "--port", "8001"]
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  lunch:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.lunch:app", "--host", "0.0.0.0", "--port", "8002"]
+    expose:
+      - "8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  home-service:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.home_service:app", "--host", "0.0.0.0", "--port", "8003"]
+    expose:
+      - "8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

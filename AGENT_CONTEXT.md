@@ -91,6 +91,8 @@ AgentCafe/
 ├── docs/
 │   ├── design/                     # Service specs, menu format, onboarding wizard design
 │   └── passport/                   # Passport system design + threat model (v1.4, locked)
+├── Dockerfile                      # Single image, multi-service (Python 3.12-slim)
+├── docker-compose.yml              # 4 containers: Cafe + 3 demo backends on shared network
 ├── pyproject.toml                  # Dependencies and build config
 ├── AGENT_CONTEXT.md                # This file
 ├── DECISIONS.md                    # Architectural decisions log
@@ -114,9 +116,18 @@ AgentCafe/
 
 ## 8. How to Run
 
+**Docker (recommended):**
+```bash
+docker compose up --build          # Builds image, starts 4 containers
+# Menu:  http://localhost:8000/cafe/menu
+# Order: POST http://localhost:8000/cafe/order
+docker compose down                # Stop and remove containers
+```
+
+**Local (all-in-one process):**
 ```bash
 source .venv/bin/activate          # venv already created (at repo root)
-python -m agentcafe.main           # Starts all 4 servers
+python -m agentcafe.main           # Starts all 4 servers in one process
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # Passport: POST http://127.0.0.1:8000/passport/issue + POST /cafe/revoke

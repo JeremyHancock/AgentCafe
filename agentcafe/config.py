@@ -19,9 +19,12 @@ class CafeConfig:
     cafe_host: str = "127.0.0.1"
     cafe_port: int = 8000
 
-    # Demo backend ports (internal only — never exposed to agents)
+    # Demo backend hosts and ports (internal only — never exposed to agents)
+    hotel_backend_host: str = "127.0.0.1"
     hotel_backend_port: int = 8001
+    lunch_backend_host: str = "127.0.0.1"
     lunch_backend_port: int = 8002
+    home_service_backend_host: str = "127.0.0.1"
     home_service_backend_port: int = 8003
 
     # Database
@@ -40,15 +43,15 @@ class CafeConfig:
 
     @property
     def hotel_backend_url(self) -> str:
-        return f"http://127.0.0.1:{self.hotel_backend_port}"
+        return f"http://{self.hotel_backend_host}:{self.hotel_backend_port}"
 
     @property
     def lunch_backend_url(self) -> str:
-        return f"http://127.0.0.1:{self.lunch_backend_port}"
+        return f"http://{self.lunch_backend_host}:{self.lunch_backend_port}"
 
     @property
     def home_service_backend_url(self) -> str:
-        return f"http://127.0.0.1:{self.home_service_backend_port}"
+        return f"http://{self.home_service_backend_host}:{self.home_service_backend_port}"
 
 
 def load_config() -> CafeConfig:
@@ -57,8 +60,11 @@ def load_config() -> CafeConfig:
     return CafeConfig(
         cafe_host=os.getenv("CAFE_HOST", "127.0.0.1"),
         cafe_port=int(os.getenv("CAFE_PORT", "8000")),
+        hotel_backend_host=os.getenv("HOTEL_BACKEND_HOST", "127.0.0.1"),
         hotel_backend_port=int(os.getenv("HOTEL_BACKEND_PORT", "8001")),
+        lunch_backend_host=os.getenv("LUNCH_BACKEND_HOST", "127.0.0.1"),
         lunch_backend_port=int(os.getenv("LUNCH_BACKEND_PORT", "8002")),
+        home_service_backend_host=os.getenv("HOME_SERVICE_BACKEND_HOST", "127.0.0.1"),
         home_service_backend_port=int(os.getenv("HOME_SERVICE_BACKEND_PORT", "8003")),
         db_path=os.getenv("CAFE_DB_PATH", "agentcafe.db"),
         design_dir=os.getenv("CAFE_DESIGN_DIR", default_design_dir),

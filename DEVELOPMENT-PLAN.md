@@ -1,6 +1,6 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 2.0–2.2 complete — Passport system designed and implemented (JWT, scopes, revocation). MVP flag for safe rollout.  
+**Current Status:** Phase 2.0–2.2 + 2.4–2.5 complete, Docker Compose (2.1) complete. Remaining: Company Policy engine (2.3).  
 **Last Updated:** February 22, 2026
 
 **MVP Success Criteria**
@@ -36,7 +36,7 @@ We can run end-to-end locally:
 
 **Phase 2: Core Cafe Foundation** ← IN PROGRESS
 - ✅ **2.0 Passport System Design** — locked in `docs/passport/design.md` (Grok + Claude collaboration)
-- ⬜ 2.1 Docker Compose: separate Cafe and demo backends into independent containers
+- ✅ 2.1 Docker Compose: Cafe + 3 demo backends in separate containers, real HTTP proxying, health checks, configurable backend hosts
 - ✅ 2.2 Real Passport validation — JWT (HS256), scopes (`{service_id}:{action_id}`), wildcard (`{service_id}:*`), expiry, revocation via `revoked_jtis` table
 - ⬜ 2.3 Company Policy engine (enforce rate limits from proxy_configs, type validation)
 - ✅ 2.4 Migration flag `USE_REAL_PASSPORT` routes between MVP and real JWT validation in `place_order`

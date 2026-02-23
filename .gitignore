@@ -27,3 +27,6 @@ agentcafe.db
 # Coverage
 htmlcov/
 .coverage
+
+# Docker
+.dockerignore

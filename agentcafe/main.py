@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -20,12 +22,42 @@ from agentcafe.db.seed import seed_demo_data
 logger = logging.getLogger("agentcafe")
 
 
-def create_cafe_app() -> FastAPI:
-    """Create the main AgentCafe FastAPI application."""
+@asynccontextmanager
+async def _cafe_lifespan(app: FastAPI):
+    """Startup/shutdown for standalone Cafe (used by Docker and uvicorn CLI)."""
+    cfg = load_config()
+    logging.basicConfig(
+        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    )
+    logger.info("Initializing database...")
+    db = await init_db(cfg.db_path)
+    logger.info("Seeding demo services...")
+    await seed_demo_data(db, cfg)
+    logger.info("Database ready.")
+    configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
+    configure_router(cfg.use_real_passport)
+    if cfg.use_real_passport:
+        logger.info("Passport mode: REAL JWT validation")
+    else:
+        logger.info("Passport mode: MVP (demo-passport only)")
+    yield
+    await close_http_client()
+    await close_db()
+
+
+def create_cafe_app(lifespan=None) -> FastAPI:
+    """Create the main AgentCafe FastAPI application.
+
+    Args:
+        lifespan: Optional async context manager for startup/shutdown.
+                  Pass None for tests (they manage DB lifecycle separately).
+    """
     app = FastAPI(
         title="AgentCafe",
         version="0.1.0",
         description="The Cafe for Agents. Browse the Menu, present your Passport, and order.",
+        lifespan=lifespan,
     )
     app.include_router(cafe_router)
     app.include_router(passport_router)
@@ -35,6 +67,11 @@ def create_cafe_app() -> FastAPI:
         return {"status": "ok", "service": "agentcafe"}
 
     return app
+
+
+# Module-level app for standalone deployment (uvicorn agentcafe.main:app)
+# Tests use create_cafe_app() directly without lifespan.
+app = create_cafe_app(lifespan=_cafe_lifespan)
 
 
 async def run_server(app, host: str, port: int, name: str) -> None:
@@ -52,7 +89,11 @@ async def run_server(app, host: str, port: int, name: str) -> None:
 
 
 async def main() -> None:
-    """Start all servers: Cafe + 3 demo backends."""
+    """Start all servers in one process: Cafe + 3 demo backends.
+
+    This is the local development mode. For Docker, each service runs
+    independently (see docker-compose.yml).
+    """
     cfg = load_config()
 
     logging.basicConfig(
@@ -88,9 +129,9 @@ async def main() -> None:
     print(f"  Menu:    http://{cfg.cafe_host}:{cfg.cafe_port}/cafe/menu")
     print(f"  Order:   POST http://{cfg.cafe_host}:{cfg.cafe_port}/cafe/order")
     print("-" * 60)
-    print(f"  Hotel backend:        http://127.0.0.1:{cfg.hotel_backend_port}")
-    print(f"  Lunch backend:        http://127.0.0.1:{cfg.lunch_backend_port}")
-    print(f"  Home Service backend: http://127.0.0.1:{cfg.home_service_backend_port}")
+    print(f"  Hotel backend:        {cfg.hotel_backend_url}")
+    print(f"  Lunch backend:        {cfg.lunch_backend_url}")
+    print(f"  Home Service backend: {cfg.home_service_backend_url}")
     print("=" * 60 + "\n")
 
     # Run all four servers concurrently

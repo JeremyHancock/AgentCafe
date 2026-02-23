@@ -116,3 +116,16 @@
 **Context:** The original scope format (`hotel:search`, `food:browse`) was category-scoped. This would collide when multiple services in the same category join the marketplace (e.g., two hotel providers both needing `hotel:search`).
 **Decision:** Scopes now use `{service_id}:{action_id}` format (e.g., `stayright-hotels:search-availability`). Updated in `seed.py` proxy configs and MVP passport scope list. During Company Onboarding (Phase 3), scopes will be auto-generated from the service_id + action_id.
 **Rationale:** Per-service scoping is globally unique by construction (service_ids are already unique). It also makes Passport tokens more precise — a token scoped to `stayright-hotels:*` can't accidentally grant access to a different hotel service.
+
+### ADR-013: Docker Compose with single image, multiple entrypoints
+
+**Date:** February 22, 2026
+**Context:** ADR-001 identified that running all four servers in one process hides real network boundaries. Phase 2.1 delivers on containerizing early.
+**Decision:**
+1. **Single Dockerfile** (`python:3.12-slim`) builds one image shared by all four services. Each `docker-compose.yml` service overrides the `command` to run its specific uvicorn entrypoint.
+2. **FastAPI lifespan handler** (`_cafe_lifespan`) in `main.py` handles DB init, seeding, and passport config for standalone Cafe mode. Tests use `create_cafe_app()` without lifespan (they manage DB separately).
+3. **Module-level `app`** exposed in `main.py` for `uvicorn agentcafe.main:app` — used by Docker and any production deployment.
+4. **Configurable backend hosts** via env vars (`HOTEL_BACKEND_HOST`, etc.) — Docker sets these to service names (`hotel`, `lunch`, `home-service`); local defaults to `127.0.0.1`.
+5. **Health checks** on all four containers using `urllib.request` (no extra dependencies). Cafe waits for all three backends to be healthy before starting (`depends_on: condition: service_healthy`).
+6. **Local `python -m agentcafe.main`** still works unchanged — runs all four servers in one process for quick development.
+**Rationale:** Single image avoids maintaining four Dockerfiles for identical code. The lifespan pattern is idiomatic FastAPI and cleanly separates "standalone server" from "test harness" initialization. Backend host env vars are the minimal change needed — no config file refactoring, no service discovery overhead.
