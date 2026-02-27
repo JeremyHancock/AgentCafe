@@ -16,6 +16,8 @@ from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
 
+# pylint: disable=redefined-outer-name,protected-access
+
 # ---------------------------------------------------------------------------
 # Test-level config: a known signing secret and API key
 # ---------------------------------------------------------------------------
@@ -31,9 +33,9 @@ TEST_API_KEY = "test-issuer-api-key"
 @pytest_asyncio.fixture(autouse=True)
 async def _configure_real_passport(monkeypatch):
     """Enable real passport mode and set test signing secret for all tests in this file."""
-    monkeypatch.setattr(router_module, "_use_real_passport", True)
-    monkeypatch.setattr(passport_module, "_signing_secret", TEST_SECRET)
-    monkeypatch.setattr(passport_module, "_issuer_api_key", TEST_API_KEY)
+    monkeypatch.setattr(router_module._state, "use_real_passport", True)
+    monkeypatch.setattr(passport_module._state, "signing_secret", TEST_SECRET)
+    monkeypatch.setattr(passport_module._state, "issuer_api_key", TEST_API_KEY)
     yield
 
 
@@ -66,7 +68,7 @@ class _MultiBackendTransport:
 @pytest_asyncio.fixture(autouse=True)
 async def _mock_http_client(monkeypatch):
     mock_client = AsyncClient(transport=_MultiBackendTransport())
-    monkeypatch.setattr(router_module, "_http_client", mock_client)
+    monkeypatch.setattr(router_module._state, "http_client", mock_client)
     yield
     await mock_client.aclose()
 

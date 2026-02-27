@@ -20,16 +20,18 @@ logger = logging.getLogger("agentcafe.passport")
 
 passport_router = APIRouter(tags=["passport"])
 
-# Module-level config reference (set during app startup)
-_signing_secret: str = ""
-_issuer_api_key: str = ""
+class _State:
+    """Module-level mutable state (avoids global statements)."""
+    signing_secret: str = ""
+    issuer_api_key: str = ""
+
+_state = _State()
 
 
 def configure_passport(signing_secret: str, issuer_api_key: str) -> None:
     """Set the signing secret and issuer API key. Called once at startup."""
-    global _signing_secret, _issuer_api_key
-    _signing_secret = signing_secret
-    _issuer_api_key = issuer_api_key
+    _state.signing_secret = signing_secret
+    _state.issuer_api_key = issuer_api_key
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +124,7 @@ async def validate_passport_jwt(
     try:
         payload = jwt.decode(
             passport_token,
-            _signing_secret,
+            _state.signing_secret,
             algorithms=["HS256"],
             issuer="agentcafe",
             audience="agentcafe",
@@ -173,7 +175,7 @@ async def issue_passport(
     Protected by ISSUER_API_KEY for MVP. Phase 3 will integrate with
     the Company Onboarding Wizard and human consent flow.
     """
-    if not _issuer_api_key or x_api_key != _issuer_api_key:
+    if not _state.issuer_api_key or x_api_key != _state.issuer_api_key:
         raise HTTPException(
             status_code=401,
             detail={"error": "invalid_api_key", "message": "Invalid or missing API key."},
@@ -204,7 +206,7 @@ async def issue_passport(
         "human_consent": True,
     }
 
-    token = jwt.encode(payload, _signing_secret, algorithm="HS256")
+    token = jwt.encode(payload, _state.signing_secret, algorithm="HS256")
 
     return IssueResponse(
         passport=token,
@@ -226,15 +228,15 @@ async def revoke_passport(req: RevokeRequest):
     try:
         payload = jwt.decode(
             req.passport,
-            _signing_secret,
+            _state.signing_secret,
             algorithms=["HS256"],
             options={"verify_exp": False, "verify_aud": False},
         )
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=400,
             detail={"error": "invalid_token", "message": "Could not decode the passport."},
-        )
+        ) from exc
 
     jti = payload.get("jti")
     if not jti:

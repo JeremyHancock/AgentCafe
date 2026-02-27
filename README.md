@@ -36,6 +36,9 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
+# Delete stale DB if you've pulled schema changes
+rm -f agentcafe.db
+
 # Start the Cafe (launches 4 servers: Cafe + 3 demo backends)
 python -m agentcafe.main
 
@@ -51,12 +54,32 @@ curl -X POST http://localhost:8000/cafe/order \
 pytest tests/ -v
 ```
 
+### Wizard API (for companies)
+
+```bash
+# Create a company account
+curl -X POST http://localhost:8000/wizard/companies \
+  -H "Content-Type: application/json" \
+  -d '{"name": "My Company", "email": "dev@example.com", "password": "secure1234"}'
+# → {"company_id": "...", "session_token": "..."}
+
+# Upload an OpenAPI spec (use the session_token from above)
+curl -X POST http://localhost:8000/wizard/specs/parse \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"raw_spec": "<your OpenAPI YAML or JSON>"}'
+# → {"draft_id": "...", "parsed_spec": {...}, "candidate_menu": {...}}
+
+# Then: review → policy → preview → publish (see /docs for full API)
+```
+
 ### Architecture
 
 - **Locked Menu format**: semantic, no HTTP methods/paths, agent-friendly
 - **Full proxy**: agents never see backend URLs or tokens
 - **Double validation**: Human Passport + Company Policy on every order
-- **Tech**: Python 3.12 + FastAPI + SQLite (MVP)
+- **Company Onboarding Wizard**: OpenAPI spec → guided review → one-click publish
+- **Tech**: Python 3.12 + FastAPI + SQLite (MVP) + LiteLLM (wizard AI enrichment)
 
 ### Project Layout
 
@@ -66,9 +89,10 @@ AgentCafe/
 │   ├── main.py             # FastAPI app — starts Cafe + demo backends
 │   ├── config.py           # Environment-based configuration
 │   ├── cafe/               # Menu discovery + order routing + passport
+│   ├── wizard/             # Company Onboarding Wizard (spec parser, AI enricher, review, publish)
 │   ├── db/                 # SQLite schema, engine, seed data
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
-├── tests/                  # 27 tests (menu, order, passport)
+├── tests/                  # 77 tests (menu, order, passport, policy, wizard)
 ├── docs/
 │   ├── design/             # Service specs, menu format, onboarding wizard
 │   └── passport/           # Passport system design + threat model
@@ -90,6 +114,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 2.1 complete — Cafe runs end-to-end with 3 demo services in separate Docker containers, Menu discovery, proxy ordering over real HTTP, and JWT-based Passport validation (behind migration flag). 27 tests passing.
-**Next:** Phase 3 (Human accounts with passkey enrollment, activation code flow, standing mandates, Layer 3 async confirmation — see `docs/passport/` for full architecture)
+**Status:** Phase 3 complete — Cafe runs end-to-end with 3 demo services, Menu discovery, proxy ordering, JWT Passport validation, rate limiting, input type validation, and a fully functional Company Onboarding Wizard (spec parsing, AI enrichment, review, policy, dry-run, publish). JWT session auth with bcrypt passwords, draft ownership enforcement. 77 tests passing, pylint 10.00/10.
+**Next:** Phase 4 (Security & Guardrails) then Phase 5 (Wizard Dashboard UI, end-to-end agent demo)
 **Built for:** The inevitable agent economy

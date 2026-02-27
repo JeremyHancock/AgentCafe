@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** February 21, 2026
+**Last Updated:** February 26, 2026
 
 ---
 
@@ -151,3 +151,86 @@
 3. This is an **additive** schema change per ADR-009 — no breaking changes to existing consumers. Agents and tools that ignore the field continue to work.
 4. The Onboarding Wizard (Phase 3) will collect `type` as a required field during service registration, so all new entries will always have it.
 **Rationale:** Explicit types eliminate ambiguity, produce clearer error messages, and align with what the backend API actually expects. Collecting type at onboarding is trivial (a dropdown) and far more reliable than heuristic inference.
+
+### ADR-016: Company Onboarding Wizard — implementation architecture (Phase 3)
+
+**Date:** February 26, 2026
+**Context:** The wizard design (Phase 0.2) specified four components: Spec Parser, AI Enricher, Review Engine, and Publisher. Phase 3 implements all four plus the full API surface.
+**Decision:**
+1. **Spec Parser** (`wizard/spec_parser.py`): Pure Python, no LLM. Parses OpenAPI 3.0/3.1 in YAML or JSON. Auto-detects format. Extracts operations with read/write classification (POST with "search" in operationId is read). Extracts `x-agentcafe-*` extensions for preset scopes, human_auth, and rate limits. PyYAML is a wizard optional dependency (not in base deps, per ADR-006).
+2. **AI Enricher** (`wizard/ai_enricher.py`): Tries LiteLLM first (single prompt per service, JSON mode). Falls back to rule-based generation when LiteLLM is not installed or fails. Rule-based generates action slugs from operationIds (camelCase → kebab-case), extracts inputs from request bodies, infers types from schemas. Both paths produce the same `CandidateMenuEntry` model. Broad exception catches on LLM calls are intentional — graceful fallback over hard failure.
+3. **Review Engine** (`wizard/review_engine.py`): Manages `draft_services` table with progressive wizard steps (2–6). Each step saves state to the draft. Preview generation (Step 5) combines the candidate menu with policy settings to produce the final locked Menu format.
+4. **Publisher** (`wizard/publisher.py`): Atomic transaction — inserts `published_services` + all `proxy_configs` in one commit. Checks service_id uniqueness. On failure, rolls back.
+5. **DB schema**: New `draft_services` table for wizard state. `password_hash` column added to `companies` (bcrypt, upgraded from SHA-256 per ADR-018).
+6. **Router**: All wizard endpoints under `/wizard/*` prefix. Company auth via JWT session tokens in `Authorization: Bearer <token>` header (see ADR-017). All draft endpoints enforce ownership.
+**Rationale:** The four-component split from the design doc maps cleanly to four Python modules with clear responsibilities. Rule-based fallback ensures the wizard works even without an LLM API key configured — critical for local development and testing. Draft-based state management lets companies leave and resume the wizard. The atomic publisher prevents half-published services from appearing on the Menu.
+
+---
+
+### ADR-017: JWT session tokens for wizard authentication (Phase 3 hardening)
+
+**Date:** February 26, 2026
+**Context:** The initial Phase 3 implementation passed `company_id` in the request body for authentication. This was insecure — any caller could impersonate any company by guessing or enumerating UUIDs.
+**Decision:**
+1. `POST /wizard/companies` and `POST /wizard/companies/login` return a `session_token` (JWT, HS256, 8-hour expiry, `iss=agentcafe-wizard`).
+2. All authenticated wizard endpoints require `Authorization: Bearer <token>` header. The `company_id` is extracted from the token's `sub` claim.
+3. All draft endpoints (review, policy, preview, dry-run, publish) verify `draft.company_id == token.sub` and return 403 if mismatched.
+4. `configure_wizard(signing_secret)` is called at startup in `main.py`, reusing `PASSPORT_SIGNING_SECRET`.
+5. `SpecParseRequest` no longer includes `company_id` — it comes from the token.
+**Rationale:** JWT tokens are stateless, don't require server-side session storage, and the 8-hour expiry limits exposure. Reusing the passport signing secret avoids a second secret to manage. Ownership checks on every draft endpoint prevent cross-company data access.
+
+---
+
+### ADR-018: bcrypt for company password hashing
+
+**Date:** February 26, 2026
+**Context:** The initial implementation used `hashlib.sha256` for password hashing — fast and unsalted, vulnerable to rainbow table attacks.
+**Decision:** Replaced with `bcrypt.hashpw()` + `bcrypt.gensalt()` for hashing, `bcrypt.checkpw()` for verification. `bcrypt>=4.0.0` added to base dependencies.
+**Rationale:** bcrypt is the industry standard for password hashing — it's intentionally slow (resistant to brute force), automatically salted (resistant to rainbow tables), and has an adaptive cost factor for future-proofing.
+
+---
+
+### ADR-019: `_State` class pattern replacing `global` statements
+
+**Date:** February 26, 2026
+**Context:** Multiple modules used `global` statements for module-level mutable state (`_db`, `_signing_secret`, `_http_client`, etc.). Pylint flags these as W0603.
+**Decision:** Replace all `global` statements with a module-level `_State` class:
+```python
+class _State:
+    signing_secret: str = ""
+_state = _State()
+```
+Access via `_state.attribute` instead of bare module-level variables. Tests monkeypatch via `monkeypatch.setattr(module._state, "attr", value)`. Applied in `db/engine.py`, `cafe/passport.py`, `cafe/router.py`, `wizard/router.py`.
+**Rationale:** Avoids `global` keyword entirely while preserving the same mutability semantics. The class provides a natural namespace, is type-annotatable, and keeps the monkeypatch pattern simple (setattr on an object). Consistent across all modules.
+
+---
+
+### ADR-020: `$ref` resolution and required-only input filtering in spec parser
+
+**Date:** February 26, 2026
+**Context:** The spec parser was passing `$ref` references through unresolved, causing downstream enrichment to miss schema details. Additionally, all body properties were treated as required inputs, even optional ones.
+**Decision:**
+1. **`$ref` resolution** (`_resolve_refs`): Recursive depth-limited (15 levels) resolution of `$ref` pointers within the parsed spec. Runs immediately after initial parsing, before any operation extraction.
+2. **Required-only filtering** (`_extract_required_inputs`): Body properties are only included as required inputs if they appear in the schema's `required` array. Path parameters are always included.
+**Rationale:** Real-world OpenAPI specs (like the hotel-booking spec) use `$ref` extensively — without resolution, the enricher sees empty schemas. Filtering to required-only inputs prevents agents from being asked for optional parameters, reducing friction and errors.
+
+---
+
+### ADR-021: Review step replaces candidate (known limitation for Phase 5)
+
+**Date:** February 26, 2026
+**Context:** During live testing of the wizard, submitting a review (`PUT /wizard/drafts/{id}/review`) without an `actions` array caused the preview to show an empty service — no actions, no proxy configs. This is because `save_review` stores company edits in `company_edits_json`, and `generate_preview` prefers company edits over the AI-generated `candidate_menu_json`. If the edits contain no actions, the preview is empty.
+**Decision:** Document as a known limitation. The current API treats the review as a **complete replacement** of the candidate. The Phase 5 Wizard Dashboard must:
+1. Pre-populate the review form with AI-generated values from the candidate menu.
+2. Merge partial edits — only overwrite fields the company actually changed.
+3. Always include the full `actions` array when submitting the review.
+**Rationale:** Fixing this at the API level (merging edits with the candidate) would add complexity to `save_review` and create ambiguity about what "empty" means (did the company intentionally remove all actions, or did they just not include the field?). The dashboard is the right layer to handle this — it always has the full candidate context and can send complete review payloads.
+
+---
+
+### ADR-022: Stale SQLite DB requires manual deletion after schema changes
+
+**Date:** February 26, 2026
+**Context:** During live testing, `POST /wizard/companies` returned `sqlite3.OperationalError: table companies has no column named password_hash`. The `agentcafe.db` file on disk was created by a previous run before the `password_hash` column was added. `CREATE TABLE IF NOT EXISTS` does not alter existing tables.
+**Decision:** Document the caveat prominently in all "How to Run" docs. The local startup instructions now include `rm -f agentcafe.db` before `python -m agentcafe.main`. Tests are unaffected because they use in-memory databases (`":memory:"`).
+**Rationale:** SQLite has no built-in migration system. For MVP, deleting the DB is acceptable since it only contains seeded demo data. Phase 6 should add proper schema migrations (e.g., `alembic` or manual `ALTER TABLE` scripts) for production use where data persistence matters.

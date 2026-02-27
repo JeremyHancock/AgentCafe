@@ -21,34 +21,31 @@ from agentcafe.db.engine import get_db
 
 router = APIRouter(prefix="/cafe", tags=["cafe"])
 
-# Module-level config flag (set during app startup via configure_router)
-_use_real_passport: bool = False
+class _State:
+    """Module-level mutable state (avoids global statements)."""
+    use_real_passport: bool = False
+    http_client: httpx.AsyncClient | None = None
+
+_state = _State()
 
 
 def configure_router(use_real_passport: bool) -> None:
     """Set runtime config for the router. Called once at startup."""
-    global _use_real_passport
-    _use_real_passport = use_real_passport
-
-# Shared HTTP client for proxying requests to backends.
-# Reuses TCP connections instead of creating one per request.
-_http_client: httpx.AsyncClient | None = None
+    _state.use_real_passport = use_real_passport
 
 
 async def get_http_client() -> httpx.AsyncClient:
     """Return the shared httpx client, creating it on first use."""
-    global _http_client
-    if _http_client is None:
-        _http_client = httpx.AsyncClient(timeout=30.0)
-    return _http_client
+    if _state.http_client is None:
+        _state.http_client = httpx.AsyncClient(timeout=30.0)
+    return _state.http_client
 
 
 async def close_http_client() -> None:
     """Close the shared httpx client (call on shutdown)."""
-    global _http_client
-    if _http_client is not None:
-        await _http_client.aclose()
-        _http_client = None
+    if _state.http_client is not None:
+        await _state.http_client.aclose()
+        _state.http_client = None
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +120,7 @@ async def place_order(req: OrderRequest):
     _rate_limit = row["rate_limit"]
 
     # --- GATE 1: Passport Validation ---
-    if _use_real_passport:
+    if _state.use_real_passport:
         # Real JWT validation (Phase 2)
         valid, error_code = await validate_passport_jwt(
             req.passport, req.service_id, req.action_id, human_auth_required

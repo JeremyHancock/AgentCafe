@@ -13,6 +13,8 @@ from agentcafe.db.seed import seed_demo_data
 from agentcafe.config import load_config
 from agentcafe.main import create_cafe_app
 
+# pylint: disable=redefined-outer-name,unused-argument
+
 
 @pytest.fixture(scope="session")
 def event_loop():

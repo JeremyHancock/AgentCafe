@@ -11,6 +11,8 @@ from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
 
+# pylint: disable=redefined-outer-name,protected-access
+
 
 # ---------------------------------------------------------------------------
 # Helpers — mock the shared httpx client to route to demo backends via ASGI
@@ -47,7 +49,7 @@ class _MultiBackendTransport:
 async def _mock_http_client(monkeypatch):
     """Replace the shared httpx client with one that routes to in-process backends."""
     mock_client = AsyncClient(transport=_MultiBackendTransport())
-    monkeypatch.setattr(router_module, "_http_client", mock_client)
+    monkeypatch.setattr(router_module._state, "http_client", mock_client)
     yield
     await mock_client.aclose()
 

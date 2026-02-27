@@ -18,12 +18,13 @@ from agentcafe.cafe.router import close_http_client, configure_router, router as
 from agentcafe.config import load_config
 from agentcafe.db.engine import close_db, init_db
 from agentcafe.db.seed import seed_demo_data
+from agentcafe.wizard.router import configure_wizard, wizard_router
 
 logger = logging.getLogger("agentcafe")
 
 
 @asynccontextmanager
-async def _cafe_lifespan(app: FastAPI):
+async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI lifespan protocol
     """Startup/shutdown for standalone Cafe (used by Docker and uvicorn CLI)."""
     cfg = load_config()
     logging.basicConfig(
@@ -36,6 +37,7 @@ async def _cafe_lifespan(app: FastAPI):
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
+    configure_wizard(cfg.passport_signing_secret)
     configure_router(cfg.use_real_passport)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
@@ -53,7 +55,7 @@ def create_cafe_app(lifespan=None) -> FastAPI:
         lifespan: Optional async context manager for startup/shutdown.
                   Pass None for tests (they manage DB lifecycle separately).
     """
-    app = FastAPI(
+    app = FastAPI(  # pylint: disable=redefined-outer-name
         title="AgentCafe",
         version="0.1.0",
         description="The Cafe for Agents. Browse the Menu, present your Passport, and order.",
@@ -61,6 +63,7 @@ def create_cafe_app(lifespan=None) -> FastAPI:
     )
     app.include_router(cafe_router)
     app.include_router(passport_router)
+    app.include_router(wizard_router)
 
     @app.get("/health")
     async def health():
@@ -74,10 +77,10 @@ def create_cafe_app(lifespan=None) -> FastAPI:
 app = create_cafe_app(lifespan=_cafe_lifespan)
 
 
-async def run_server(app, host: str, port: int, name: str) -> None:
+async def run_server(server_app, host: str, port: int, name: str) -> None:
     """Run a uvicorn server as an async task."""
     config = uvicorn.Config(
-        app,
+        server_app,
         host=host,
         port=port,
         log_level="info",
@@ -110,6 +113,7 @@ async def main() -> None:
 
     # Configure Passport system
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
+    configure_wizard(cfg.passport_signing_secret)
     configure_router(cfg.use_real_passport)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")

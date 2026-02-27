@@ -12,10 +12,11 @@ from httpx import ASGITransport, AsyncClient
 
 import agentcafe.cafe.router as router_module
 from agentcafe.cafe.policy import check_rate_limit, parse_rate_limit, validate_input_types
-from agentcafe.db.engine import get_db
 from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
+
+# pylint: disable=redefined-outer-name,protected-access
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +54,7 @@ class _MultiBackendTransport:
 async def _mock_http_client(monkeypatch):
     """Replace the shared httpx client with one that routes to in-process backends."""
     mock_client = AsyncClient(transport=_MultiBackendTransport())
-    monkeypatch.setattr(router_module, "_http_client", mock_client)
+    monkeypatch.setattr(router_module._state, "http_client", mock_client)
     yield
     await mock_client.aclose()
 
@@ -90,69 +91,69 @@ def test_validate_types_all_correct():
         {"name": "city", "type": "string", "example": "Austin"},
         {"name": "guests", "type": "integer", "example": 2},
     ]
-    ok, errors = validate_input_types({"city": "Dallas", "guests": 4}, schema)
+    ok, _errors = validate_input_types({"city": "Dallas", "guests": 4}, schema)
     assert ok is True
-    assert errors is None
+    assert _errors is None
 
 
 def test_validate_types_string_as_int():
     """Passing a string where an int is expected should fail."""
     schema = [{"name": "guests", "type": "integer", "example": 2}]
-    ok, errors = validate_input_types({"guests": "two"}, schema)
+    ok, errs = validate_input_types({"guests": "two"}, schema)
     assert ok is False
-    assert len(errors) == 1
-    assert "'guests'" in errors[0]
+    assert len(errs) == 1
+    assert "'guests'" in errs[0]
 
 
 def test_validate_types_int_as_string():
     """Passing an int where a string is expected should fail."""
     schema = [{"name": "city", "type": "string", "example": "Austin"}]
-    ok, errors = validate_input_types({"city": 123}, schema)
+    ok, errs = validate_input_types({"city": 123}, schema)
     assert ok is False
-    assert "'city'" in errors[0]
+    assert "'city'" in errs[0]
 
 
 def test_validate_types_float_for_int():
     """Float should be accepted where int is expected (both are numbers)."""
     schema = [{"name": "guests", "type": "integer", "example": 2}]
-    ok, errors = validate_input_types({"guests": 2.5}, schema)
+    ok, _ = validate_input_types({"guests": 2.5}, schema)
     assert ok is True
 
 
 def test_validate_types_bool_not_number():
     """Bool should not be accepted where a number is expected."""
     schema = [{"name": "guests", "type": "integer", "example": 2}]
-    ok, errors = validate_input_types({"guests": True}, schema)
+    ok, _ = validate_input_types({"guests": True}, schema)
     assert ok is False
 
 
 def test_validate_types_missing_input_skipped():
     """Inputs not present should be silently skipped (missing_inputs catches those)."""
     schema = [{"name": "city", "type": "string", "example": "Austin"}]
-    ok, errors = validate_input_types({}, schema)
+    ok, _ = validate_input_types({}, schema)
     assert ok is True
 
 
 def test_validate_types_no_type_or_example_skipped():
     """Inputs without a type or example in the schema should be skipped."""
     schema = [{"name": "city"}]
-    ok, errors = validate_input_types({"city": 123}, schema)
+    ok, _ = validate_input_types({"city": 123}, schema)
     assert ok is True
 
 
 def test_validate_types_explicit_type_preferred_over_example():
     """Explicit type field should take precedence over example inference."""
     schema = [{"name": "count", "type": "string", "example": 42}]
-    ok, errors = validate_input_types({"count": "hello"}, schema)
+    ok, _ = validate_input_types({"count": "hello"}, schema)
     assert ok is True
-    ok2, errors2 = validate_input_types({"count": 42}, schema)
+    ok2, _ = validate_input_types({"count": 42}, schema)
     assert ok2 is False
 
 
 def test_validate_types_fallback_to_example():
     """When type field is absent, should fall back to inferring from example."""
     schema = [{"name": "guests", "example": 2}]
-    ok, errors = validate_input_types({"guests": "two"}, schema)
+    ok, _ = validate_input_types({"guests": "two"}, schema)
     assert ok is False
 
 
@@ -163,11 +164,11 @@ def test_validate_types_fallback_to_example():
 @pytest.mark.asyncio
 async def test_rate_limit_under_limit(seeded_db):
     """Request should be allowed when under the limit."""
-    ok, error = await check_rate_limit(
+    ok, err = await check_rate_limit(
         seeded_db, "test-hash-unused", "stayright-hotels", "search-availability", "60/minute"
     )
     assert ok is True
-    assert error is None
+    assert err is None
 
 
 @pytest.mark.asyncio
@@ -189,11 +190,11 @@ async def test_rate_limit_at_limit(seeded_db):
     await db.commit()
 
     # Should be rejected with limit of 3/minute
-    ok, error = await check_rate_limit(
+    ok, err = await check_rate_limit(
         db, passport_hash, "stayright-hotels", "search-availability", "3/minute"
     )
     assert ok is False
-    assert error["error"] == "rate_limit_exceeded"
+    assert err["error"] == "rate_limit_exceeded"
 
 
 @pytest.mark.asyncio
@@ -215,7 +216,7 @@ async def test_rate_limit_different_action_not_counted(seeded_db):
     await db.commit()
 
     # search-availability should still be allowed (different action)
-    ok, error = await check_rate_limit(
+    ok, _ = await check_rate_limit(
         db, passport_hash, "stayright-hotels", "search-availability", "3/minute"
     )
     assert ok is True
@@ -240,7 +241,7 @@ async def test_rate_limit_expired_entries_not_counted(seeded_db):
     await db.commit()
 
     # Should pass — old entries are outside the window
-    ok, error = await check_rate_limit(
+    ok, _ = await check_rate_limit(
         db, passport_hash, "stayright-hotels", "search-availability", "3/minute"
     )
     assert ok is True
