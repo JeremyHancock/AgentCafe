@@ -14,7 +14,7 @@ import bcrypt
 import httpx
 import jwt
 import re
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, UploadFile
 
 from agentcafe.db.engine import get_db
 from agentcafe.wizard.ai_enricher import enrich_spec
@@ -33,6 +33,7 @@ from agentcafe.wizard.models import (
     ServiceDashboardResponse,
     ServiceLogsResponse,
     ServiceStatusResponse,
+    SpecFetchRequest,
     SpecParseRequest,
     SpecParseResponse,
 )
@@ -208,6 +209,132 @@ async def parse_spec(
     draft_id = await create_draft(
         db, company_id, parsed_spec, candidate_menu, req.raw_spec
     )
+
+    return SpecParseResponse(
+        draft_id=draft_id,
+        parsed_spec=parsed_spec,
+        candidate_menu=candidate_menu,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 2b: Upload spec file (multipart)
+# ---------------------------------------------------------------------------
+
+@wizard_router.post("/specs/upload", response_model=SpecParseResponse)
+async def upload_spec(
+    file: UploadFile,
+    authorization: str | None = Header(default=None),
+):
+    """Upload an OpenAPI spec file (JSON or YAML) and parse it.
+
+    Accepts multipart/form-data with a single file field.
+    """
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT id FROM companies WHERE id = ?", (company_id,)
+    )
+    if not await cursor.fetchone():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "company_not_found", "message": "Company not found."},
+        )
+
+    content = await file.read()
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "message": "Spec file must be under 2 MB."},
+        )
+
+    try:
+        raw_spec = content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_encoding", "message": "File must be UTF-8 encoded text."},
+        ) from exc
+
+    try:
+        parsed_spec = parse_openapi_spec(raw_spec)
+    except SpecParseError as exc:
+        detail = {"error": "spec_parse_error", "message": exc.message}
+        if exc.line is not None:
+            detail["line"] = exc.line
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    candidate_menu = await enrich_spec(parsed_spec)
+    draft_id = await create_draft(db, company_id, parsed_spec, candidate_menu, raw_spec)
+
+    return SpecParseResponse(
+        draft_id=draft_id,
+        parsed_spec=parsed_spec,
+        candidate_menu=candidate_menu,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Step 2c: Fetch spec from URL
+# ---------------------------------------------------------------------------
+
+@wizard_router.post("/specs/fetch", response_model=SpecParseResponse)
+async def fetch_spec(
+    req: SpecFetchRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Fetch an OpenAPI spec from a URL and parse it."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT id FROM companies WHERE id = ?", (company_id,)
+    )
+    if not await cursor.fetchone():
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "company_not_found", "message": "Company not found."},
+        )
+
+    if not req.url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "invalid_url", "message": "URL must start with http:// or https://."},
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(req.url, follow_redirects=True)
+            resp.raise_for_status()
+            raw_spec = resp.text
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "fetch_failed", "message": f"URL returned HTTP {exc.response.status_code}."},
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "fetch_failed", "message": f"Could not fetch URL: {exc}"},
+        ) from exc
+
+    if len(raw_spec) > 2 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail={"error": "file_too_large", "message": "Fetched spec must be under 2 MB."},
+        )
+
+    try:
+        parsed_spec = parse_openapi_spec(raw_spec)
+    except SpecParseError as exc:
+        detail = {"error": "spec_parse_error", "message": exc.message}
+        if exc.line is not None:
+            detail["line"] = exc.line
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    candidate_menu = await enrich_spec(parsed_spec)
+    draft_id = await create_draft(db, company_id, parsed_spec, candidate_menu, raw_spec)
 
     return SpecParseResponse(
         draft_id=draft_id,

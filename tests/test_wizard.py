@@ -998,3 +998,110 @@ async def test_service_not_found_404(wizard_client):
 
     resp = await wizard_client.get("/wizard/services/no-such-service/dashboard", headers=auth)
     assert resp.status_code == 404
+
+
+# ===========================================================================
+# Spec upload and fetch tests
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_wizard_upload_spec_file(wizard_client):
+    """POST /wizard/specs/upload accepts a multipart file and creates a draft."""
+    company_resp = await wizard_client.post("/wizard/companies", json={
+        "name": "UploadCorp",
+        "email": "upload@test.example.com",
+        "password": "pass1234",
+    })
+    token = company_resp.json()["session_token"]
+
+    resp = await wizard_client.post(
+        "/wizard/specs/upload",
+        files={"file": ("petstore.json", SAMPLE_OPENAPI_JSON.encode(), "application/json")},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "draft_id" in data
+    assert data["parsed_spec"]["title"] == "PetStore API"
+    assert len(data["candidate_menu"]["actions"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_wizard_upload_spec_no_auth(wizard_client):
+    """Upload without auth token returns 401."""
+    resp = await wizard_client.post(
+        "/wizard/specs/upload",
+        files={"file": ("spec.json", SAMPLE_OPENAPI_JSON.encode(), "application/json")},
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_wizard_fetch_spec_invalid_url(wizard_client):
+    """POST /wizard/specs/fetch with invalid URL returns 422."""
+    company_resp = await wizard_client.post("/wizard/companies", json={
+        "name": "FetchCorp",
+        "email": "fetch@test.example.com",
+        "password": "pass1234",
+    })
+    token = company_resp.json()["session_token"]
+
+    resp = await wizard_client.post(
+        "/wizard/specs/fetch",
+        json={"url": "not-a-url"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_url"
+
+
+@pytest.mark.asyncio
+async def test_wizard_preview_includes_confidence(wizard_client):
+    """Preview response should include confidence scores from the enricher."""
+    company_resp = await wizard_client.post("/wizard/companies", json={
+        "name": "ConfCorp",
+        "email": "conf@test.example.com",
+        "password": "pass1234",
+    })
+    token = company_resp.json()["session_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    parse_resp = await wizard_client.post("/wizard/specs/parse", json={
+        "raw_spec": SAMPLE_OPENAPI_JSON,
+    }, headers=auth)
+    draft_id = parse_resp.json()["draft_id"]
+    candidate = parse_resp.json()["candidate_menu"]
+
+    # Step 3: Review (just pass through)
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/review", json={
+        "service_id": candidate["service_id"],
+        "name": candidate["name"],
+        "actions": [{"action_id": a["action_id"], "description": a["description"],
+                      "required_inputs": a["required_inputs"],
+                      "example_response": a["example_response"],
+                      "confidence": a["confidence"]}
+                     for a in candidate["actions"]],
+    }, headers=auth)
+
+    # Step 4: Policy
+    policy_actions = {}
+    for a in candidate["actions"]:
+        policy_actions[a["action_id"]] = {
+            "scope": f"{candidate['service_id']}:{a['action_id']}",
+            "human_auth": a.get("is_write", False),
+            "rate_limit": "60/minute",
+        }
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/policy", json={
+        "actions": policy_actions,
+        "backend_url": "http://localhost:9999",
+    }, headers=auth)
+
+    # Step 5: Preview
+    preview_resp = await wizard_client.get(f"/wizard/drafts/{draft_id}/preview", headers=auth)
+    assert preview_resp.status_code == 200
+    final = preview_resp.json()["final_menu_entry"]
+    # Top-level confidence
+    assert "confidence" in final
+    # Per-action confidence
+    for action in final["actions"]:
+        assert "confidence" in action

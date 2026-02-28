@@ -141,6 +141,11 @@ class SpecParseRequest(BaseModel):
     raw_spec: str
 
 
+class SpecFetchRequest(BaseModel):
+    """Request body for POST /wizard/specs/fetch."""
+    url: str
+
+
 class SpecParseResponse(BaseModel):
     """Response body for POST /wizard/specs/parse."""
     draft_id: str

@@ -162,7 +162,20 @@ async def generate_preview(
 
     # Prefer company edits over original AI-generated candidate
     edits_json = draft.get("company_edits_json")
-    candidate_menu = json.loads(edits_json if edits_json else draft["candidate_menu_json"])
+    original_candidate = json.loads(draft["candidate_menu_json"])
+    candidate_menu = json.loads(edits_json) if edits_json else original_candidate
+
+    # Merge confidence from original candidate if edits don't include it
+    if edits_json and not candidate_menu.get("confidence") and original_candidate.get("confidence"):
+        candidate_menu["confidence"] = original_candidate["confidence"]
+    if edits_json:
+        orig_actions = {a["action_id"]: a for a in original_candidate.get("actions", [])}
+        for action in candidate_menu.get("actions", []):
+            if not action.get("confidence") and action["action_id"] in orig_actions:
+                orig = orig_actions[action["action_id"]]
+                if orig.get("confidence"):
+                    action["confidence"] = orig["confidence"]
+
     excluded = json.loads(draft["excluded_actions"] or "[]")
     policy_data = json.loads(draft["policy_json"] or "{}")
     backend_url = draft["backend_url"] or ""

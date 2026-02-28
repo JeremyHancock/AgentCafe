@@ -95,13 +95,13 @@ We can run end-to-end locally:
 - ✅ **"Building Agents for AgentCafe" developer guide** — `docs/building-agents-for-agentcafe.md`. Covers two-tier Passport system, consent flow sequence diagram, token lifecycle, rate limits, risk tiers, identity verification, error codes, multi-agent coordination, and Cafe guarantees.
 
 **Phase 5: Testing & Polish**
-- ⬜ End-to-end demo with a simple test agent
+- ✅ **End-to-end demo agent** — `python -m agentcafe.demo_agent` CLI. Full lifecycle: browse menu → Tier-1 register → read order → consent initiate → human approve → token exchange → write order → token refresh. `--headless` flag auto-approves for CI. `--service`, `--read-action`, `--write-action` args. Colored terminal output.
 - ✅ ~~Add `pyyaml` to main dependencies~~ (moved from `[wizard]` to base deps in `pyproject.toml`, Feb 27)
 - ✅ Add CORS middleware to FastAPI app — added in Phase 4 Wave 1 via `CORSMiddleware` in `create_cafe_app()`. Configurable via `CORS_ALLOWED_ORIGINS` env var.
 - ✅ Make `ENRICHMENT_MODEL` configurable via env var — reads from `ENRICHMENT_MODEL` env var with `gpt-4o-mini` default.
 - ✅ Implement `x-agentcafe-*` extension merging — `x-agentcafe-risk-tier` and `x-agentcafe-human-identifier-field` (ADR-023) now extracted by spec parser and wired through both rule-based and LLM enricher paths. All 5 extension fields flow end-to-end. 2 new tests.
 - ✅ Expose confidence scores in review/preview responses — per-action and top-level confidence dicts now included in preview `final_menu_entry`. Already visible in `SpecParseResponse` via `CandidateMenuEntry`. 1 new test.
-- ⬜ Spec file upload (multipart) and URL fetch endpoints — currently only raw string accepted
+- ✅ **Spec file upload (multipart) and URL fetch endpoints** — `POST /wizard/specs/upload` (multipart, 2 MB limit, UTF-8 validation) and `POST /wizard/specs/fetch` (URL fetch with httpx, follow redirects, 2 MB limit). Both return same `SpecParseResponse` as `/specs/parse`. `SpecFetchRequest` model in models.py. 3 new tests. Also fixed confidence merge bug: company edits no longer lose original AI confidence scores in preview.
 - ⬜ Wizard Dashboard integration with onboarding security gates (quarantine UI, risk scoring)
 - ⬜ **Company Onboarding Wizard Dashboard** — web UI (React/Next.js) where companies log in, paste their OpenAPI spec, review the candidate Menu entry, configure policies, preview, and publish. Replaces the current REST-only workflow with a guided visual experience.
   - Known UX issue: review step (Step 3) replaces the AI-generated candidate entirely with company edits. If the company submits a review with no `actions` array, the preview shows empty actions. The dashboard must **merge** partial edits with the candidate — e.g., only overwrite fields the company actually changed, and pre-populate the review form with the AI-generated values so the company can edit in place.
