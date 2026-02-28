@@ -35,9 +35,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["hotel:search"],
+        "required_scopes": ["stayright-hotels:search-availability"],
         "human_authorization_required": false,
-        "limits": "60 requests per minute"
+        "limits": {"rate_limit": "60/minute"}
       },
       "example_response": {
         "results": [
@@ -67,9 +67,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["hotel:search"],
+        "required_scopes": ["stayright-hotels:get-room-details"],
         "human_authorization_required": false,
-        "limits": "60 requests per minute"
+        "limits": {"rate_limit": "60/minute"}
       },
       "example_response": {
         "room_id": "sr-austin-k420",
@@ -121,9 +121,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["hotel:book"],
+        "required_scopes": ["stayright-hotels:book-room"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "booking_id": "BK-2026-0315-A7X9",
@@ -150,9 +150,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["hotel:cancel"],
+        "required_scopes": ["stayright-hotels:cancel-booking"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "booking_id": "BK-2026-0315-A7X9",

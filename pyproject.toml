@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.0",
     "PyJWT>=2.9.0",
     "bcrypt>=4.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -21,7 +22,6 @@ dev = [
 ]
 wizard = [
     "litellm>=1.55.0",
-    "pyyaml>=6.0.0",
     "jsonschema>=4.23.0",
 ]
 

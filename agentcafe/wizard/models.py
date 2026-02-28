@@ -194,3 +194,42 @@ class PublishResponse(BaseModel):
     name: str
     actions_published: int
     message: str
+
+
+# ---------------------------------------------------------------------------
+# Post-publish management models
+# ---------------------------------------------------------------------------
+
+class ServiceDashboardResponse(BaseModel):
+    """Response body for GET /wizard/services/{service_id}/dashboard."""
+    service_id: str
+    name: str
+    description: str
+    status: str
+    published_at: str
+    actions_count: int
+    total_requests: int
+    recent_requests: int
+
+
+class ServiceStatusResponse(BaseModel):
+    """Response body for PUT /wizard/services/{service_id}/pause and /unpublish."""
+    service_id: str
+    status: str
+    message: str
+
+
+class AuditLogEntry(BaseModel):
+    """A single anonymized audit log entry."""
+    timestamp: str
+    action_id: str
+    outcome: str
+    response_code: int | None = None
+    latency_ms: int | None = None
+
+
+class ServiceLogsResponse(BaseModel):
+    """Response body for GET /wizard/services/{service_id}/logs."""
+    service_id: str
+    total_entries: int
+    entries: list[AuditLogEntry]

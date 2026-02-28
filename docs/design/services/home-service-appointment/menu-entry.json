@@ -23,9 +23,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["home:search"],
+        "required_scopes": ["fixright-home:search-providers"],
         "human_authorization_required": false,
-        "limits": "60 requests per minute"
+        "limits": {"rate_limit": "60/minute"}
       },
       "example_response": {
         "providers": [
@@ -92,9 +92,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["home:book"],
+        "required_scopes": ["fixright-home:book-appointment"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "appointment_id": "FR-20260315-P7R2",
@@ -128,9 +128,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["home:reschedule"],
+        "required_scopes": ["fixright-home:reschedule-appointment"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "appointment_id": "FR-20260315-P7R2",
@@ -158,9 +158,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["home:cancel"],
+        "required_scopes": ["fixright-home:cancel-appointment"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "appointment_id": "FR-20260315-P7R2",

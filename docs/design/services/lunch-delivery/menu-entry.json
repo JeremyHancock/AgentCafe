@@ -17,9 +17,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["food:browse"],
+        "required_scopes": ["quickbite-delivery:browse-menu"],
         "human_authorization_required": false,
-        "limits": "60 requests per minute"
+        "limits": {"rate_limit": "60/minute"}
       },
       "example_response": {
         "items": [
@@ -68,9 +68,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["food:order"],
+        "required_scopes": ["quickbite-delivery:place-order"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "order_id": "QB-20260315-H8K2",
@@ -105,9 +105,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["food:track"],
+        "required_scopes": ["quickbite-delivery:track-order"],
         "human_authorization_required": false,
-        "limits": "30 requests per minute"
+        "limits": {"rate_limit": "30/minute"}
       },
       "example_response": {
         "order_id": "QB-20260315-H8K2",
@@ -130,9 +130,9 @@
         }
       ],
       "cost": {
-        "required_scopes": ["food:cancel"],
+        "required_scopes": ["quickbite-delivery:cancel-order"],
         "human_authorization_required": true,
-        "limits": "10 requests per minute"
+        "limits": {"rate_limit": "10/minute"}
       },
       "example_response": {
         "order_id": "QB-20260315-H8K2",

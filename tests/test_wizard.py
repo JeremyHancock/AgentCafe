@@ -807,3 +807,157 @@ async def test_wizard_dry_run_unreachable_backend(wizard_client):
     assert not data["all_ok"]
     assert len(data["results"]) > 0
     assert all(r["status"] == "error" for r in data["results"])
+
+
+# ===========================================================================
+# Post-publish management tests
+# ===========================================================================
+
+async def _publish_service(wizard_client, service_id="mgmt-pets", email="mgmt@test.example.com"):
+    """Helper: create company, parse, review, policy, preview, publish. Returns (auth_headers, service_id)."""
+    company_resp = await wizard_client.post("/wizard/companies", json={
+        "name": "MgmtCorp",
+        "email": email,
+        "password": "pass1234",
+    })
+    token = company_resp.json()["session_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    parse_resp = await wizard_client.post("/wizard/specs/parse", json={
+        "raw_spec": SAMPLE_OPENAPI_JSON,
+    }, headers=auth)
+    draft_id = parse_resp.json()["draft_id"]
+    candidate = parse_resp.json()["candidate_menu"]
+
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/review", json={
+        "service_id": service_id,
+        "name": "MgmtPets Store",
+        "actions": candidate["actions"],
+        "excluded_actions": [],
+    }, headers=auth)
+    policy = {
+        a["action_id"]: {"scope": f"{service_id}:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"}
+        for a in candidate["actions"]
+    }
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/policy", json={
+        "actions": policy,
+        "backend_url": "https://api.example.com",
+    }, headers=auth)
+    await wizard_client.get(f"/wizard/drafts/{draft_id}/preview", headers=auth)
+    pub = await wizard_client.post(f"/wizard/drafts/{draft_id}/publish", headers=auth)
+    assert pub.status_code == 200
+    return auth, service_id
+
+
+@pytest.mark.asyncio
+async def test_service_dashboard(wizard_client):
+    """GET /wizard/services/{id}/dashboard returns service info."""
+    auth, svc_id = await _publish_service(wizard_client, "dash-pets", "dash@test.example.com")
+
+    resp = await wizard_client.get(f"/wizard/services/{svc_id}/dashboard", headers=auth)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["service_id"] == svc_id
+    assert data["name"] == "MgmtPets Store"
+    assert data["status"] == "live"
+    assert data["actions_count"] == 4
+    assert data["total_requests"] == 0
+    assert data["recent_requests"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pause_service(wizard_client):
+    """PUT /wizard/services/{id}/pause pauses a live service."""
+    auth, svc_id = await _publish_service(wizard_client, "pause-pets", "pause@test.example.com")
+
+    resp = await wizard_client.put(f"/wizard/services/{svc_id}/pause", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paused"
+
+    # Verify service no longer on menu
+    menu_resp = await wizard_client.get("/cafe/menu")
+    service_ids = [s["service_id"] for s in menu_resp.json()["services"]]
+    assert svc_id not in service_ids
+
+
+@pytest.mark.asyncio
+async def test_pause_already_paused_409(wizard_client):
+    """Pausing an already-paused service returns 409."""
+    auth, svc_id = await _publish_service(wizard_client, "pause2-pets", "pause2@test.example.com")
+
+    await wizard_client.put(f"/wizard/services/{svc_id}/pause", headers=auth)
+    resp = await wizard_client.put(f"/wizard/services/{svc_id}/pause", headers=auth)
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_resume_paused_service(wizard_client):
+    """PUT /wizard/services/{id}/resume restores a paused service to live."""
+    auth, svc_id = await _publish_service(wizard_client, "resume-pets", "resume@test.example.com")
+
+    await wizard_client.put(f"/wizard/services/{svc_id}/pause", headers=auth)
+    resp = await wizard_client.put(f"/wizard/services/{svc_id}/resume", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "live"
+
+    # Verify service back on menu
+    menu_resp = await wizard_client.get("/cafe/menu")
+    service_ids = [s["service_id"] for s in menu_resp.json()["services"]]
+    assert svc_id in service_ids
+
+
+@pytest.mark.asyncio
+async def test_unpublish_service(wizard_client):
+    """PUT /wizard/services/{id}/unpublish removes a service permanently."""
+    auth, svc_id = await _publish_service(wizard_client, "unpub-pets", "unpub@test.example.com")
+
+    resp = await wizard_client.put(f"/wizard/services/{svc_id}/unpublish", headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "unpublished"
+
+    # Cannot resume an unpublished service
+    resume_resp = await wizard_client.put(f"/wizard/services/{svc_id}/resume", headers=auth)
+    assert resume_resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_service_logs_empty(wizard_client):
+    """GET /wizard/services/{id}/logs returns empty logs for a new service."""
+    auth, svc_id = await _publish_service(wizard_client, "logs-pets", "logs@test.example.com")
+
+    resp = await wizard_client.get(f"/wizard/services/{svc_id}/logs", headers=auth)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["service_id"] == svc_id
+    assert data["total_entries"] == 0
+    assert data["entries"] == []
+
+
+@pytest.mark.asyncio
+async def test_service_management_ownership_403(wizard_client):
+    """Company B cannot manage Company A's published service."""
+    _auth_a, svc_id = await _publish_service(wizard_client, "own-pets", "own-a@test.example.com")
+
+    # Company B
+    resp_b = await wizard_client.post("/wizard/companies", json={
+        "name": "CompanyB",
+        "email": "own-b@test.example.com",
+        "password": "pass1234",
+    })
+    auth_b = {"Authorization": f"Bearer {resp_b.json()['session_token']}"}
+
+    # B tries to pause A's service
+    assert (await wizard_client.put(f"/wizard/services/{svc_id}/pause", headers=auth_b)).status_code == 403
+    # B tries to get A's dashboard
+    assert (await wizard_client.get(f"/wizard/services/{svc_id}/dashboard", headers=auth_b)).status_code == 403
+    # B tries to get A's logs
+    assert (await wizard_client.get(f"/wizard/services/{svc_id}/logs", headers=auth_b)).status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_service_not_found_404(wizard_client):
+    """Accessing a non-existent service returns 404."""
+    auth, _ = await _publish_service(wizard_client, "exist-pets", "exist@test.example.com")
+
+    resp = await wizard_client.get("/wizard/services/no-such-service/dashboard", headers=auth)
+    assert resp.status_code == 404

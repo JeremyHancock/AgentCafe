@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 3 complete. Company Onboarding Wizard fully implemented and tested.  
-**Last Updated:** February 26, 2026
+**Current Status:** Phase 3.2 complete. Passport V2 design fully converged (8 locked positions, MVP scope defined). ADR-023 + ADR-024 recorded.  
+**Last Updated:** February 27, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -32,7 +32,7 @@ We can run end-to-end locally:
 - ✅ Menu discovery: `GET /cafe/menu` returns locked format from database
 - ✅ Order proxy: `POST /cafe/order` with double validation (MVP passport) + audit logging
 - ✅ Database seeding: 3 services, 12 proxy configs, auto-seeded on startup
-- ✅ Tests: 77 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation, wizard spec parsing, enrichment, full wizard API flow, draft ownership, dry-run, hotel spec)
+- ✅ Tests: 85 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation, wizard spec parsing, enrichment, full wizard API flow, draft ownership, dry-run, hotel spec, post-publish management)
 
 **Phase 2: Core Cafe Foundation** ✅
 - ✅ **2.0 Passport System Design** — locked in `docs/passport/design.md` (Grok + Claude collaboration)
@@ -54,7 +54,7 @@ We can run end-to-end locally:
 - ✅ Pydantic input validation on company create (name length, email format, password minimum)
 - ✅ Pydantic models (`wizard/models.py` — request/response models for all wizard endpoints)
 - ✅ DB schema: `draft_services` table + `password_hash` column on `companies`
-- ✅ 29 wizard tests (spec parsing, enrichment, hotel spec with $ref, full API flow, draft ownership, missing auth, dry-run, out-of-order steps)
+- ✅ 37 wizard tests (spec parsing, enrichment, hotel spec with $ref, full API flow, draft ownership, missing auth, dry-run, out-of-order steps, post-publish management)
 
 **Phase 3.1: Code Quality & Lint Cleanup** ✅
 - ✅ Pylint 10.00/10 — zero warnings across all source and test files
@@ -64,24 +64,51 @@ We can run end-to-end locally:
 - ✅ Removed unused imports and variables in test files
 - ✅ See `FIX_PROGRESS.md` for the complete 12-fix improvement tracker
 
-**Phase 4: Security & Guardrails**
+**Phase 3.2: Project Review Fixes** ✅
+- ✅ Fixed scope mismatch: updated `cost.required_scopes` in all 4 design files (13 values) to match `seed.py` proxy_configs (e.g., `hotel:search` → `stayright-hotels:search-availability`)
+- ✅ Standardized `cost.limits` format: all design files now use object form `{"rate_limit": "60/minute"}` matching wizard output (13 occurrences across 4 files)
+- ✅ Post-publish management endpoints: `GET .../dashboard`, `PUT .../pause`, `PUT .../resume`, `PUT .../unpublish`, `GET .../logs` — all with JWT auth + ownership enforcement
+- ✅ 4 new Pydantic response models (`ServiceDashboardResponse`, `ServiceStatusResponse`, `AuditLogEntry`, `ServiceLogsResponse`)
+- ✅ 8 new tests (dashboard, pause, pause-idempotency, resume, unpublish, logs, ownership 403, not-found 404)
+- ✅ Comprehensive `PROJECT_REVIEW.md` documenting all findings and remaining gaps
+
+**Phase 4: Passport V2 & Security** (design converged — see `docs/passport/v2-design-discussion.md` §13)
 - ✅ Real double validation with JWT verification (done in Phase 2)
-- ⬜ Tamper-evident audit logging
 - ✅ Passport revocation (done in Phase 2)
-- ⬜ Input injection protection
-- ⬜ Backend credential encryption (AES-256 at rest)
-- ⬜ Upgrade to RS256 with key management
+- ✅ Passport V2 design: 8 locked positions via three-way review (ADR-024)
+- ✅ Menu schema extension for consent flow (ADR-023, ADR-009 amendment)
+- ⬜ **Passport V2 implementation — Tier-1 read Passports**: agent self-requests a read-only Passport for Menu browsing and discovery. Rate-limited. No human ceremony.
+- ⬜ **Passport V2 implementation — human accounts + consent flow**: human Cafe accounts (passkey/WebAuthn), `POST /consents/initiate`, consent URL, `POST /tokens/exchange`, short-lived write tokens under long-lived policies
+- ⬜ **Passport V2 implementation — Cafe-side identity verification**: layered by risk tier (agent-supplied for low, +read-before-write for medium+, mandatory read for high/critical). `human_identifier_field` in Menu drives both paths.
+- ⬜ **Passport V2 implementation — risk-tier token ceilings**: per-policy human-chosen expiry with Cafe-enforced ceilings (60m/15m/5m/single-use). Asymmetric ceremony.
+- ⬜ **Populate ADR-023 Menu schema fields** — update AI enricher + review engine to generate `risk_tier`, `human_identifier_field`, `constraints_schema`, `account_linking_required`, `self_only`, `concurrency_guidance`, and `cost.limits.rate_limit_scope` during onboarding. Backfill at least one seeded demo service (hotel booking) with these fields so the consent flow has real data to work with.
+- ⬜ **Rate-limit 429 response** — machine-readable error body with `error`, `detail` (explaining per-policy shared budget), `retry_after_seconds`, and `policy_id`. Required for MVP per rate-limit communication principle (§2.2).
+- ⬜ **Consent page UI** — first Cafe-owned web frontend. Cafe-authored plain-language consent text. Passkey confirmation for high-value actions.
+- ⬜ **Passport signing key management** — migrate from single HS256 secret → RS256 asymmetric with cloud KMS (private key never leaves KMS, JWKS endpoint for public keys, `kid` in JWT header, dual-key rotation). Addresses single-key compromise risk identified in §3.
+- ⬜ **Consent privacy enforcement** — strict JWT audience separation between agent Passports and human sessions. No agent-accessible consent discovery surface. See v2-design-discussion.md §2.3.
+- ⬜ **Policy revocation — instant for all tiers** — add `revoked_at` column to policies table + check in token validation (`iat < revoked_at` → reject). Replaces short-expiry-only limitation. See v2-design-discussion.md §2.2.
+- ⬜ Input injection protection — path parameters resolved via string replacement without sanitization; an agent could send malicious values
+- ⬜ Backend credential encryption (AES-256 at rest) — `backend_auth_header` currently stored as plaintext in `proxy_configs` and `draft_services`
+- ⬜ Tamper-evident audit logging — hash chaining or HMAC signatures
+- ⬜ Schema migration system — replace `rm -f agentcafe.db` with proper migrations (e.g., Alembic or manual `ALTER TABLE` scripts)
+- ⬜ **Token response `policy_limits` snapshot** — optional `remaining_requests_in_window`, `active_tokens_under_policy`, `max_active_tokens` in token exchange/refresh responses. Not MVP; convenience for sophisticated agent platforms.
+- ⬜ **"Building Agents for AgentCafe" developer guide** — one-page doc in `docs/` explaining per-policy rate limits, multi-agent coordination, consent flow, and token lifecycle. Essential long-term, low cost.
 
 **Phase 5: Testing & Polish**
 - ⬜ End-to-end demo with a simple test agent
+- ✅ ~~Add `pyyaml` to main dependencies~~ (moved from `[wizard]` to base deps in `pyproject.toml`, Feb 27)
+- ⬜ Add CORS middleware to FastAPI app — required before any web frontend (consent page, wizard dashboard) can call the API
+- ⬜ Make `ENRICHMENT_MODEL` configurable via env var (currently hardcoded to `gpt-4o-mini` in `ai_enricher.py`)
+- ⬜ Implement `x-agentcafe-*` extension merging in the AI enricher — presets are parsed by the spec parser but never used during enrichment
+- ⬜ Expose confidence scores in review/preview responses — the data model has them but they're invisible to the company
+- ⬜ Spec file upload (multipart) and URL fetch endpoints — currently only raw string accepted
 - ⬜ **Company Onboarding Wizard Dashboard** — web UI (React/Next.js) where companies log in, paste their OpenAPI spec, review the candidate Menu entry, configure policies, preview, and publish. Replaces the current REST-only workflow with a guided visual experience.
   - Known UX issue: review step (Step 3) replaces the AI-generated candidate entirely with company edits. If the company submits a review with no `actions` array, the preview shows empty actions. The dashboard must **merge** partial edits with the candidate — e.g., only overwrite fields the company actually changed, and pre-populate the review form with the AI-generated values so the company can edit in place.
-  - Wizard-published services need Passport scopes that match the wizard-assigned scopes. In MVP passport mode (`demo-passport`), orders to wizard-published services are rejected because the hardcoded scope list doesn't include them. The dashboard should make this clear, or auto-issue a test passport.
-  - The `ENRICHMENT_MODEL` (currently hardcoded to `gpt-4o-mini`) should be configurable via env var for the dashboard deployment.
 - ⬜ Local admin dashboard for viewing Menu & logs
 
 **Phase 6: Packaging & Release Prep**
 - ⬜ Production Docker images (multi-stage builds, hardened base images)
+- ⬜ Docker Compose hardening: set `PASSPORT_SIGNING_SECRET` env var, add SQLite volume for persistence, install `[wizard]` deps in image, add `OPENAI_API_KEY` for LiteLLM
 - ⬜ Open-core split, launch assets
 
 ---

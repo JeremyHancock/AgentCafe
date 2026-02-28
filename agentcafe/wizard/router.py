@@ -19,6 +19,7 @@ from fastapi import APIRouter, Header, HTTPException
 from agentcafe.db.engine import get_db
 from agentcafe.wizard.ai_enricher import enrich_spec
 from agentcafe.wizard.models import (
+    AuditLogEntry,
     CompanyCreateRequest,
     CompanyCreateResponse,
     CompanyLoginRequest,
@@ -29,6 +30,9 @@ from agentcafe.wizard.models import (
     PreviewResponse,
     PublishResponse,
     ReviewSaveRequest,
+    ServiceDashboardResponse,
+    ServiceLogsResponse,
+    ServiceStatusResponse,
     SpecParseRequest,
     SpecParseResponse,
 )
@@ -439,3 +443,212 @@ async def publish_draft_endpoint(
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Post-publish management
+# ---------------------------------------------------------------------------
+
+async def _get_published_service(db, service_id: str, company_id: str) -> dict:
+    """Fetch a published service and verify ownership. Raises HTTPException on failure."""
+    cursor = await db.execute(
+        "SELECT * FROM published_services WHERE service_id = ?",
+        (service_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail={"error": "service_not_found"})
+    svc = dict(row)
+    if svc["company_id"] != company_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "not_owner", "message": "You do not own this service."},
+        )
+    return svc
+
+
+@wizard_router.get("/services/{service_id}/dashboard", response_model=ServiceDashboardResponse)
+async def service_dashboard(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+):
+    """View basic dashboard info for a published service."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+    svc = await _get_published_service(db, service_id, company_id)
+
+    menu_entry = json.loads(svc["menu_entry_json"])
+    actions_count = len(menu_entry.get("actions", []))
+
+    # Total requests from audit log
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE service_id = ?",
+        (service_id,),
+    )
+    total_requests = (await cursor.fetchone())[0]
+
+    # Recent requests (last 24 hours)
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE service_id = ? AND timestamp > datetime('now', '-1 day')",
+        (service_id,),
+    )
+    recent_requests = (await cursor.fetchone())[0]
+
+    return ServiceDashboardResponse(
+        service_id=service_id,
+        name=svc["name"],
+        description=svc["description"],
+        status=svc["status"],
+        published_at=svc["published_at"],
+        actions_count=actions_count,
+        total_requests=total_requests,
+        recent_requests=recent_requests,
+    )
+
+
+@wizard_router.put("/services/{service_id}/pause", response_model=ServiceStatusResponse)
+async def pause_service(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+):
+    """Pause a live service — removes it from the Menu temporarily."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+    svc = await _get_published_service(db, service_id, company_id)
+
+    if svc["status"] == "paused":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "already_paused", "message": "Service is already paused."},
+        )
+    if svc["status"] == "unpublished":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "unpublished", "message": "Service is unpublished. Republish it first."},
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE published_services SET status = 'paused', updated_at = ? WHERE service_id = ?",
+        (now, service_id),
+    )
+    await db.commit()
+    logger.info("Paused service '%s'", service_id)
+
+    return ServiceStatusResponse(
+        service_id=service_id,
+        status="paused",
+        message=f"'{svc['name']}' is now paused and hidden from the Menu.",
+    )
+
+
+@wizard_router.put("/services/{service_id}/unpublish", response_model=ServiceStatusResponse)
+async def unpublish_service(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+):
+    """Unpublish a service — removes it from the Menu permanently."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+    svc = await _get_published_service(db, service_id, company_id)
+
+    if svc["status"] == "unpublished":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "already_unpublished", "message": "Service is already unpublished."},
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE published_services SET status = 'unpublished', updated_at = ? WHERE service_id = ?",
+        (now, service_id),
+    )
+    await db.commit()
+    logger.info("Unpublished service '%s'", service_id)
+
+    return ServiceStatusResponse(
+        service_id=service_id,
+        status="unpublished",
+        message=f"'{svc['name']}' has been removed from the Menu.",
+    )
+
+
+@wizard_router.put("/services/{service_id}/resume", response_model=ServiceStatusResponse)
+async def resume_service(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+):
+    """Resume a paused service — makes it visible on the Menu again."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+    svc = await _get_published_service(db, service_id, company_id)
+
+    if svc["status"] == "live":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "already_live", "message": "Service is already live."},
+        )
+    if svc["status"] == "unpublished":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "unpublished", "message": "Service is unpublished. Republish it first."},
+        )
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE published_services SET status = 'live', updated_at = ? WHERE service_id = ?",
+        (now, service_id),
+    )
+    await db.commit()
+    logger.info("Resumed service '%s'", service_id)
+
+    return ServiceStatusResponse(
+        service_id=service_id,
+        status="live",
+        message=f"'{svc['name']}' is live on the Menu again.",
+    )
+
+
+@wizard_router.get("/services/{service_id}/logs", response_model=ServiceLogsResponse)
+async def service_logs(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+    limit: int = 50,
+):
+    """View anonymized request logs for a published service."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+    await _get_published_service(db, service_id, company_id)
+
+    # Cap limit at 200
+    limit = min(limit, 200)
+
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE service_id = ?",
+        (service_id,),
+    )
+    total_entries = (await cursor.fetchone())[0]
+
+    cursor = await db.execute(
+        "SELECT timestamp, action_id, outcome, response_code, latency_ms "
+        "FROM audit_log WHERE service_id = ? ORDER BY timestamp DESC LIMIT ?",
+        (service_id, limit),
+    )
+    rows = await cursor.fetchall()
+
+    entries = [
+        AuditLogEntry(
+            timestamp=row["timestamp"],
+            action_id=row["action_id"],
+            outcome=row["outcome"],
+            response_code=row["response_code"],
+            latency_ms=row["latency_ms"],
+        )
+        for row in rows
+    ]
+
+    return ServiceLogsResponse(
+        service_id=service_id,
+        total_entries=total_entries,
+        entries=entries,
+    )

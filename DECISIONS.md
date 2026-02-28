@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** February 26, 2026
+**Last Updated:** February 27, 2026
 
 ---
 
@@ -234,3 +234,33 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 **Context:** During live testing, `POST /wizard/companies` returned `sqlite3.OperationalError: table companies has no column named password_hash`. The `agentcafe.db` file on disk was created by a previous run before the `password_hash` column was added. `CREATE TABLE IF NOT EXISTS` does not alter existing tables.
 **Decision:** Document the caveat prominently in all "How to Run" docs. The local startup instructions now include `rm -f agentcafe.db` before `python -m agentcafe.main`. Tests are unaffected because they use in-memory databases (`":memory:"`).
 **Rationale:** SQLite has no built-in migration system. For MVP, deleting the DB is acceptable since it only contains seeded demo data. Phase 6 should add proper schema migrations (e.g., `alembic` or manual `ALTER TABLE` scripts) for production use where data persistence matters.
+
+---
+
+### ADR-023: Menu schema extension for Passport V2 consent flow (ADR-009 amendment)
+
+**Date:** February 27, 2026
+**Context:** The Passport V2 design discussion (see `docs/passport/v2-design-discussion.md`) established that agents need richer metadata in the Menu to request human consent properly. Specifically: risk tier (for token lifetime ceilings), identity fields (for Cafe-side ownership verification), constraints schema (for the consent UI), and account-linking requirements. A three-way review (Jeremy + Claude + Grok) converged on these additions and agreed the ADR should be made before any dashboard UI work begins.
+**Decision:** Extend the Menu Action object with five new optional fields per ADR-009's additive schema policy:
+1. `risk_tier` (`"low"` | `"medium"` | `"high"` | `"critical"`, default `"medium"`) — determines token lifetime ceiling and verification depth.
+2. `human_identifier_field` (`string | null`, default `null`) — field name in action inputs/responses containing human identity (e.g., `"customer_email"`). Serves double duty: fast-path input matching and read-before-write field targeting.
+3. `constraints_schema` (`object | null`, default `null`) — JSON Schema the consent UI renders for human-settable limits (e.g., max price, time window).
+4. `account_linking_required` (`boolean`, default `false`) — whether the human must link their service account before using this action.
+5. `self_only` (`boolean`, default `true`) — actions scoped to human's own resources. Future `on_behalf_of` support will use `false`.
+**Rationale:** All fields are optional, so this is 100% backward compatible — existing Menu entries work unchanged. Old seeded services get sensible defaults. Wizard-published services will populate these fields during the review step (AI enricher pre-fills from field names, company confirms). Making the ADR now ensures the Phase 5 dashboard and Phase 4 consent flow build against the correct schema from day one.
+
+---
+
+### ADR-024: Passport V2 — bearer authorization model (core reframing)
+
+**Date:** February 27, 2026
+**Context:** The V1 Passport design (`docs/passport/design.md`) framed the Passport as a "digital Power of Attorney" — "this agent represents this human." Discussion revealed the POA analogy breaks down: POA names a specific, verifiable second party, but agents are ephemeral software with no persistent, verifiable identity. The V2 design discussion (`docs/passport/v2-design-discussion.md`) established a new framing through three-way review (Jeremy + Claude + Grok).
+**Decision:**
+1. **The Passport is a human-issued bearer authorization**, not an agent identity document. "I authorize the bearer" not "I authorize Agent X."
+2. **Agent identity is intentionally out of scope.** Design Principle One is strengthened: `agent_id` is not just untrusted but irrelevant to the security model. The Passport works regardless of whether agents develop stable identities.
+3. **Two-tier model:** Tier-1 (read-only, agent self-requests, no human) and Tier-2 (write-scope, requires human consent via Cafe-owned flow with passkey).
+4. **The Cafe is the sole trusted issuer and consent broker.** Non-negotiable for product value and liability clarity.
+5. **Cafe-side identity verification** (Proposed Principle Two): the Cafe enforces human-scoping by inspecting proxied data — no backend changes, no human identity broadcast. Layered by risk tier: agent-supplied identifier match for low-risk, +read-before-write for medium+, mandatory read for high/critical.
+6. **Token expiry:** per-policy human-chosen with Cafe-enforced risk-tier ceilings. Single-use tokens for critical operations. Asymmetric ceremony preserved (easy to tighten, hard to loosen).
+7. **Rolling proof deferred** to Phase 4. Short-lived tokens + rule-based anomaly detection + human audit dashboard sufficient for Phase 3.
+**Rationale:** This reframing honestly acknowledges a new paradigm — a verified human delegating authority to an unverifiable autonomous entity — with no clean real-world analog. Anchoring trust exclusively to human identity (the only thing we can verify) produces a system that is robust regardless of how agent identity evolves. Design Principles Zero and One are preserved and strengthened. See `docs/passport/v2-design-discussion.md` §13 for the full convergence summary.
