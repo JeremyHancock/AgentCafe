@@ -91,6 +91,7 @@ We can run end-to-end locally:
 - ✅ **Tamper-evident audit logging** — SHA-256 hash chaining on audit_log entries. Each entry stores `prev_hash` (previous entry's hash) and `entry_hash` (SHA-256 of all fields + prev_hash). Migration 0005 adds columns. `verify_audit_chain()` walks the chain to detect tampering. Graceful skip for legacy entries. 3 new tests.
 - ✅ Schema migration system — lightweight numbered SQL migrations in `agentcafe/db/migrations/`, version tracking via `schema_version` table, auto-applied on startup. Migration 0001 adds `policies` table with `revoked_at`.
 - ✅ **Token response `policy_limits` snapshot** — `active_tokens` and `max_active_tokens` (20) included in `/tokens/exchange` and `/tokens/refresh` responses via `PolicyLimits` model. Rate limit info remains per-action (returned reactively via 429). 2 new tests.
+- ✅ **Service onboarding security** — ADR-025. Quarantine mode (`quarantine_until` on proxy_configs, 30-day default for new services, forces Tier-2 consent for all actions). Instant suspension (`suspended_at`, returns 503 `service_suspended`). `POST /cafe/services/{id}/suspend` admin endpoint. Cafe-owned consent text (already enforced). Migration 0006. Publisher sets quarantine on publish. Demo data pre-lifted. 5 new tests.
 - ✅ **"Building Agents for AgentCafe" developer guide** — `docs/building-agents-for-agentcafe.md`. Covers two-tier Passport system, consent flow sequence diagram, token lifecycle, rate limits, risk tiers, identity verification, error codes, multi-agent coordination, and Cafe guarantees.
 
 **Phase 5: Testing & Polish**
@@ -101,6 +102,7 @@ We can run end-to-end locally:
 - ⬜ Implement `x-agentcafe-*` extension merging in the AI enricher — presets are parsed by the spec parser but never used during enrichment
 - ⬜ Expose confidence scores in review/preview responses — the data model has them but they're invisible to the company
 - ⬜ Spec file upload (multipart) and URL fetch endpoints — currently only raw string accepted
+- ⬜ Wizard Dashboard integration with onboarding security gates (quarantine UI, risk scoring)
 - ⬜ **Company Onboarding Wizard Dashboard** — web UI (React/Next.js) where companies log in, paste their OpenAPI spec, review the candidate Menu entry, configure policies, preview, and publish. Replaces the current REST-only workflow with a guided visual experience.
   - Known UX issue: review step (Step 3) replaces the AI-generated candidate entirely with company edits. If the company submits a review with no `actions` array, the preview shows empty actions. The dashboard must **merge** partial edits with the candidate — e.g., only overwrite fields the company actually changed, and pre-populate the review form with the AI-generated values so the company can edit in place.
 - ⬜ Local admin dashboard for viewing Menu & logs

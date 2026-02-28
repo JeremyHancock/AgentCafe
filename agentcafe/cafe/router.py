@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from agentcafe.cafe.policy import check_rate_limit, validate_input_types
 from agentcafe.crypto import decrypt
 from agentcafe.db.engine import get_db
 
+logger = logging.getLogger("agentcafe.cafe.router")
+
 router = APIRouter(prefix="/cafe", tags=["cafe"])
 
 # Safe characters for path parameter values: alphanumeric, underscore, dot, @, ~, hyphen.
@@ -32,13 +35,15 @@ class _State:
     """Module-level mutable state (avoids global statements)."""
     use_real_passport: bool = False
     http_client: httpx.AsyncClient | None = None
+    issuer_api_key: str = ""
 
 _state = _State()
 
 
-def configure_router(use_real_passport: bool) -> None:
+def configure_router(use_real_passport: bool, issuer_api_key: str = "") -> None:
     """Set runtime config for the router. Called once at startup."""
     _state.use_real_passport = use_real_passport
+    _state.issuer_api_key = issuer_api_key
 
 
 async def get_http_client() -> httpx.AsyncClient:
@@ -104,7 +109,7 @@ async def place_order(req: OrderRequest):
     cursor = await db.execute(
         """SELECT backend_url, backend_path, backend_method, backend_auth_header,
                   scope, human_auth_required, rate_limit, risk_tier,
-                  human_identifier_field
+                  human_identifier_field, quarantine_until, suspended_at
            FROM proxy_configs
            WHERE service_id = ? AND action_id = ?""",
         (req.service_id, req.action_id),
@@ -128,6 +133,24 @@ async def place_order(req: OrderRequest):
     _rate_limit = row["rate_limit"]
     risk_tier = row["risk_tier"] if "risk_tier" in row.keys() else "medium"
     human_identifier_field = row["human_identifier_field"] if "human_identifier_field" in row.keys() else None
+
+    # --- GATE 0: Service-level blocks (ADR-025) ---
+    suspended_at = row["suspended_at"] if "suspended_at" in row.keys() else None
+    if suspended_at:
+        await _audit_log(db, req, "service_suspended", 503)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "service_suspended", "message": "This service has been suspended by AgentCafe."},
+        )
+
+    quarantine_until = row["quarantine_until"] if "quarantine_until" in row.keys() else None
+    if quarantine_until:
+        quarantine_dt = datetime.fromisoformat(quarantine_until)
+        if quarantine_dt.tzinfo is None:
+            quarantine_dt = quarantine_dt.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) < quarantine_dt:
+            # Force Tier-2 consent for ALL actions during quarantine
+            human_auth_required = True
 
     # --- GATE 1: Passport Validation ---
     if _state.use_real_passport:
@@ -377,6 +400,45 @@ async def place_order(req: OrderRequest):
         raise HTTPException(status_code=resp.status_code, detail=body)
 
     return body
+
+
+# ---------------------------------------------------------------------------
+# POST /cafe/services/{service_id}/suspend — Admin suspends a service (ADR-025)
+# ---------------------------------------------------------------------------
+
+class SuspendRequest(BaseModel):
+    """Request body for service suspension."""
+    reason: str = ""
+    api_key: str
+
+
+@router.post("/services/{service_id}/suspend")
+async def suspend_service(service_id: str, req: SuspendRequest):
+    """Suspend a service immediately. All future orders return 503.
+
+    Requires the ISSUER_API_KEY for authorization (admin-only).
+    """
+    if req.api_key != _state.issuer_api_key:
+        raise HTTPException(status_code=403, detail={"error": "forbidden"})
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor = await db.execute(
+        "SELECT DISTINCT service_id FROM proxy_configs WHERE service_id = ?",
+        (service_id,),
+    )
+    if not await cursor.fetchone():
+        raise HTTPException(status_code=404, detail={"error": "service_not_found"})
+
+    await db.execute(
+        "UPDATE proxy_configs SET suspended_at = ? WHERE service_id = ?",
+        (now, service_id),
+    )
+    await db.commit()
+
+    logger.warning("Service %s suspended: %s", service_id, req.reason or "(no reason)")
+    return {"service_id": service_id, "suspended_at": now, "reason": req.reason}
 
 
 # ---------------------------------------------------------------------------

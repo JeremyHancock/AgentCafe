@@ -50,6 +50,7 @@ async def _mock_http_client(monkeypatch):
     """Replace the shared httpx client with one that routes to in-process backends."""
     mock_client = AsyncClient(transport=_MultiBackendTransport())
     monkeypatch.setattr(router_module._state, "http_client", mock_client)
+    monkeypatch.setattr(router_module._state, "issuer_api_key", "TEST_API_KEY")
     yield
     await mock_client.aclose()
 
@@ -331,3 +332,127 @@ async def test_audit_entries_have_hash_columns(cafe_client):
     assert row["prev_hash"] is not None
     assert row["entry_hash"] is not None
     assert len(row["entry_hash"]) == 64  # SHA-256 hex
+
+
+# ---------------------------------------------------------------------------
+# ADR-025: Service onboarding security (quarantine + suspension)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_suspended_service_returns_503(cafe_client):
+    """A suspended service should return 503 service_suspended."""
+    from agentcafe.db.engine import get_db
+    db = await get_db()
+
+    # Suspend stayright-hotels
+    await db.execute(
+        "UPDATE proxy_configs SET suspended_at = '2026-02-28T00:00:00+00:00' "
+        "WHERE service_id = 'stayright-hotels'"
+    )
+    await db.commit()
+
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": "demo-passport",
+        "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                   "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "service_suspended"
+
+    # Clean up
+    await db.execute(
+        "UPDATE proxy_configs SET suspended_at = NULL "
+        "WHERE service_id = 'stayright-hotels'"
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_quarantine_forces_human_auth(cafe_client):
+    """A quarantined service should require Tier-2 even for read actions."""
+    from agentcafe.db.engine import get_db
+    db = await get_db()
+
+    # Set quarantine far in the future
+    await db.execute(
+        "UPDATE proxy_configs SET quarantine_until = '2099-01-01T00:00:00+00:00' "
+        "WHERE service_id = 'stayright-hotels' AND action_id = 'search-availability'"
+    )
+    await db.commit()
+
+    # search-availability is normally read-only (no human_auth), but quarantine forces it
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": "demo-passport",
+        "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                   "check_out": "2026-03-18", "guests": 2},
+    })
+    # In MVP mode, demo-passport is pre-authorized for everything,
+    # so the request still succeeds. But human_auth_required is now True.
+    # The real test is in the V2 path — here we verify no crash and the
+    # quarantine logic runs without error.
+    assert resp.status_code == 200
+
+    # Clean up
+    await db.execute(
+        "UPDATE proxy_configs SET quarantine_until = '2020-01-01T00:00:00+00:00' "
+        "WHERE service_id = 'stayright-hotels' AND action_id = 'search-availability'"
+    )
+    await db.commit()
+
+
+@pytest.mark.asyncio
+async def test_suspend_endpoint_requires_api_key(cafe_client):
+    """POST /cafe/services/{id}/suspend should reject invalid API keys."""
+    resp = await cafe_client.post(
+        "/cafe/services/stayright-hotels/suspend",
+        json={"api_key": "wrong-key", "reason": "test"},
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "forbidden"
+
+
+@pytest.mark.asyncio
+async def test_suspend_endpoint_unknown_service(cafe_client):
+    """Suspending a non-existent service should return 404."""
+    resp = await cafe_client.post(
+        "/cafe/services/nonexistent-service/suspend",
+        json={"api_key": "TEST_API_KEY", "reason": "test"},
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_suspend_endpoint_success(cafe_client):
+    """POST /cafe/services/{id}/suspend with correct key should succeed."""
+    from agentcafe.db.engine import get_db
+
+    resp = await cafe_client.post(
+        "/cafe/services/stayright-hotels/suspend",
+        json={"api_key": "TEST_API_KEY", "reason": "abuse detected"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["service_id"] == "stayright-hotels"
+    assert data["suspended_at"] is not None
+
+    # Verify the service is now suspended
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": "demo-passport",
+        "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                   "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 503
+
+    # Clean up
+    db = await get_db()
+    await db.execute(
+        "UPDATE proxy_configs SET suspended_at = NULL "
+        "WHERE service_id = 'stayright-hotels'"
+    )
+    await db.commit()

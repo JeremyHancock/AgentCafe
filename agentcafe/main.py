@@ -47,7 +47,7 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret)
     configure_wizard(cfg.passport_signing_secret)
-    configure_router(cfg.use_real_passport)
+    configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
     else:
@@ -139,7 +139,7 @@ async def main() -> None:
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret)
     configure_wizard(cfg.passport_signing_secret)
-    configure_router(cfg.use_real_passport)
+    configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
     else:

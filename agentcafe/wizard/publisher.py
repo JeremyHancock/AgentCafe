@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import aiosqlite
 
@@ -66,6 +66,7 @@ async def publish_draft(
         )
 
     now = datetime.now(timezone.utc).isoformat()
+    quarantine_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
     # --- Atomic transaction: publish service + proxy configs ---
     try:
@@ -114,8 +115,9 @@ async def publish_draft(
                 """INSERT INTO proxy_configs
                    (id, service_id, action_id, backend_url, backend_path,
                     backend_method, backend_auth_header, scope,
-                    human_auth_required, rate_limit, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    human_auth_required, rate_limit, created_at,
+                    quarantine_until)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(uuid.uuid4()),
                     service_id,
@@ -128,6 +130,7 @@ async def publish_draft(
                     1 if human_auth else 0,
                     rate_limit,
                     now,
+                    quarantine_until,
                 ),
             )
             actions_published += 1

@@ -160,8 +160,8 @@ async def seed_demo_data(db: aiosqlite.Connection, config) -> None:
                 """INSERT OR IGNORE INTO proxy_configs
                    (id, service_id, action_id, backend_url, backend_path, backend_method,
                     backend_auth_header, scope, human_auth_required, rate_limit, risk_tier,
-                    human_identifier_field, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    human_identifier_field, created_at, quarantine_until)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(uuid.uuid4()),
                     service_id,
@@ -176,6 +176,7 @@ async def seed_demo_data(db: aiosqlite.Connection, config) -> None:
                     pc.get("risk_tier", "medium"),
                     pc.get("human_identifier_field"),
                     now,
+                    "2020-01-01T00:00:00+00:00",  # demo: quarantine already lifted
                 ),
             )
 
