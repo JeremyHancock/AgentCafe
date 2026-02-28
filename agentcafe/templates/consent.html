@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Authorize Agent — AgentCafe{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="consent-header">
+        <h1>Authorization Request</h1>
+        <span class="badge badge-{{ risk_tier }}">{{ risk_tier }} risk</span>
+    </div>
+
+    <p>{{ consent_text }}</p>
+
+    {% if task_summary %}
+    <div class="alert" style="background:var(--bg); border:1px solid var(--border);">
+        <strong style="color:var(--text);">Agent's stated purpose:</strong>
+        <span class="meta"> {{ task_summary }}</span>
+        <br><span class="meta" style="font-size:12px;">(This is self-reported by the agent and has not been verified.)</span>
+    </div>
+    {% endif %}
+
+    <hr class="divider">
+
+    <h2>What you're authorizing</h2>
+    <p>The bearer of this authorization will be able to perform the following actions on <strong>{{ service_name }}</strong>:</p>
+
+    <ul class="scope-list">
+        {% for action in actions %}
+        <li>{{ action.description }} <span class="badge badge-{{ action.risk_tier or 'medium' }}" style="margin-left:auto; font-size:11px;">{{ action.risk_tier or 'medium' }}</span></li>
+        {% endfor %}
+    </ul>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/consent/{{ consent_id }}/approve">
+        <div class="form-group">
+            <label for="token_lifetime">Token duration</label>
+            <select id="token_lifetime" name="token_lifetime_seconds">
+                {% for opt in lifetime_options %}
+                <option value="{{ opt.seconds }}" {% if opt.default %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <span class="meta" style="display:block; margin-top:4px;">
+                Maximum for {{ risk_tier }}-risk actions: {{ max_lifetime_label }}.
+                Tokens can be refreshed within this window.
+            </span>
+        </div>
+
+        <div class="btn-row">
+            <button type="submit" class="btn btn-primary">Approve</button>
+            <a href="/consent/{{ consent_id }}/decline" class="btn btn-outline">Decline</a>
+        </div>
+    </form>
+
+    <hr class="divider">
+    <p class="meta" style="margin-bottom:0;">
+        Consent ID: <code style="color:var(--text);">{{ consent_id[:8] }}…</code> · 
+        Expires {{ expires_at_human }}
+    </p>
+</div>
+{% endblock %}

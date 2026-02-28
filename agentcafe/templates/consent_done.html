@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — AgentCafe{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align:center;">
+    {% if status == "approved" %}
+    <div style="font-size:48px; margin-bottom:16px;">✓</div>
+    <h1>Authorization Approved</h1>
+    <p>You've authorized actions on <strong>{{ service_name }}</strong>. The requesting agent can now proceed.</p>
+    <p class="meta">Policy ID: <code style="color:var(--text);">{{ policy_id[:8] }}…</code></p>
+    {% elif status == "declined" %}
+    <div style="font-size:48px; margin-bottom:16px;">✕</div>
+    <h1>Authorization Declined</h1>
+    <p>You declined this authorization request. No actions have been granted.</p>
+    {% elif status == "expired" %}
+    <div style="font-size:48px; margin-bottom:16px;">⏱</div>
+    <h1>Request Expired</h1>
+    <p>This consent request has expired. The agent will need to request authorization again.</p>
+    {% else %}
+    <div style="font-size:48px; margin-bottom:16px;">?</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    {% endif %}
+</div>
+{% endblock %}

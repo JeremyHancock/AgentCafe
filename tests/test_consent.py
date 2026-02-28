@@ -15,6 +15,7 @@ import agentcafe.cafe.router as router_module
 import agentcafe.cafe.passport as passport_module
 import agentcafe.cafe.human as human_module
 import agentcafe.cafe.consent as consent_module
+import agentcafe.cafe.pages as pages_module
 from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
@@ -37,6 +38,7 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(passport_module._state, "issuer_api_key", TEST_API_KEY)
     monkeypatch.setattr(human_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(consent_module._state, "signing_secret", TEST_SECRET)
+    monkeypatch.setattr(pages_module._state, "signing_secret", TEST_SECRET)
     yield
 
 
@@ -682,3 +684,174 @@ async def test_low_risk_read_skips_identity_check(cafe_client):
         "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
     })
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Consent page UI tests (server-rendered Jinja2 pages)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_login_page_renders(cafe_client):
+    """GET /login should return an HTML page."""
+    resp = await cafe_client.get("/login")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Sign in to AgentCafe" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_register_page_renders(cafe_client):
+    """GET /register should return an HTML page."""
+    resp = await cafe_client.get("/register")
+    assert resp.status_code == 200
+    assert "Create your Cafe account" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_login_form_bad_password(cafe_client):
+    """POST /login with wrong password should show error on the login page."""
+    # Register first
+    await cafe_client.post("/human/register", json={
+        "email": "pagetest@example.com",
+        "password": "secure-password-123",
+    })
+    resp = await cafe_client.post("/login", data={
+        "email": "pagetest@example.com",
+        "password": "wrong-password",
+    }, follow_redirects=False)
+    assert resp.status_code == 401
+    assert "Invalid email or password" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_login_sets_session_cookie(cafe_client):
+    """POST /login with correct credentials should set a session cookie and redirect."""
+    email = f"cookietest-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "cafe_session" in resp.cookies
+
+
+@pytest.mark.asyncio
+async def test_consent_page_redirects_without_session(cafe_client):
+    """GET /consent/<id> without a session cookie should redirect to login."""
+    resp = await cafe_client.get(
+        "/consent/fake-id",
+        cookies={"cafe_session": ""},  # override any persisted session cookie
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/login" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_consent_page_renders_for_logged_in_user(cafe_client):
+    """GET /consent/<id> with a valid session should render the consent page."""
+    # Set up: register human, get session cookie
+    email = f"consentpage-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    login_resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+    }, follow_redirects=False)
+    session_cookie = login_resp.cookies.get("cafe_session")
+
+    # Create a consent via API
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    # View the consent page with session cookie
+    resp = await cafe_client.get(
+        f"/consent/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    assert resp.status_code == 200
+    assert "Authorization Request" in resp.text
+    assert "StayRight Hotels" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_consent_page_approve_via_form(cafe_client):
+    """POST /consent/<id>/approve should approve and show success page."""
+    email = f"approveform-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    login_resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+    }, follow_redirects=False)
+    session_cookie = login_resp.cookies.get("cafe_session")
+
+    # Create consent
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    # Approve via form
+    resp = await cafe_client.post(
+        f"/consent/{consent_id}/approve",
+        data={"token_lifetime_seconds": "900"},
+        cookies={"cafe_session": session_cookie},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "Authorization Approved" in resp.text
+
+    # Verify the consent is now approved via API
+    resp = await cafe_client.get(f"/consents/{consent_id}/status")
+    assert resp.json()["status"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_consent_page_decline(cafe_client):
+    """GET /consent/<id>/decline should decline and show decline page."""
+    email = f"declinetest-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    login_resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+    }, follow_redirects=False)
+    session_cookie = login_resp.cookies.get("cafe_session")
+
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    resp = await cafe_client.get(
+        f"/consent/{consent_id}/decline",
+        cookies={"cafe_session": session_cookie},
+    )
+    assert resp.status_code == 200
+    assert "Authorization Declined" in resp.text
+
+    # Verify declined via API
+    resp = await cafe_client.get(f"/consents/{consent_id}/status")
+    assert resp.json()["status"] == "declined"
