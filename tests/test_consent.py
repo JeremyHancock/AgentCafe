@@ -403,6 +403,52 @@ async def test_exchange_pending_consent_rejected(cafe_client):
 
 
 @pytest.mark.asyncio
+async def test_exchange_includes_policy_limits(cafe_client):
+    """POST /tokens/exchange should include policy_limits in the response."""
+    _agent_token, _tier2_token, _policy_id = await _full_consent_flow(cafe_client)
+    # The _full_consent_flow already calls exchange — let's do another flow to check
+    agent_token = await _register_agent(cafe_client)
+    _user_id, human_session = await _register_human(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+    await cafe_client.post(
+        f"/consents/{consent_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {human_session}"},
+    )
+    resp = await cafe_client.post(
+        "/tokens/exchange",
+        json={"consent_id": consent_id},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "policy_limits" in data
+    limits = data["policy_limits"]
+    assert limits["active_tokens"] >= 1
+    assert limits["max_active_tokens"] == 20
+
+
+@pytest.mark.asyncio
+async def test_refresh_includes_policy_limits(cafe_client):
+    """POST /tokens/refresh should include policy_limits in the response."""
+    _agent_token, tier2_token, _policy_id = await _full_consent_flow(cafe_client)
+    resp = await cafe_client.post(
+        "/tokens/refresh",
+        headers={"Authorization": f"Bearer {tier2_token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "policy_limits" in data
+    assert data["policy_limits"]["active_tokens"] >= 2  # original + refreshed
+    assert data["policy_limits"]["max_active_tokens"] == 20
+
+
+@pytest.mark.asyncio
 async def test_tier2_token_can_order_read_action(cafe_client):
     """A Tier-2 token should work for read actions covered by its scopes."""
     _agent_token, tier2_token, _policy_id = await _full_consent_flow(cafe_client)

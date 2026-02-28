@@ -99,6 +99,12 @@ class ExchangeRequest(BaseModel):
     consent_id: str
 
 
+class PolicyLimits(BaseModel):
+    """Snapshot of policy usage limits, returned with token responses."""
+    active_tokens: int
+    max_active_tokens: int = _MAX_ACTIVE_TOKENS_PER_POLICY
+
+
 class TokenResponse(BaseModel):
     """Response body for POST /tokens/exchange and POST /tokens/refresh."""
     token: str
@@ -106,6 +112,7 @@ class TokenResponse(BaseModel):
     policy_id: str
     tier: str = "write"
     scopes: list[str]
+    policy_limits: PolicyLimits | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -468,11 +475,13 @@ async def exchange_token(
     )
     await db.commit()
 
+    # +1 because we just inserted a new active token above
     return TokenResponse(
         token=token,
         expires_at=expires_at,
         policy_id=policy_id,
         scopes=scopes,
+        policy_limits=PolicyLimits(active_tokens=active_count + 1),
     )
 
 
@@ -571,4 +580,5 @@ async def refresh_token(authorization: str = Header(default="")):
         expires_at=expires_at,
         policy_id=policy_id,
         scopes=scopes,
+        policy_limits=PolicyLimits(active_tokens=active_count + 1),
     )
