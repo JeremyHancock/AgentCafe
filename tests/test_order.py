@@ -183,3 +183,73 @@ async def test_order_home_search_happy_path(cafe_client):
     data = resp.json()
     assert "providers" in data
     assert data["total_results"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# Input injection protection tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_path_traversal_blocked(cafe_client):
+    """Path traversal in a path parameter should be rejected."""
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "get-room-details",
+        "passport": "demo-passport",
+        "inputs": {"room_id": "../../admin"},
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_path_parameter"
+    assert resp.json()["detail"]["field"] == "room_id"
+
+
+@pytest.mark.asyncio
+async def test_query_injection_blocked(cafe_client):
+    """Query string injection in a path parameter should be rejected."""
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "get-room-details",
+        "passport": "demo-passport",
+        "inputs": {"room_id": "123?admin=true"},
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_path_parameter"
+
+
+@pytest.mark.asyncio
+async def test_newline_injection_blocked(cafe_client):
+    """Newline injection (HTTP header splitting) should be rejected."""
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "get-room-details",
+        "passport": "demo-passport",
+        "inputs": {"room_id": "123\r\nX-Evil: true"},
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_path_parameter"
+
+
+@pytest.mark.asyncio
+async def test_space_in_path_param_blocked(cafe_client):
+    """Spaces in path parameters should be rejected."""
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "get-room-details",
+        "passport": "demo-passport",
+        "inputs": {"room_id": "room 420"},
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "invalid_path_parameter"
+
+
+@pytest.mark.asyncio
+async def test_safe_path_param_allowed(cafe_client):
+    """Normal path parameter values should pass through."""
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "get-room-details",
+        "passport": "demo-passport",
+        "inputs": {"room_id": "sr-austin-k420"},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["room_id"] == "sr-austin-k420"

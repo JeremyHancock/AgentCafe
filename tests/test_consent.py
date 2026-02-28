@@ -687,6 +687,22 @@ async def test_low_risk_read_skips_identity_check(cafe_client):
 
 
 # ---------------------------------------------------------------------------
+# Consent privacy enforcement tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_consent_enumeration_endpoint(cafe_client):
+    """There must be no endpoint to list/enumerate consents. Privacy by design."""
+    agent_token = await _register_agent(cafe_client)
+    # Try various discovery patterns — all should 404 or 405
+    for path in ["/consents", "/consents/", "/consents?agent_tag=demo"]:
+        resp = await cafe_client.get(
+            path, headers={"Authorization": f"Bearer {agent_token}"},
+        )
+        assert resp.status_code in (404, 405), f"{path} returned {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
 # Consent page UI tests (server-rendered Jinja2 pages)
 # ---------------------------------------------------------------------------
 

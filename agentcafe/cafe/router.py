@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -21,6 +22,10 @@ from agentcafe.cafe.policy import check_rate_limit, validate_input_types
 from agentcafe.db.engine import get_db
 
 router = APIRouter(prefix="/cafe", tags=["cafe"])
+
+# Safe characters for path parameter values: alphanumeric, underscore, dot, @, ~, hyphen.
+# Blocks: /, \, ?, #, newlines, null bytes, spaces, and other injection vectors.
+_SAFE_PATH_VALUE = re.compile(r'^[\w.@~-]+$')
 
 class _State:
     """Module-level mutable state (avoids global statements)."""
@@ -300,7 +305,33 @@ async def place_order(req: OrderRequest):
     # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])
     resolved_path = backend_path
     for key, value in req.inputs.items():
-        resolved_path = resolved_path.replace(f"{{{key}}}", str(value))
+        placeholder = f"{{{key}}}"
+        if placeholder in resolved_path:
+            str_value = str(value)
+            if not _SAFE_PATH_VALUE.match(str_value):
+                await _audit_log(db, req, "input_injection_blocked", 422)
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "error": "invalid_path_parameter",
+                        "message": f"Input '{key}' contains unsafe characters for use in a URL path.",
+                        "field": key,
+                    },
+                )
+            resolved_path = resolved_path.replace(placeholder, str_value)
+
+    # Reject if any placeholders remain unresolved
+    if re.search(r'\{[\w]+\}', resolved_path):
+        unresolved = re.findall(r'\{([\w]+)\}', resolved_path)
+        await _audit_log(db, req, "missing_path_params", 422)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "missing_path_parameters",
+                "message": f"Required path parameters not provided: {', '.join(unresolved)}",
+                "fields": unresolved,
+            },
+        )
 
     target_url = f"{backend_url}{resolved_path}"
 
