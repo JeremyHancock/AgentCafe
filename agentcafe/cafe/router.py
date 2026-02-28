@@ -412,24 +412,80 @@ def _check_human_authorization_mvp(passport: str, service_id: str, action_id: st
     return passport == "demo-passport"
 
 
+_GENESIS_HASH = "0" * 64
+
+
+async def verify_audit_chain(db) -> dict:
+    """Walk the audit log and verify every hash link.
+
+    Returns {"valid": True, "entries": N} or
+            {"valid": False, "entries": N, "broken_at": entry_id, "position": idx}.
+    """
+    cursor = await db.execute(
+        """SELECT id, timestamp, service_id, action_id, passport_hash,
+                  inputs_hash, outcome, response_code, latency_ms,
+                  prev_hash, entry_hash
+           FROM audit_log ORDER BY timestamp ASC"""
+    )
+    rows = await cursor.fetchall()
+
+    expected_prev = _GENESIS_HASH
+    for idx, row in enumerate(rows):
+        # Skip legacy entries without hash chain columns
+        if not row["entry_hash"]:
+            continue
+
+        # Verify prev_hash links to the previous entry
+        if row["prev_hash"] != expected_prev:
+            return {"valid": False, "entries": len(rows), "broken_at": row["id"], "position": idx}
+
+        # Recompute entry_hash
+        chain_input = "|".join([
+            row["prev_hash"], row["id"], row["timestamp"], row["service_id"],
+            row["action_id"], row["passport_hash"], row["inputs_hash"],
+            row["outcome"], str(row["response_code"]), str(row["latency_ms"]),
+        ])
+        recomputed = hashlib.sha256(chain_input.encode()).hexdigest()
+        if recomputed != row["entry_hash"]:
+            return {"valid": False, "entries": len(rows), "broken_at": row["id"], "position": idx}
+
+        expected_prev = row["entry_hash"]
+
+    return {"valid": True, "entries": len(rows)}
+
+
 async def _audit_log(
     db, req: OrderRequest, outcome: str, response_code: int, latency_ms: int = 0
 ) -> None:
-    """Write an entry to the audit log."""
+    """Write a hash-chained entry to the audit log."""
+    # Fetch the most recent entry's hash for chaining
+    cursor = await db.execute(
+        "SELECT entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1"
+    )
+    prev_row = await cursor.fetchone()
+    prev_hash = prev_row["entry_hash"] if prev_row and prev_row["entry_hash"] else _GENESIS_HASH
+
+    entry_id = str(uuid.uuid4())
+    timestamp = datetime.now(timezone.utc).isoformat()
+    passport_hash = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
+    inputs_hash = hashlib.sha256(json.dumps(req.inputs, sort_keys=True).encode()).hexdigest()[:16]
+
+    # Compute entry hash: SHA-256(prev_hash || all fields)
+    chain_input = "|".join([
+        prev_hash, entry_id, timestamp, req.service_id, req.action_id,
+        passport_hash, inputs_hash, outcome, str(response_code), str(latency_ms),
+    ])
+    entry_hash = hashlib.sha256(chain_input.encode()).hexdigest()
+
     await db.execute(
         """INSERT INTO audit_log (id, timestamp, service_id, action_id, passport_hash,
-                                   inputs_hash, outcome, response_code, latency_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                   inputs_hash, outcome, response_code, latency_ms,
+                                   prev_hash, entry_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            str(uuid.uuid4()),
-            datetime.now(timezone.utc).isoformat(),
-            req.service_id,
-            req.action_id,
-            hashlib.sha256(req.passport.encode()).hexdigest()[:16],
-            hashlib.sha256(json.dumps(req.inputs, sort_keys=True).encode()).hexdigest()[:16],
-            outcome,
-            response_code,
-            latency_ms,
+            entry_id, timestamp, req.service_id, req.action_id,
+            passport_hash, inputs_hash, outcome, response_code, latency_ms,
+            prev_hash, entry_hash,
         ),
     )
     await db.commit()

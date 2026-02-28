@@ -253,3 +253,81 @@ async def test_safe_path_param_allowed(cafe_client):
     })
     assert resp.status_code == 200
     assert resp.json()["room_id"] == "sr-austin-k420"
+
+
+# ---------------------------------------------------------------------------
+# Tamper-evident audit logging tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_audit_hash_chain_valid(cafe_client):
+    """After several orders, the audit chain should verify as valid."""
+    from agentcafe.db.engine import get_db
+    from agentcafe.cafe.router import verify_audit_chain
+
+    # Make a few requests to populate the audit log
+    for _ in range(3):
+        await cafe_client.post("/cafe/order", json={
+            "service_id": "stayright-hotels",
+            "action_id": "search-availability",
+            "passport": "demo-passport",
+            "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                       "check_out": "2026-03-18", "guests": 2},
+        })
+
+    db = await get_db()
+    result = await verify_audit_chain(db)
+    assert result["valid"] is True
+    assert result["entries"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_audit_hash_chain_detects_tamper(cafe_client):
+    """Modifying an audit entry should break the chain."""
+    from agentcafe.db.engine import get_db
+    from agentcafe.cafe.router import verify_audit_chain
+
+    # Create an audit entry
+    await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": "demo-passport",
+        "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                   "check_out": "2026-03-18", "guests": 2},
+    })
+
+    db = await get_db()
+
+    # Tamper with the most recent entry
+    await db.execute(
+        "UPDATE audit_log SET outcome = 'tampered' WHERE id = "
+        "(SELECT id FROM audit_log ORDER BY timestamp DESC LIMIT 1)"
+    )
+    await db.commit()
+
+    result = await verify_audit_chain(db)
+    assert result["valid"] is False
+    assert "broken_at" in result
+
+
+@pytest.mark.asyncio
+async def test_audit_entries_have_hash_columns(cafe_client):
+    """New audit entries should have prev_hash and entry_hash populated."""
+    from agentcafe.db.engine import get_db
+
+    await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": "demo-passport",
+        "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                   "check_out": "2026-03-18", "guests": 2},
+    })
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT prev_hash, entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1"
+    )
+    row = await cursor.fetchone()
+    assert row["prev_hash"] is not None
+    assert row["entry_hash"] is not None
+    assert len(row["entry_hash"]) == 64  # SHA-256 hex
