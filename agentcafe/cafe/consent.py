@@ -160,6 +160,13 @@ def _issue_tier2_token(
     exp = now + timedelta(seconds=lifetime_seconds) if lifetime_seconds > 0 else now + timedelta(seconds=30)
     jti = str(uuid.uuid4())
 
+    # Derive authorizations from scopes (format: "service_id:action_id")
+    authorizations = []
+    for scope in scopes:
+        parts = scope.split(":", 1)
+        if len(parts) == 2:
+            authorizations.append({"service_id": parts[0], "action_id": parts[1]})
+
     payload = {
         "iss": "agentcafe",
         "sub": f"user:{email}",
@@ -171,6 +178,7 @@ def _issue_tier2_token(
         "granted_by": "human_consent",
         "policy_id": policy_id,
         "scopes": scopes,
+        "authorizations": authorizations,
         "risk_tier": risk_tier,
         "agent_tag": agent_tag,
     }

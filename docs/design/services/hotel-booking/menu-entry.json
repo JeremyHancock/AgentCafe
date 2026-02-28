@@ -4,6 +4,8 @@
   "category": "hotels",
   "capability_tags": ["travel", "booking", "accommodation"],
   "description": "Search and book hotel rooms worldwide. Find availability by city, dates, and preferences. Book rooms, view details, and manage cancellations.",
+  "account_linking_required": false,
+  "concurrency_guidance": "One booking per agent session recommended. Avoid parallel book-room calls for the same dates.",
   "actions": [
     {
       "action_id": "search-availability",
@@ -34,10 +36,11 @@
           "example": 2
         }
       ],
+      "risk_tier": "low",
       "cost": {
         "required_scopes": ["stayright-hotels:search-availability"],
         "human_authorization_required": false,
-        "limits": {"rate_limit": "60/minute"}
+        "limits": {"rate_limit": "60/minute", "rate_limit_scope": "per_policy"}
       },
       "example_response": {
         "results": [
@@ -66,10 +69,11 @@
           "example": "sr-austin-k420"
         }
       ],
+      "risk_tier": "low",
       "cost": {
         "required_scopes": ["stayright-hotels:get-room-details"],
         "human_authorization_required": false,
-        "limits": {"rate_limit": "60/minute"}
+        "limits": {"rate_limit": "60/minute", "rate_limit_scope": "per_policy"}
       },
       "example_response": {
         "room_id": "sr-austin-k420",
@@ -120,10 +124,12 @@
           "example": "jane@example.com"
         }
       ],
+      "risk_tier": "medium",
+      "human_identifier_field": "guest_email",
       "cost": {
         "required_scopes": ["stayright-hotels:book-room"],
         "human_authorization_required": true,
-        "limits": {"rate_limit": "10/minute"}
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
       },
       "example_response": {
         "booking_id": "BK-2026-0315-A7X9",
@@ -149,10 +155,11 @@
           "example": "BK-2026-0315-A7X9"
         }
       ],
+      "risk_tier": "high",
       "cost": {
         "required_scopes": ["stayright-hotels:cancel-booking"],
         "human_authorization_required": true,
-        "limits": {"rate_limit": "10/minute"}
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
       },
       "example_response": {
         "booking_id": "BK-2026-0315-A7X9",

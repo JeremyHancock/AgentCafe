@@ -248,6 +248,15 @@ async def test_order_write_action_with_authorization(cafe_client):
             "limits": {"valid_until": "2027-01-01"},
         }],
     )
+    # Perform a read first to satisfy read-before-write (identity verification §7)
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+
     resp = await cafe_client.post("/cafe/order", json={
         "service_id": "stayright-hotels",
         "action_id": "book-room",

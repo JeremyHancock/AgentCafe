@@ -574,3 +574,111 @@ async def test_full_consent_flow_end_to_end(cafe_client):
     assert payload["tier"] == "write"
     assert payload["policy_id"] == policy_id
     assert payload["granted_by"] == "human_consent"
+
+
+# ---------------------------------------------------------------------------
+# Identity verification tests (v2-spec.md §7 — read-before-write)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_write_without_prior_read_rejected(cafe_client):
+    """A write action on a medium-risk service without a prior read should be rejected."""
+    # Get a Tier-2 token for book-room (medium risk, human_identifier_field=guest_email)
+    _agent_token, tier2_token, _policy_id = await _full_consent_flow(
+        cafe_client, service_id="stayright-hotels", action_id="book-room"
+    )
+
+    # Try to book without a prior search — should be rejected
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "book-room",
+        "passport": tier2_token,
+        "inputs": {
+            "room_id": "sr-austin-k420",
+            "check_in": "2026-03-15",
+            "check_out": "2026-03-18",
+            "guest_name": "Jane Smith",
+            "guest_email": "jane@example.com",
+        },
+    })
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "read_before_write_required"
+
+
+@pytest.mark.asyncio
+async def test_write_after_read_succeeds(cafe_client):
+    """A write action after a successful read on the same service should pass."""
+    _agent_token, tier2_token, _policy_id = await _full_consent_flow(
+        cafe_client, service_id="stayright-hotels", action_id="book-room"
+    )
+
+    # First do a read action (search) to establish read-before-write
+    # Use the Tier-2 token for the read (implicit read access on same service)
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": tier2_token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+
+    # Now the write should succeed (read-before-write satisfied)
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "book-room",
+        "passport": tier2_token,
+        "inputs": {
+            "room_id": "sr-austin-k420",
+            "check_in": "2026-03-15",
+            "check_out": "2026-03-18",
+            "guest_name": "Jane Smith",
+            "guest_email": "jane@example.com",
+        },
+    })
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_write_missing_identifier_field_rejected(cafe_client):
+    """A write action missing the human_identifier_field should be rejected with 422."""
+    _agent_token, tier2_token, _policy_id = await _full_consent_flow(
+        cafe_client, service_id="stayright-hotels", action_id="book-room"
+    )
+
+    # Do a read first to satisfy read-before-write
+    await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": tier2_token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+
+    # Try to book without guest_email (the human_identifier_field)
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "book-room",
+        "passport": tier2_token,
+        "inputs": {
+            "room_id": "sr-austin-k420",
+            "check_in": "2026-03-15",
+            "check_out": "2026-03-18",
+            "guest_name": "Jane Smith",
+        },
+    })
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "identity_field_missing"
+
+
+@pytest.mark.asyncio
+async def test_low_risk_read_skips_identity_check(cafe_client):
+    """Low-risk read actions should skip identity verification entirely."""
+    agent_token = await _register_agent(cafe_client)
+
+    # search-availability is low risk — no read-before-write required
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": agent_token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200

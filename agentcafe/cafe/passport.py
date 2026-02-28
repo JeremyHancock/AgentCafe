@@ -189,7 +189,10 @@ async def validate_passport_jwt(
     # Step 5: Scope check (required for Tier-2 actions)
     scopes = payload.get("scopes", [])
     if not _check_scope(scopes, service_id, action_id):
-        return False, "scope_missing"
+        # Implicit read: write tokens may access read-only actions on the same service
+        service_prefix = f"{service_id}:"
+        if human_auth_required or not any(s.startswith(service_prefix) for s in scopes):
+            return False, "scope_missing"
 
     # Step 6: Authorization check (only if human_auth_required)
     if human_auth_required:

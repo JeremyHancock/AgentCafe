@@ -97,7 +97,8 @@ async def place_order(req: OrderRequest):
     # --- Look up the proxy config for this service_id + action_id ---
     cursor = await db.execute(
         """SELECT backend_url, backend_path, backend_method, backend_auth_header,
-                  scope, human_auth_required, rate_limit
+                  scope, human_auth_required, rate_limit, risk_tier,
+                  human_identifier_field
            FROM proxy_configs
            WHERE service_id = ? AND action_id = ?""",
         (req.service_id, req.action_id),
@@ -119,6 +120,8 @@ async def place_order(req: OrderRequest):
     scope = row["scope"]
     human_auth_required = bool(row["human_auth_required"])
     _rate_limit = row["rate_limit"]
+    risk_tier = row["risk_tier"] if "risk_tier" in row.keys() else "medium"
+    human_identifier_field = row["human_identifier_field"] if "human_identifier_field" in row.keys() else None
 
     # --- GATE 1: Passport Validation ---
     if _state.use_real_passport:
@@ -184,6 +187,44 @@ async def place_order(req: OrderRequest):
                         "message": "This action requires explicit human authorization in your Passport.",
                     },
                 )
+
+    # --- GATE 1b: Identity Verification (v2-spec.md §7) ---
+    # For medium+ risk actions with a human_identifier_field, enforce read-before-write.
+    # The agent must have performed a prior read action on this service before writing.
+    if (
+        _state.use_real_passport
+        and human_identifier_field
+        and risk_tier in ("medium", "high", "critical")
+    ):
+        # Verify the identifier field is present in inputs
+        identifier_value = req.inputs.get(human_identifier_field)
+        if not identifier_value:
+            await _audit_log(db, req, "identity_field_missing", 422)
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "identity_field_missing",
+                    "message": f"Write action requires '{human_identifier_field}' for identity verification.",
+                },
+            )
+
+        # Read-before-write: check audit log for a prior successful read on this service
+        passport_hash_check = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
+        read_cursor = await db.execute(
+            """SELECT 1 FROM audit_log
+               WHERE passport_hash = ? AND service_id = ? AND response_code = 200
+               LIMIT 1""",
+            (passport_hash_check, req.service_id),
+        )
+        if not await read_cursor.fetchone():
+            await _audit_log(db, req, "read_before_write_required", 403)
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "read_before_write_required",
+                    "message": f"Risk tier '{risk_tier}' requires a prior read action on this service before writing.",
+                },
+            )
 
     # --- GATE 2: Company Policy Validation ---
     # Check the service is live and get menu entry for input validation

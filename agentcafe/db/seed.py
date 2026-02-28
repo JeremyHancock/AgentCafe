@@ -46,18 +46,18 @@ PROXY_CONFIGS = {
     "stayright-hotels": [
         {"action_id": "search-availability", "backend_path": "/availability/search", "backend_method": "POST", "scope": "stayright-hotels:search-availability", "human_auth": False, "rate_limit": "60/minute", "risk_tier": "low"},
         {"action_id": "get-room-details", "backend_path": "/rooms/{room_id}", "backend_method": "GET", "scope": "stayright-hotels:get-room-details", "human_auth": False, "rate_limit": "60/minute", "risk_tier": "low"},
-        {"action_id": "book-room", "backend_path": "/bookings", "backend_method": "POST", "scope": "stayright-hotels:book-room", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium"},
+        {"action_id": "book-room", "backend_path": "/bookings", "backend_method": "POST", "scope": "stayright-hotels:book-room", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium", "human_identifier_field": "guest_email"},
         {"action_id": "cancel-booking", "backend_path": "/bookings/{booking_id}/cancel", "backend_method": "POST", "scope": "stayright-hotels:cancel-booking", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "high"},
     ],
     "quickbite-delivery": [
         {"action_id": "browse-menu", "backend_path": "/menu/search", "backend_method": "POST", "scope": "quickbite-delivery:browse-menu", "human_auth": False, "rate_limit": "60/minute", "risk_tier": "low"},
-        {"action_id": "place-order", "backend_path": "/orders", "backend_method": "POST", "scope": "quickbite-delivery:place-order", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium"},
+        {"action_id": "place-order", "backend_path": "/orders", "backend_method": "POST", "scope": "quickbite-delivery:place-order", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium", "human_identifier_field": "contact_name"},
         {"action_id": "track-order", "backend_path": "/orders/{order_id}/status", "backend_method": "GET", "scope": "quickbite-delivery:track-order", "human_auth": False, "rate_limit": "30/minute", "risk_tier": "low"},
         {"action_id": "cancel-order", "backend_path": "/orders/{order_id}/cancel", "backend_method": "POST", "scope": "quickbite-delivery:cancel-order", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "high"},
     ],
     "fixright-home": [
         {"action_id": "search-providers", "backend_path": "/providers/search", "backend_method": "POST", "scope": "fixright-home:search-providers", "human_auth": False, "rate_limit": "60/minute", "risk_tier": "low"},
-        {"action_id": "book-appointment", "backend_path": "/appointments", "backend_method": "POST", "scope": "fixright-home:book-appointment", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium"},
+        {"action_id": "book-appointment", "backend_path": "/appointments", "backend_method": "POST", "scope": "fixright-home:book-appointment", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium", "human_identifier_field": "contact_name"},
         {"action_id": "reschedule-appointment", "backend_path": "/appointments/{appointment_id}/reschedule", "backend_method": "POST", "scope": "fixright-home:reschedule-appointment", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "medium"},
         {"action_id": "cancel-appointment", "backend_path": "/appointments/{appointment_id}/cancel", "backend_method": "POST", "scope": "fixright-home:cancel-appointment", "human_auth": True, "rate_limit": "10/minute", "risk_tier": "high"},
     ],
@@ -159,8 +159,9 @@ async def seed_demo_data(db: aiosqlite.Connection, config) -> None:
             await db.execute(
                 """INSERT OR IGNORE INTO proxy_configs
                    (id, service_id, action_id, backend_url, backend_path, backend_method,
-                    backend_auth_header, scope, human_auth_required, rate_limit, risk_tier, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    backend_auth_header, scope, human_auth_required, rate_limit, risk_tier,
+                    human_identifier_field, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(uuid.uuid4()),
                     service_id,
@@ -173,6 +174,7 @@ async def seed_demo_data(db: aiosqlite.Connection, config) -> None:
                     1 if pc["human_auth"] else 0,
                     pc["rate_limit"],
                     pc.get("risk_tier", "medium"),
+                    pc.get("human_identifier_field"),
                     now,
                 ),
             )
