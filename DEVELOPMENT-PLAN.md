@@ -97,7 +97,7 @@ We can run end-to-end locally:
 **Phase 5: Testing & Polish**
 - ⬜ End-to-end demo with a simple test agent
 - ✅ ~~Add `pyyaml` to main dependencies~~ (moved from `[wizard]` to base deps in `pyproject.toml`, Feb 27)
-- ⬜ Add CORS middleware to FastAPI app — required before any web frontend (consent page, wizard dashboard) can call the API
+- ✅ Add CORS middleware to FastAPI app — added in Phase 4 Wave 1 via `CORSMiddleware` in `create_cafe_app()`. Configurable via `CORS_ALLOWED_ORIGINS` env var.
 - ⬜ Make `ENRICHMENT_MODEL` configurable via env var (currently hardcoded to `gpt-4o-mini` in `ai_enricher.py`)
 - ⬜ Implement `x-agentcafe-*` extension merging in the AI enricher — presets are parsed by the spec parser but never used during enrichment
 - ⬜ Expose confidence scores in review/preview responses — the data model has them but they're invisible to the company
