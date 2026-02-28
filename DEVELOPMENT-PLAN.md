@@ -84,7 +84,6 @@ We can run end-to-end locally:
 - ✅ **Populate ADR-023 Menu schema fields** — All 3 demo Menu JSONs updated with `risk_tier`, `human_identifier_field`, `rate_limit_scope`, `account_linking_required`, `concurrency_guidance` per action. Migration 0004 adds `human_identifier_field` to proxy_configs. Seed data updated.
 - ✅ **Rate-limit 429 response** — V2-compliant error body with `error`, `detail` (per-policy shared budget explanation), `retry_after_seconds`, `policy_id`, plus `Retry-After` HTTP header. Computed from sliding window oldest entry.
 - ✅ **Consent page UI** — Server-rendered Jinja2 pages via `cafe/pages.py`. Login (`/login`), register (`/register`), consent approval (`/consent/<id>`), decline (`/consent/<id>/decline`). Session cookies (httponly, samesite=lax). Cafe-authored plain-language consent text. Risk-tier badge, duration selector with ceiling enforcement. 5 templates, 8 new tests. Passkey confirmation deferred to post-MVP.
-- ⬜ **Passport signing key management** — migrate from single HS256 secret → RS256 asymmetric with cloud KMS (private key never leaves KMS, JWKS endpoint for public keys, `kid` in JWT header, dual-key rotation). Addresses single-key compromise risk identified in §3.
 - ✅ **Consent privacy enforcement** — JWT audience separation (`aud: human-dashboard` vs `aud: agentcafe`) enforced on approve endpoint. No consent enumeration endpoint exists. Agent tokens rejected for human-session actions. 1 new test.
 - ✅ **Policy revocation — instant for all tiers** — `revoked_at` column in policies table (migration 0001) + `iat < revoked_at` check in `validate_passport_jwt`. Returns `401 policy_revoked`. 3 new tests.
 - ✅ **Input injection protection** — path parameter values validated against `_SAFE_PATH_VALUE` regex (alphanumeric, hyphens, underscores, dots, @, ~). Blocks traversal (`../../`), query injection (`?`), newlines, spaces. Unresolved placeholders rejected. Logged as `input_injection_blocked`. 5 new tests.
@@ -92,7 +91,7 @@ We can run end-to-end locally:
 - ✅ **Tamper-evident audit logging** — SHA-256 hash chaining on audit_log entries. Each entry stores `prev_hash` (previous entry's hash) and `entry_hash` (SHA-256 of all fields + prev_hash). Migration 0005 adds columns. `verify_audit_chain()` walks the chain to detect tampering. Graceful skip for legacy entries. 3 new tests.
 - ✅ Schema migration system — lightweight numbered SQL migrations in `agentcafe/db/migrations/`, version tracking via `schema_version` table, auto-applied on startup. Migration 0001 adds `policies` table with `revoked_at`.
 - ⬜ **Token response `policy_limits` snapshot** — optional `remaining_requests_in_window`, `active_tokens_under_policy`, `max_active_tokens` in token exchange/refresh responses. Not MVP; convenience for sophisticated agent platforms.
-- ⬜ **"Building Agents for AgentCafe" developer guide** — one-page doc in `docs/` explaining per-policy rate limits, multi-agent coordination, consent flow, and token lifecycle. Essential long-term, low cost.
+- ✅ **"Building Agents for AgentCafe" developer guide** — `docs/building-agents-for-agentcafe.md`. Covers two-tier Passport system, consent flow sequence diagram, token lifecycle, rate limits, risk tiers, identity verification, error codes, multi-agent coordination, and Cafe guarantees.
 
 **Phase 5: Testing & Polish**
 - ⬜ End-to-end demo with a simple test agent
@@ -107,6 +106,7 @@ We can run end-to-end locally:
 - ⬜ Local admin dashboard for viewing Menu & logs
 
 **Phase 6: Packaging & Release Prep**
+- ⬜ **Passport signing key management** — migrate from single HS256 secret → RS256 asymmetric with cloud KMS (private key never leaves KMS, JWKS endpoint for public keys, `kid` in JWT header, dual-key rotation). Addresses single-key compromise risk identified in §3. Moved from Phase 4 — requires production infrastructure decisions.
 - ⬜ Production Docker images (multi-stage builds, hardened base images)
 - ⬜ Docker Compose hardening: set `PASSPORT_SIGNING_SECRET` env var, add SQLite volume for persistence, install `[wizard]` deps in image, add `OPENAI_API_KEY` for LiteLLM
 - ⬜ Open-core split, launch assets
