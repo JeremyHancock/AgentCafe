@@ -98,9 +98,9 @@ We can run end-to-end locally:
 - ⬜ End-to-end demo with a simple test agent
 - ✅ ~~Add `pyyaml` to main dependencies~~ (moved from `[wizard]` to base deps in `pyproject.toml`, Feb 27)
 - ✅ Add CORS middleware to FastAPI app — added in Phase 4 Wave 1 via `CORSMiddleware` in `create_cafe_app()`. Configurable via `CORS_ALLOWED_ORIGINS` env var.
-- ⬜ Make `ENRICHMENT_MODEL` configurable via env var (currently hardcoded to `gpt-4o-mini` in `ai_enricher.py`)
-- ⬜ Implement `x-agentcafe-*` extension merging in the AI enricher — presets are parsed by the spec parser but never used during enrichment
-- ⬜ Expose confidence scores in review/preview responses — the data model has them but they're invisible to the company
+- ✅ Make `ENRICHMENT_MODEL` configurable via env var — reads from `ENRICHMENT_MODEL` env var with `gpt-4o-mini` default.
+- ✅ Implement `x-agentcafe-*` extension merging — `x-agentcafe-risk-tier` and `x-agentcafe-human-identifier-field` (ADR-023) now extracted by spec parser and wired through both rule-based and LLM enricher paths. All 5 extension fields flow end-to-end. 2 new tests.
+- ✅ Expose confidence scores in review/preview responses — per-action and top-level confidence dicts now included in preview `final_menu_entry`. Already visible in `SpecParseResponse` via `CandidateMenuEntry`. 1 new test.
 - ⬜ Spec file upload (multipart) and URL fetch endpoints — currently only raw string accepted
 - ⬜ Wizard Dashboard integration with onboarding security gates (quarantine UI, risk scoring)
 - ⬜ **Company Onboarding Wizard Dashboard** — web UI (React/Next.js) where companies log in, paste their OpenAPI spec, review the candidate Menu entry, configure policies, preview, and publish. Replaces the current REST-only workflow with a guided visual experience.

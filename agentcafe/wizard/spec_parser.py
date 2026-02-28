@@ -332,6 +332,8 @@ def parse_openapi_spec(raw_spec: str) -> ParsedSpec:
                 preset_scope=extensions.get("scope"),
                 preset_human_auth=extensions.get("human-auth"),
                 preset_rate_limit=extensions.get("rate-limit"),
+                preset_risk_tier=extensions.get("risk-tier"),
+                preset_human_identifier_field=extensions.get("human-identifier-field"),
             ))
 
     if operation_count == 0:

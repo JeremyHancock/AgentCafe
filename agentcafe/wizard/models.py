@@ -26,6 +26,8 @@ class ParsedOperation(BaseModel):
     preset_scope: str | None = None
     preset_human_auth: bool | None = None
     preset_rate_limit: str | None = None
+    preset_risk_tier: str | None = None
+    preset_human_identifier_field: str | None = None
 
 
 class ParsedSpec(BaseModel):
@@ -60,6 +62,8 @@ class CandidateAction(BaseModel):
     suggested_scope: str = ""
     suggested_human_auth: bool = False
     suggested_rate_limit: str = "60/minute"
+    suggested_risk_tier: str = ""
+    suggested_human_identifier_field: str = ""
     is_write: bool = False
     confidence: dict[str, float] = Field(default_factory=dict)
     source_path: str = ""

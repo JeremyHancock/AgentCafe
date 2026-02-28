@@ -73,6 +73,20 @@ async def test_order_invalid_passport(cafe_client):
 
 
 @pytest.mark.asyncio
+async def test_menu_includes_quarantine_status(cafe_client):
+    """Menu actions should include security_status when quarantine_until is set."""
+    # Demo services have quarantine_until set (past date) — should appear as informational
+    resp = await cafe_client.get("/cafe/menu")
+    assert resp.status_code == 200
+    menu = resp.json()
+    hotel = next(s for s in menu["services"] if s["service_id"] == "stayright-hotels")
+    search_action = next(a for a in hotel["actions"] if a["action_id"] == "search-availability")
+    # Past quarantine should still show (it's informational)
+    assert "security_status" in search_action
+    assert "quarantine_until" in search_action["security_status"]
+
+
+@pytest.mark.asyncio
 async def test_order_unknown_service(cafe_client):
     """Unknown service_id should return 404."""
     resp = await cafe_client.post("/cafe/order", json={

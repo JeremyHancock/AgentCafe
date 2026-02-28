@@ -383,6 +383,43 @@ def test_enrich_rule_based_uses_preset_extensions():
     assert action.suggested_rate_limit == "5/hour"
 
 
+def test_enrich_rule_based_uses_adr023_preset_extensions():
+    """Preset x-agentcafe-risk-tier and x-agentcafe-human-identifier-field override defaults."""
+    spec = json.dumps({
+        "openapi": "3.1.0",
+        "info": {"title": "Test", "version": "1.0.0"},
+        "paths": {
+            "/book": {
+                "post": {
+                    "operationId": "bookRoom",
+                    "summary": "Book a room",
+                    "x-agentcafe-risk-tier": "high",
+                    "x-agentcafe-human-identifier-field": "guest_email",
+                    "responses": {"200": {"description": "OK"}}
+                }
+            }
+        }
+    })
+    parsed = parse_openapi_spec(spec)
+    candidate = _enrich_rule_based(parsed)
+    action = candidate.actions[0]
+
+    assert action.suggested_risk_tier == "high"
+    assert action.suggested_human_identifier_field == "guest_email"
+
+
+def test_enrich_rule_based_confidence_scores():
+    """Rule-based enrichment should include confidence scores."""
+    parsed = parse_openapi_spec(SAMPLE_OPENAPI_JSON)
+    candidate = _enrich_rule_based(parsed)
+
+    assert "service_id" in candidate.confidence
+    assert "name" in candidate.confidence
+    for action in candidate.actions:
+        assert "description" in action.confidence
+        assert "inputs" in action.confidence
+
+
 # ===========================================================================
 # Wizard API integration tests (full flow)
 # ===========================================================================

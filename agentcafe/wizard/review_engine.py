@@ -204,13 +204,16 @@ async def generate_preview(
                 entry["type"] = inp["type"]
             required_inputs.append(entry)
 
-        menu_actions.append({
+        action_entry = {
             "action_id": action_id,
             "description": action.get("description", ""),
             "required_inputs": required_inputs,
             "example_response": action.get("example_response", {}),
             "cost": cost,
-        })
+        }
+        if action.get("confidence"):
+            action_entry["confidence"] = action["confidence"]
+        menu_actions.append(action_entry)
 
         # Build proxy config
         source_path = action.get("source_path", f"/{action_id}")
@@ -235,6 +238,8 @@ async def generate_preview(
         "description": candidate_menu.get("description", ""),
         "actions": menu_actions,
     }
+    if candidate_menu.get("confidence"):
+        final_menu_entry["confidence"] = candidate_menu["confidence"]
 
     # Save the final preview to draft
     now = datetime.now(timezone.utc).isoformat()

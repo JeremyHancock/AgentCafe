@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from agentcafe.wizard.models import (
@@ -24,7 +25,7 @@ logger = logging.getLogger("agentcafe.wizard.ai_enricher")
 # LiteLLM configuration
 # ---------------------------------------------------------------------------
 
-ENRICHMENT_MODEL = "gpt-4o-mini"
+ENRICHMENT_MODEL = os.getenv("ENRICHMENT_MODEL", "gpt-4o-mini")
 ENRICHMENT_TEMPERATURE = 0.2
 ENRICHMENT_MAX_TOKENS = 4000
 
@@ -178,13 +179,23 @@ def _enrich_rule_based(parsed_spec: ParsedSpec) -> CandidateMenuEntry:
         human_auth = op.is_write
         rate_limit = "10/minute" if op.is_write else "60/minute"
 
-        # Use preset values if available
+        # Use preset values if available (x-agentcafe-* extensions)
         if op.preset_scope is not None:
             scope = op.preset_scope
         if op.preset_human_auth is not None:
             human_auth = op.preset_human_auth
         if op.preset_rate_limit is not None:
             rate_limit = op.preset_rate_limit
+
+        risk_tier = ""
+        if op.preset_risk_tier is not None:
+            risk_tier = op.preset_risk_tier
+        elif op.is_write:
+            risk_tier = "medium"
+        else:
+            risk_tier = "low"
+
+        human_identifier_field = op.preset_human_identifier_field or ""
 
         actions.append(CandidateAction(
             action_id=action_id,
@@ -194,6 +205,8 @@ def _enrich_rule_based(parsed_spec: ParsedSpec) -> CandidateMenuEntry:
             suggested_scope=scope,
             suggested_human_auth=human_auth,
             suggested_rate_limit=rate_limit,
+            suggested_risk_tier=risk_tier,
+            suggested_human_identifier_field=human_identifier_field,
             is_write=op.is_write,
             confidence={"description": 0.6, "inputs": 0.8, "example_response": 0.4},
             source_path=op.path,
@@ -290,14 +303,35 @@ def _validate_llm_output(raw: dict, parsed_spec: ParsedSpec) -> CandidateMenuEnt
                     source_op = op
                     break
 
+            # Start with LLM suggestions, override with x-agentcafe-* presets
+            scope = f"{raw.get('service_id', '')}:{action_id}"
+            human_auth = action_data.get("is_write", False)
+            rate_limit = "10/minute" if human_auth else "60/minute"
+            risk_tier = "medium" if human_auth else "low"
+            human_id_field = ""
+
+            if source_op:
+                if source_op.preset_scope is not None:
+                    scope = source_op.preset_scope
+                if source_op.preset_human_auth is not None:
+                    human_auth = source_op.preset_human_auth
+                if source_op.preset_rate_limit is not None:
+                    rate_limit = source_op.preset_rate_limit
+                if source_op.preset_risk_tier is not None:
+                    risk_tier = source_op.preset_risk_tier
+                if source_op.preset_human_identifier_field:
+                    human_id_field = source_op.preset_human_identifier_field
+
             actions.append(CandidateAction(
                 action_id=action_id,
                 description=action_data.get("description", ""),
                 required_inputs=inputs,
                 example_response=action_data.get("example_response", {}),
-                suggested_scope=f"{raw.get('service_id', '')}:{action_id}",
-                suggested_human_auth=action_data.get("is_write", False),
-                suggested_rate_limit="10/minute" if action_data.get("is_write") else "60/minute",
+                suggested_scope=scope,
+                suggested_human_auth=human_auth,
+                suggested_rate_limit=rate_limit,
+                suggested_risk_tier=risk_tier,
+                suggested_human_identifier_field=human_id_field,
                 is_write=action_data.get("is_write", False),
                 confidence={"description": 0.9, "inputs": 0.85, "example_response": 0.7},
                 source_path=source_op.path if source_op else "",
