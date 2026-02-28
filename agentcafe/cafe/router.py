@@ -130,6 +130,8 @@ async def place_order(req: OrderRequest):
                 "passport_invalid": 401,
                 "passport_expired": 401,
                 "passport_revoked": 401,
+                "policy_revoked": 401,
+                "tier_insufficient": 403,
                 "scope_missing": 403,
                 "human_auth_required": 403,
             }
@@ -138,6 +140,8 @@ async def place_order(req: OrderRequest):
                 "passport_invalid": "Invalid or expired Passport.",
                 "passport_expired": "Passport has expired.",
                 "passport_revoked": "Passport has been revoked.",
+                "policy_revoked": "The policy backing this Passport has been revoked by the human.",
+                "tier_insufficient": "This action requires a Tier-2 (write) Passport. Your Tier-1 (read) Passport cannot perform write actions.",
                 "scope_missing": f"Your Passport is missing the required scope: '{scope}'.",
                 "human_auth_required": "This action requires explicit human authorization in your Passport.",
             }

@@ -335,3 +335,220 @@ async def test_revoke_garbage_token(cafe_client):
     """Revoking a non-JWT should return 400."""
     resp = await cafe_client.post("/cafe/revoke", json={"passport": "not-a-jwt"})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Tier-1 registration tests (V2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_register_returns_tier1_passport(cafe_client):
+    """POST /passport/register should return a Tier-1 read-only Passport."""
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "test-bot"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tier"] == "read"
+    assert "passport" in data
+    assert "expires_at" in data
+    assert "agent_handle" in data
+
+    # Decode and verify JWT structure
+    payload = jwt.decode(data["passport"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    assert payload["iss"] == "agentcafe"
+    assert payload["tier"] == "read"
+    assert payload["granted_by"] == "self"
+    assert payload["agent_tag"] == "test-bot"
+    assert payload["sub"].startswith("agent:")
+    assert "jti" in payload
+
+
+@pytest.mark.asyncio
+async def test_register_without_agent_tag(cafe_client):
+    """Registration without agent_tag should still work (tag is optional)."""
+    resp = await cafe_client.post("/passport/register", json={})
+    assert resp.status_code == 200
+    data = resp.json()
+    payload = jwt.decode(data["passport"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    assert payload["tier"] == "read"
+    assert payload["agent_tag"] is None
+
+
+@pytest.mark.asyncio
+async def test_tier1_can_access_read_action(cafe_client):
+    """A Tier-1 Passport should pass for read-only actions (human_auth_required=false)."""
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "reader"})
+    token = resp.json()["passport"]
+
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+    assert "results" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_tier1_rejected_for_write_action(cafe_client):
+    """A Tier-1 Passport should be rejected for write actions (human_auth_required=true)."""
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "sneaky-bot"})
+    token = resp.json()["passport"]
+
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "book-room",
+        "passport": token,
+        "inputs": {
+            "room_id": "sr-austin-k420",
+            "check_in": "2026-03-15",
+            "check_out": "2026-03-18",
+            "guest_name": "Test User",
+            "guest_email": "test@example.com",
+        },
+    })
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "tier_insufficient"
+
+
+@pytest.mark.asyncio
+async def test_tier1_revocation(cafe_client):
+    """A revoked Tier-1 Passport should be rejected."""
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "revoke-me"})
+    token = resp.json()["passport"]
+
+    # Should work before revocation
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+
+    # Revoke
+    revoke_resp = await cafe_client.post("/cafe/revoke", json={"passport": token})
+    assert revoke_resp.status_code == 200
+
+    # Should fail after revocation
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "passport_revoked"
+
+
+# ---------------------------------------------------------------------------
+# Policy revocation tests (V2 — instant revocation via revoked_at)
+# ---------------------------------------------------------------------------
+
+async def _create_policy_and_token(revoked: bool = False):
+    """Helper: insert a policy into DB, issue a token referencing it."""
+    from agentcafe.db.engine import get_db
+    from datetime import datetime, timezone, timedelta
+    import uuid as _uuid
+
+    db = await get_db()
+    policy_id = str(_uuid.uuid4())
+    now = datetime.now(timezone.utc)
+
+    revoked_at = (now + timedelta(seconds=1)).isoformat() if revoked else None
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            risk_tier, max_token_lifetime_seconds, expires_at,
+            revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            policy_id, "test@example.com", "stayright-hotels",
+            "search-availability", "stayright-hotels:search-availability",
+            "low", 3600,
+            (now + timedelta(days=30)).isoformat(),
+            revoked_at, now.isoformat(), now.isoformat(),
+        ),
+    )
+    await db.commit()
+
+    # Issue a V1-style token but with policy_id claim to simulate V2
+    exp = now + timedelta(hours=1)
+    payload = {
+        "iss": "agentcafe",
+        "sub": "user:test@example.com",
+        "aud": "agentcafe",
+        "exp": exp,
+        "iat": now,
+        "jti": str(_uuid.uuid4()),
+        "scopes": ["stayright-hotels:search-availability"],
+        "policy_id": policy_id,
+    }
+    token = jwt.encode(payload, TEST_SECRET, algorithm="HS256")
+    return policy_id, token
+
+
+@pytest.mark.asyncio
+async def test_policy_revocation_rejects_token(cafe_client):
+    """A token under a revoked policy should be rejected with policy_revoked."""
+    _policy_id, token = await _create_policy_and_token(revoked=True)
+
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "policy_revoked"
+
+
+@pytest.mark.asyncio
+async def test_policy_not_revoked_allows_token(cafe_client):
+    """A token under a live (not revoked) policy should pass normally."""
+    _policy_id, token = await _create_policy_and_token(revoked=False)
+
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+    assert "results" in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_policy_revoked_after_token_issued(cafe_client):
+    """Token works, then policy is revoked, then token is rejected."""
+    from agentcafe.db.engine import get_db
+    from datetime import datetime, timezone
+
+    policy_id, token = await _create_policy_and_token(revoked=False)
+
+    # Should work before revocation
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+
+    # Revoke the policy
+    db = await get_db()
+    await db.execute(
+        "UPDATE policies SET revoked_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), policy_id),
+    )
+    await db.commit()
+
+    # Should fail after policy revocation
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token,
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 401
+    assert resp.json()["detail"]["error"] == "policy_revoked"

@@ -1,18 +1,18 @@
 """Passport system — JWT-based agent authentication and authorization.
 
-Implements the Passport System Design Document (Phase 2.0).
-See docs/passport/design.md for the full specification.
-"""
+Implements Passport V1 (Phase 2) and Passport V2 Tier-1 read Passports.
+See docs/passport/design.md (V1) and docs/passport/v2-spec.md (V2)."""
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
 import jwt
 from fastapi import APIRouter, HTTPException, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agentcafe.db.engine import get_db
 
@@ -50,6 +50,19 @@ class AuthorizationEntry(BaseModel):
     service_id: str
     action_id: str
     limits: dict | None = None
+
+
+class RegisterRequest(BaseModel):
+    """Request body for POST /passport/register (Tier-1)."""
+    agent_tag: str | None = Field(default=None, description="Untrusted self-reported agent label. Audit trail only.")
+
+
+class RegisterResponse(BaseModel):
+    """Response body for POST /passport/register (Tier-1)."""
+    passport: str
+    expires_at: str
+    tier: str = "read"
+    agent_handle: str
 
 
 class IssueRequest(BaseModel):
@@ -118,6 +131,10 @@ async def validate_passport_jwt(
 ) -> tuple[bool, str]:
     """Validate a JWT passport token and check scope + authorization.
 
+    Supports both Tier-1 (read) and Tier-2 (write) Passports.
+    Tier-1 tokens can access actions where human_auth_required=False.
+    Tier-2 tokens follow full scope + authorization checks.
+
     Returns (success, error_code) where error_code is empty on success.
     """
     # Step 1: Decode and verify signature, expiry, issuer, audience
@@ -135,7 +152,7 @@ async def validate_passport_jwt(
     except jwt.InvalidTokenError:
         return False, "passport_invalid"
 
-    # Step 2: Check jti is not revoked
+    # Step 2: Check jti is not revoked (V1 per-token revocation)
     jti = payload.get("jti")
     if not jti:
         return False, "passport_invalid"
@@ -147,12 +164,34 @@ async def validate_passport_jwt(
     if await cursor.fetchone():
         return False, "passport_revoked"
 
-    # Step 3: Scope check (required for ALL actions)
+    # Step 2b: Policy revocation check (V2 — instant revocation for all tiers)
+    policy_id = payload.get("policy_id")
+    if policy_id:
+        cursor = await db.execute(
+            "SELECT revoked_at FROM policies WHERE id = ?", (policy_id,)
+        )
+        policy_row = await cursor.fetchone()
+        if policy_row and policy_row["revoked_at"] is not None:
+            revoked_at = datetime.fromisoformat(policy_row["revoked_at"])
+            token_iat = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
+            if token_iat < revoked_at:
+                return False, "policy_revoked"
+
+    # Step 3: Tier check — Tier-1 (read) tokens cannot access write actions
+    tier = payload.get("tier", "write")
+    if tier == "read" and human_auth_required:
+        return False, "tier_insufficient"
+
+    # Step 4: Tier-1 tokens skip scope checks (they can access all read actions)
+    if tier == "read":
+        return True, ""
+
+    # Step 5: Scope check (required for Tier-2 actions)
     scopes = payload.get("scopes", [])
     if not _check_scope(scopes, service_id, action_id):
         return False, "scope_missing"
 
-    # Step 4: Authorization check (only if human_auth_required)
+    # Step 6: Authorization check (only if human_auth_required)
     if human_auth_required:
         authorizations = payload.get("authorizations", [])
         if not _check_authorization_entry(authorizations, service_id, action_id):
@@ -162,7 +201,53 @@ async def validate_passport_jwt(
 
 
 # ---------------------------------------------------------------------------
-# Issuance endpoint
+# Tier-1 registration endpoint (V2)
+# ---------------------------------------------------------------------------
+
+_TIER1_LIFETIME_HOURS = 3
+
+
+@passport_router.post("/passport/register", response_model=RegisterResponse)
+async def register_agent(req: RegisterRequest):
+    """Register an agent and receive a Tier-1 read-only Passport.
+
+    No authentication required. The agent provides an optional agent_tag
+    (untrusted, for audit trail only). The Cafe returns a rate-limited
+    read Passport with a hashed agent handle for tracking.
+
+    See docs/passport/v2-spec.md §3.1.
+    """
+    tag = req.agent_tag or ""
+    agent_handle = hashlib.sha256(
+        f"agent:{tag}:{uuid.uuid4()}".encode()
+    ).hexdigest()[:16]
+
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(hours=_TIER1_LIFETIME_HOURS)
+
+    payload = {
+        "iss": "agentcafe",
+        "sub": f"agent:{agent_handle}",
+        "aud": "agentcafe",
+        "exp": exp,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+        "tier": "read",
+        "granted_by": "self",
+        "agent_tag": tag if tag else None,
+    }
+
+    token = jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+
+    return RegisterResponse(
+        passport=token,
+        expires_at=exp.isoformat(),
+        agent_handle=agent_handle,
+    )
+
+
+# ---------------------------------------------------------------------------
+# V1 Issuance endpoint (will be superseded by V2 consent flow)
 # ---------------------------------------------------------------------------
 
 @passport_router.post("/passport/issue", response_model=IssueResponse)

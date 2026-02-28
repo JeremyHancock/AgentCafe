@@ -77,7 +77,7 @@ We can run end-to-end locally:
 - ✅ Passport revocation (done in Phase 2)
 - ✅ Passport V2 design: 8 locked positions via three-way review (ADR-024)
 - ✅ Menu schema extension for consent flow (ADR-023, ADR-009 amendment)
-- ⬜ **Passport V2 implementation — Tier-1 read Passports**: agent self-requests a read-only Passport for Menu browsing and discovery. Rate-limited. No human ceremony.
+- ✅ **Passport V2 implementation — Tier-1 read Passports**: `POST /passport/register` returns Tier-1 JWT (`tier: "read"`, `granted_by: "self"`). Tier-1 tokens access read actions, rejected for writes with `tier_insufficient`. 5 new tests.
 - ⬜ **Passport V2 implementation — human accounts + consent flow**: human Cafe accounts (passkey/WebAuthn), `POST /consents/initiate`, consent URL, `POST /tokens/exchange`, short-lived write tokens under long-lived policies
 - ⬜ **Passport V2 implementation — Cafe-side identity verification**: layered by risk tier (agent-supplied for low, +read-before-write for medium+, mandatory read for high/critical). `human_identifier_field` in Menu drives both paths.
 - ⬜ **Passport V2 implementation — risk-tier token ceilings**: per-policy human-chosen expiry with Cafe-enforced ceilings (60m/15m/5m/single-use). Asymmetric ceremony.
@@ -86,11 +86,11 @@ We can run end-to-end locally:
 - ⬜ **Consent page UI** — first Cafe-owned web frontend. Cafe-authored plain-language consent text. Passkey confirmation for high-value actions.
 - ⬜ **Passport signing key management** — migrate from single HS256 secret → RS256 asymmetric with cloud KMS (private key never leaves KMS, JWKS endpoint for public keys, `kid` in JWT header, dual-key rotation). Addresses single-key compromise risk identified in §3.
 - ⬜ **Consent privacy enforcement** — strict JWT audience separation between agent Passports and human sessions. No agent-accessible consent discovery surface. See v2-design-discussion.md §2.3.
-- ⬜ **Policy revocation — instant for all tiers** — add `revoked_at` column to policies table + check in token validation (`iat < revoked_at` → reject). Replaces short-expiry-only limitation. See v2-design-discussion.md §2.2.
+- ✅ **Policy revocation — instant for all tiers** — `revoked_at` column in policies table (migration 0001) + `iat < revoked_at` check in `validate_passport_jwt`. Returns `401 policy_revoked`. 3 new tests.
 - ⬜ Input injection protection — path parameters resolved via string replacement without sanitization; an agent could send malicious values
 - ⬜ Backend credential encryption (AES-256 at rest) — `backend_auth_header` currently stored as plaintext in `proxy_configs` and `draft_services`
 - ⬜ Tamper-evident audit logging — hash chaining or HMAC signatures
-- ⬜ Schema migration system — replace `rm -f agentcafe.db` with proper migrations (e.g., Alembic or manual `ALTER TABLE` scripts)
+- ✅ Schema migration system — lightweight numbered SQL migrations in `agentcafe/db/migrations/`, version tracking via `schema_version` table, auto-applied on startup. Migration 0001 adds `policies` table with `revoked_at`.
 - ⬜ **Token response `policy_limits` snapshot** — optional `remaining_requests_in_window`, `active_tokens_under_policy`, `max_active_tokens` in token exchange/refresh responses. Not MVP; convenience for sophisticated agent platforms.
 - ⬜ **"Building Agents for AgentCafe" developer guide** — one-page doc in `docs/` explaining per-policy rate limits, multi-agent coordination, consent flow, and token lifecycle. Essential long-term, low cost.
 

@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from agentcafe.cafe.passport import configure_passport, passport_router
 from agentcafe.cafe.router import close_http_client, configure_router, router as cafe_router
@@ -48,18 +49,27 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     await close_db()
 
 
-def create_cafe_app(lifespan=None) -> FastAPI:
+def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     """Create the main AgentCafe FastAPI application.
 
     Args:
         lifespan: Optional async context manager for startup/shutdown.
                   Pass None for tests (they manage DB lifecycle separately).
+        cors_origins: Comma-separated allowed origins, or "*" for all.
     """
     app = FastAPI(  # pylint: disable=redefined-outer-name
         title="AgentCafe",
         version="0.1.0",
         description="The Cafe for Agents. Browse the Menu, present your Passport, and order.",
         lifespan=lifespan,
+    )
+    origins = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.include_router(cafe_router)
     app.include_router(passport_router)
@@ -125,7 +135,7 @@ async def main() -> None:
     from agentcafe.demo_backends.lunch import app as lunch_app
     from agentcafe.demo_backends.home_service import app as home_service_app
 
-    cafe_app = create_cafe_app()
+    cafe_app = create_cafe_app(cors_origins=cfg.cors_allowed_origins)
 
     print("\n" + "=" * 60)
     print("  AgentCafe ☕ — The Cafe for Agents")
