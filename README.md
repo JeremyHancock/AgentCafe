@@ -75,7 +75,7 @@ CONSENT_ID=$(curl -s http://localhost:8000/consents/initiate \
   -d '{"service_id":"stayright-hotels","action_id":"book-room"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['consent_id'])")
 
 # 3. Open the consent page in your browser
-echo "Approve at: http://localhost:8000/consent/$CONSENT_ID"
+echo "Approve at: http://localhost:8000/authorize/$CONSENT_ID"
 ```
 
 You'll be prompted to create an account (or log in), then you'll see the consent approval page with the service details, risk tier, and duration selector.

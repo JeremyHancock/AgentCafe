@@ -743,12 +743,12 @@ async def test_login_sets_session_cookie(cafe_client):
 async def test_consent_page_redirects_without_session(cafe_client):
     """GET /consent/<id> without a session cookie should redirect to login."""
     resp = await cafe_client.get(
-        "/consent/fake-id",
+        "/authorize/fake-id",
         cookies={"cafe_session": ""},  # override any persisted session cookie
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert "/login" in resp.headers["location"]
+    assert "/register" in resp.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -777,7 +777,7 @@ async def test_consent_page_renders_for_logged_in_user(cafe_client):
 
     # View the consent page with session cookie
     resp = await cafe_client.get(
-        f"/consent/{consent_id}",
+        f"/authorize/{consent_id}",
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200
@@ -810,7 +810,7 @@ async def test_consent_page_approve_via_form(cafe_client):
 
     # Approve via form
     resp = await cafe_client.post(
-        f"/consent/{consent_id}/approve",
+        f"/authorize/{consent_id}/approve",
         data={"token_lifetime_seconds": "900"},
         cookies={"cafe_session": session_cookie},
         follow_redirects=False,
@@ -846,7 +846,7 @@ async def test_consent_page_decline(cafe_client):
     consent_id = resp.json()["consent_id"]
 
     resp = await cafe_client.get(
-        f"/consent/{consent_id}/decline",
+        f"/authorize/{consent_id}/decline",
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200

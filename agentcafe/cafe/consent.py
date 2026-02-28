@@ -235,7 +235,7 @@ async def initiate_consent(
     )
     await db.commit()
 
-    consent_url = f"/consent/{consent_id}"
+    consent_url = f"/authorize/{consent_id}"
 
     return InitiateResponse(
         consent_id=consent_id,

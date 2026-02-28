@@ -110,17 +110,31 @@ def _ceiling_label(risk_tier: str) -> str:
 
 def _consent_text(service_name: str, actions: list[dict]) -> str:
     """Generate Cafe-authored plain-language consent text."""
-    action_descs = [a.get("description", a.get("action_id", "unknown")) for a in actions]
-    if len(action_descs) == 1:
+    count = len(actions)
+    if count == 1:
         return (
-            f"An agent is requesting permission to perform the following action "
-            f"on {service_name} on your behalf: {action_descs[0]}."
+            f"An agent is requesting permission to perform an action "
+            f"on {service_name} on your behalf."
         )
-    joined = ", ".join(action_descs[:-1]) + f", and {action_descs[-1]}"
     return (
-        f"An agent is requesting permission to perform the following actions "
-        f"on {service_name} on your behalf: {joined}."
+        f"An agent is requesting permission to perform {count} actions "
+        f"on {service_name} on your behalf."
     )
+
+
+# ---------------------------------------------------------------------------
+# GET / — root redirect
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/", response_class=HTMLResponse)
+async def root_page(request: Request):
+    """Redirect root to login (or a future dashboard)."""
+    session = _get_session(request)
+    if session:
+        return templates.TemplateResponse("base.html", {
+            "request": request,
+        })
+    return RedirectResponse(url="/login", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -242,12 +256,12 @@ async def register_submit(
 # GET /consent/<consent_id>
 # ---------------------------------------------------------------------------
 
-@pages_router.get("/consent/{consent_id}", response_class=HTMLResponse)
+@pages_router.get("/authorize/{consent_id}", response_class=HTMLResponse)
 async def consent_page(request: Request, consent_id: str):
-    """Render the consent approval page."""
+    """Render the authorization approval page."""
     session = _get_session(request)
     if not session:
-        return RedirectResponse(url=f"/login?next=/consent/{consent_id}", status_code=303)
+        return RedirectResponse(url=f"/register?next_url=/authorize/{consent_id}", status_code=303)
 
     db = await get_db()
     cursor = await db.execute(
@@ -350,7 +364,7 @@ async def consent_page(request: Request, consent_id: str):
 # POST /consent/<consent_id>/approve
 # ---------------------------------------------------------------------------
 
-@pages_router.post("/consent/{consent_id}/approve", response_class=HTMLResponse)
+@pages_router.post("/authorize/{consent_id}/approve", response_class=HTMLResponse)
 async def consent_approve_submit(
     request: Request,
     consent_id: str,
@@ -359,7 +373,7 @@ async def consent_approve_submit(
     """Handle consent approval form submission."""
     session = _get_session(request)
     if not session:
-        return RedirectResponse(url=f"/login?next=/consent/{consent_id}", status_code=303)
+        return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
 
     try:
         # We call the internal function by simulating the request
@@ -372,7 +386,7 @@ async def consent_approve_submit(
             raise HTTPException(status_code=404, detail="Consent not found")
 
         if consent["status"] != "pending":
-            return RedirectResponse(url=f"/consent/{consent_id}", status_code=303)
+            return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
 
         user_id = session["user_id"]
         now = datetime.now(timezone.utc)
@@ -437,19 +451,19 @@ async def consent_approve_submit(
         })
 
     except HTTPException:
-        return RedirectResponse(url=f"/consent/{consent_id}", status_code=303)
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
 # GET /consent/<consent_id>/decline
 # ---------------------------------------------------------------------------
 
-@pages_router.get("/consent/{consent_id}/decline", response_class=HTMLResponse)
+@pages_router.get("/authorize/{consent_id}/decline", response_class=HTMLResponse)
 async def consent_decline(request: Request, consent_id: str):
-    """Decline a consent request."""
+    """Decline an authorization request."""
     session = _get_session(request)
     if not session:
-        return RedirectResponse(url=f"/login?next=/consent/{consent_id}", status_code=303)
+        return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
 
     db = await get_db()
     now = datetime.now(timezone.utc).isoformat()

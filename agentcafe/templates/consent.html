@@ -34,7 +34,7 @@
     <div class="alert alert-error">{{ error }}</div>
     {% endif %}
 
-    <form method="post" action="/consent/{{ consent_id }}/approve">
+    <form method="post" action="/authorize/{{ consent_id }}/approve">
         <div class="form-group">
             <label for="token_lifetime">Token duration</label>
             <select id="token_lifetime" name="token_lifetime_seconds">
@@ -50,7 +50,7 @@
 
         <div class="btn-row">
             <button type="submit" class="btn btn-primary">Approve</button>
-            <a href="/consent/{{ consent_id }}/decline" class="btn btn-outline">Decline</a>
+            <a href="/authorize/{{ consent_id }}/decline" class="btn btn-outline">Decline</a>
         </div>
     </form>
 
