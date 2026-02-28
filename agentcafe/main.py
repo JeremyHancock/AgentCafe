@@ -14,6 +14,8 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from agentcafe.cafe.consent import configure_consent, consent_router
+from agentcafe.cafe.human import configure_human, human_router
 from agentcafe.cafe.passport import configure_passport, passport_router
 from agentcafe.cafe.router import close_http_client, configure_router, router as cafe_router
 from agentcafe.config import load_config
@@ -38,6 +40,8 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
+    configure_human(cfg.passport_signing_secret)
+    configure_consent(cfg.passport_signing_secret)
     configure_wizard(cfg.passport_signing_secret)
     configure_router(cfg.use_real_passport)
     if cfg.use_real_passport:
@@ -73,6 +77,8 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     )
     app.include_router(cafe_router)
     app.include_router(passport_router)
+    app.include_router(consent_router)
+    app.include_router(human_router)
     app.include_router(wizard_router)
 
     @app.get("/health")
@@ -123,6 +129,8 @@ async def main() -> None:
 
     # Configure Passport system
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
+    configure_human(cfg.passport_signing_secret)
+    configure_consent(cfg.passport_signing_secret)
     configure_wizard(cfg.passport_signing_secret)
     configure_router(cfg.use_real_passport)
     if cfg.use_real_passport:

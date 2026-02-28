@@ -46,12 +46,15 @@ async def check_rate_limit(
     service_id: str,
     action_id: str,
     rate_limit_str: str,
+    policy_id: str | None = None,
 ) -> tuple[bool, dict | None]:
     """Check if the request is within the rate limit.
 
     Counts recent audit_log entries for this passport + action within the
     sliding window. Returns (True, None) if allowed, or (False, error_detail)
     if the limit is exceeded.
+
+    V2 error body per v2-spec.md §8.3: error, detail, retry_after_seconds, policy_id.
     """
     parsed = parse_rate_limit(rate_limit_str)
     if parsed is None:
@@ -59,10 +62,11 @@ async def check_rate_limit(
         return True, None
 
     max_requests, window_seconds = parsed
-    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=window_seconds)).isoformat()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(seconds=window_seconds)).isoformat()
 
     cursor = await db.execute(
-        """SELECT COUNT(*) FROM audit_log
+        """SELECT COUNT(*), MIN(timestamp) FROM audit_log
            WHERE passport_hash = ? AND service_id = ? AND action_id = ?
            AND timestamp > ?""",
         (passport_hash, service_id, action_id, cutoff),
@@ -71,9 +75,27 @@ async def check_rate_limit(
     count = row[0] if row else 0
 
     if count >= max_requests:
+        # Calculate retry_after from oldest entry in the window
+        oldest_ts = row[1] if row else None
+        retry_after = window_seconds
+        if oldest_ts:
+            try:
+                oldest = datetime.fromisoformat(oldest_ts)
+                if oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=timezone.utc)
+                retry_after = max(1, int((oldest + timedelta(seconds=window_seconds) - now).total_seconds()))
+            except (ValueError, TypeError):
+                pass
+
+        detail = f"Rate limit {rate_limit_str} exceeded for {service_id}:{action_id}."
+        if policy_id:
+            detail += f" Budget is shared across all tokens under policy {policy_id}."
+
         return False, {
             "error": "rate_limit_exceeded",
-            "message": f"Rate limit exceeded: {rate_limit_str}. Try again later.",
+            "detail": detail,
+            "retry_after_seconds": retry_after,
+            "policy_id": policy_id,
             "limit": rate_limit_str,
             "current_count": count,
         }

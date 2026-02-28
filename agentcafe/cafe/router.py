@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
+import jwt
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -232,12 +233,27 @@ async def place_order(req: OrderRequest):
 
     # Rate limiting — sliding window per passport + action
     passport_hash = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
+
+    # Extract policy_id for V2 rate-limit communication (per-policy shared budget)
+    _policy_id_for_rate = None
+    try:
+        _decoded = jwt.decode(req.passport, options={"verify_signature": False})
+        _policy_id_for_rate = _decoded.get("policy_id")
+    except Exception:  # pylint: disable=broad-except  # best-effort extraction
+        pass
+
     rate_ok, rate_error = await check_rate_limit(
         db, passport_hash, req.service_id, req.action_id, _rate_limit,
+        policy_id=_policy_id_for_rate,
     )
     if not rate_ok:
         await _audit_log(db, req, "rate_limit_exceeded", 429)
-        raise HTTPException(status_code=429, detail=rate_error)
+        retry_after = rate_error.get("retry_after_seconds", 60) if rate_error else 60
+        raise HTTPException(
+            status_code=429,
+            detail=rate_error,
+            headers={"Retry-After": str(retry_after)},
+        )
 
     # --- PROXY: Forward to backend ---
     # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])
