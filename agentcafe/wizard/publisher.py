@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from agentcafe.crypto import encrypt
+
 from agentcafe.wizard.models import PublishResponse
 from agentcafe.wizard.review_engine import get_draft
 
@@ -49,7 +51,7 @@ async def publish_draft(
     description = final_menu.get("description", "")
     company_id = draft["company_id"]
     backend_url = draft.get("backend_url", "")
-    backend_auth_header = draft.get("backend_auth_header", "")
+    backend_auth_header = encrypt(draft.get("backend_auth_header", ""))
     policy_data = json.loads(draft.get("policy_json") or "{}")
 
     # Check service_id uniqueness

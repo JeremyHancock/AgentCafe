@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from agentcafe.cafe.menu import get_full_menu
 from agentcafe.cafe.passport import validate_passport_jwt
 from agentcafe.cafe.policy import check_rate_limit, validate_input_types
+from agentcafe.crypto import decrypt
 from agentcafe.db.engine import get_db
 
 router = APIRouter(prefix="/cafe", tags=["cafe"])
@@ -121,7 +122,7 @@ async def place_order(req: OrderRequest):
     backend_url = row["backend_url"]
     backend_path = row["backend_path"]
     backend_method = row["backend_method"]
-    backend_auth_header = row["backend_auth_header"]
+    backend_auth_header = decrypt(row["backend_auth_header"])
     scope = row["scope"]
     human_auth_required = bool(row["human_auth_required"])
     _rate_limit = row["rate_limit"]

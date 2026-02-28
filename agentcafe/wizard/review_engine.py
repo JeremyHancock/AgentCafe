@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from agentcafe.crypto import encrypt
 from agentcafe.wizard.models import (
     CandidateAction,
     CandidateMenuEntry,
@@ -138,7 +139,7 @@ async def save_policy(
         (
             policy_json,
             backend_url,
-            backend_auth_header,
+            encrypt(backend_auth_header),
             now,
             draft_id,
         ),

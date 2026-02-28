@@ -38,6 +38,9 @@ class CafeConfig:
     issuer_api_key: str = ""
     use_real_passport: bool = False
 
+    # Backend credential encryption
+    encryption_key: str = ""
+
     # CORS
     cors_allowed_origins: str = "*"
 
@@ -74,6 +77,7 @@ def load_config() -> CafeConfig:
         passport_signing_secret=os.getenv("PASSPORT_SIGNING_SECRET", secrets.token_urlsafe(32)),
         issuer_api_key=os.getenv("ISSUER_API_KEY", ""),
         use_real_passport=os.getenv("USE_REAL_PASSPORT", "false").lower() == "true",
+        encryption_key=os.getenv("CAFE_ENCRYPTION_KEY", ""),
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),
     )

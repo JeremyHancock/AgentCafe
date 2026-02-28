@@ -20,6 +20,7 @@ from agentcafe.cafe.pages import configure_pages, pages_router
 from agentcafe.cafe.passport import configure_passport, passport_router
 from agentcafe.cafe.router import close_http_client, configure_router, router as cafe_router
 from agentcafe.config import load_config
+from agentcafe.crypto import configure_crypto
 from agentcafe.db.engine import close_db, init_db
 from agentcafe.db.seed import seed_demo_data
 from agentcafe.wizard.router import configure_wizard, wizard_router
@@ -40,6 +41,7 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     logger.info("Seeding demo services...")
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
+    configure_crypto(cfg.encryption_key)
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)
@@ -130,7 +132,8 @@ async def main() -> None:
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
 
-    # Configure Passport system
+    # Configure encryption and Passport system
+    configure_crypto(cfg.encryption_key)
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)
