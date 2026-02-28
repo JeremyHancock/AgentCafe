@@ -15,6 +15,10 @@ Your agent visits AgentCafe, looks at the Menu of registered services, and when 
 
 If it has permission, the Cafe safely handles the request behind the scenes (as a secure proxy). If not, the agent simply leaves and finds another way.
 
+**Two-tier Passport system:**
+- **Tier 1 (Read):** Agent self-requests. No human involved. Can browse menus and check availability.
+- **Tier 2 (Write):** Requires human consent. Your agent requests permission, you review and approve on a Cafe-branded page, and the agent gets a short-lived token to act on your behalf.
+
 ### For companies
 
 Onboarding is insanely easy:
@@ -54,6 +58,28 @@ curl -X POST http://localhost:8000/cafe/order \
 pytest tests/ -v
 ```
 
+### Consent Flow (try it locally)
+
+With the Cafe running (`python -m agentcafe.main`):
+
+```bash
+# 1. Agent registers and gets a Tier-1 read token
+TOKEN=$(curl -s http://localhost:8000/passport/register \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"agent_tag":"my-agent"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['passport'])")
+
+# 2. Agent requests consent for a write action
+CONSENT_ID=$(curl -s http://localhost:8000/consents/initiate \
+  -X POST -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"service_id":"stayright-hotels","action_id":"book-room"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['consent_id'])")
+
+# 3. Open the consent page in your browser
+echo "Approve at: http://localhost:8000/consent/$CONSENT_ID"
+```
+
+You'll be prompted to create an account (or log in), then you'll see the consent approval page with the service details, risk tier, and duration selector.
+
 ### Wizard API (for companies)
 
 ```bash
@@ -78,8 +104,10 @@ curl -X POST http://localhost:8000/wizard/specs/parse \
 - **Locked Menu format**: semantic, no HTTP methods/paths, agent-friendly
 - **Full proxy**: agents never see backend URLs or tokens
 - **Double validation**: Human Passport + Company Policy on every order
+- **Passport V2**: Two-tier JWT system with human consent flow, risk-tier ceilings, identity verification, and instant policy revocation
+- **Consent UI**: Server-rendered pages for human authorization (login, review, approve/decline)
 - **Company Onboarding Wizard**: OpenAPI spec → guided review → one-click publish
-- **Tech**: Python 3.12 + FastAPI + SQLite (MVP) + LiteLLM (wizard AI enrichment)
+- **Tech**: Python 3.12 + FastAPI + SQLite (MVP) + Jinja2 + LiteLLM (wizard AI enrichment)
 
 ### Project Layout
 
@@ -88,11 +116,12 @@ AgentCafe/
 ├── agentcafe/              # Python package
 │   ├── main.py             # FastAPI app — starts Cafe + demo backends
 │   ├── config.py           # Environment-based configuration
-│   ├── cafe/               # Menu discovery + order routing + passport
+│   ├── cafe/               # Menu, order routing, passport, consent, human accounts, pages
+│   ├── templates/          # Jinja2 templates (login, register, consent approval)
 │   ├── wizard/             # Company Onboarding Wizard (spec parser, AI enricher, review, publish)
-│   ├── db/                 # SQLite schema, engine, seed data
+│   ├── db/                 # SQLite schema, engine, migrations, seed data
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
-├── tests/                  # 77 tests (menu, order, passport, policy, wizard)
+├── tests/                  # 134 tests (menu, order, passport, consent, policy, wizard, UI)
 ├── docs/
 │   ├── design/             # Service specs, menu format, onboarding wizard
 │   └── passport/           # Passport system design + threat model
@@ -114,6 +143,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 3 complete — Cafe runs end-to-end with 3 demo services, Menu discovery, proxy ordering, JWT Passport validation, rate limiting, input type validation, and a fully functional Company Onboarding Wizard (spec parsing, AI enrichment, review, policy, dry-run, publish). JWT session auth with bcrypt passwords, draft ownership enforcement. 77 tests passing, pylint 10.00/10.
-**Next:** Phase 4 (Security & Guardrails) then Phase 5 (Wizard Dashboard UI, end-to-end agent demo)
+**Status:** Phase 4 in progress — Passport V2 with two-tier JWT system, full human consent flow (initiate → approve → exchange → refresh), risk-tier token ceilings, identity verification (read-before-write), server-rendered consent UI, and schema migration system. Plus everything from Phase 3: Menu discovery, proxy ordering, rate limiting, input validation, Company Onboarding Wizard. 134 tests passing, pylint 10.00/10.
+**Next:** Phase 4 remaining (signing key management, input injection protection, audit hardening) then Phase 5 (Wizard Dashboard UI, end-to-end agent demo)
 **Built for:** The inevitable agent economy
