@@ -7,8 +7,11 @@ API endpoints which use Authorization headers.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
+import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -18,7 +21,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from agentcafe.cafe.human import (
-    _hash_password, _create_human_session_token, validate_human_session,
+    _hash_password, _verify_password, _rehash_if_legacy,
+    _create_human_session_token, validate_human_session,
 )
 from agentcafe.db.engine import get_db
 
@@ -72,6 +76,46 @@ def _set_session_cookie(response, token: str) -> None:
         httponly=True,
         samesite="lax",
     )
+
+
+_CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
+
+
+def _generate_csrf_token(request: Request) -> str:
+    """Generate a CSRF token tied to the current session.
+
+    Format: nonce.timestamp.signature
+    Signature = HMAC-SHA256(signing_secret, nonce + timestamp + session_cookie)
+    """
+    session_cookie = request.cookies.get(_COOKIE_NAME, "")
+    nonce = secrets.token_hex(16)
+    ts = str(int(datetime.now(timezone.utc).timestamp()))
+    msg = f"{nonce}.{ts}.{session_cookie}"
+    sig = hmac.new(_state.signing_secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return f"{nonce}.{ts}.{sig}"
+
+
+def _validate_csrf_token(request: Request, token: str | None) -> bool:
+    """Validate a CSRF token against the current session."""
+    if not token:
+        return False
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    nonce, ts, sig = parts
+    # Check timestamp freshness
+    try:
+        token_time = int(ts)
+    except ValueError:
+        return False
+    now = int(datetime.now(timezone.utc).timestamp())
+    if abs(now - token_time) > _CSRF_TOKEN_MAX_AGE:
+        return False
+    # Recompute signature
+    session_cookie = request.cookies.get(_COOKIE_NAME, "")
+    msg = f"{nonce}.{ts}.{session_cookie}"
+    expected = hmac.new(_state.signing_secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
 
 
 def _lifetime_options(risk_tier: str) -> list[dict]:
@@ -149,6 +193,7 @@ async def login_page(request: Request, next_url: str = ""):
         "next_url": next_url,
         "error": None,
         "email": None,
+        "csrf_token": _generate_csrf_token(request),
     })
 
 
@@ -162,20 +207,33 @@ async def login_submit(
     email: str = Form(...),
     password: str = Form(...),
     next_url: str = Form("", alias="next"),
+    csrf_token: str = Form(""),
 ):
     """Handle login form submission."""
+    if not _validate_csrf_token(request, csrf_token):
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "next_url": next_url,
+            "error": "Invalid or expired form submission. Please try again.",
+            "email": email,
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=403)
     db = await get_db()
     cursor = await db.execute(
         "SELECT id, password_hash FROM cafe_users WHERE email = ?", (email.lower(),)
     )
     row = await cursor.fetchone()
-    if not row or row["password_hash"] != _hash_password(password):
+    if not row or not _verify_password(password, row["password_hash"]):
         return templates.TemplateResponse("login.html", {
             "request": request,
             "next_url": next_url,
             "error": "Invalid email or password.",
             "email": email,
+            "csrf_token": _generate_csrf_token(request),
         }, status_code=401)
+
+    # Rehash legacy SHA-256 passwords to bcrypt on successful login
+    await _rehash_if_legacy(db, row["id"], password, row["password_hash"])
 
     session_token = _create_human_session_token(row["id"], email.lower())
     redirect_url = next_url if next_url else "/"
@@ -197,6 +255,7 @@ async def register_page(request: Request, next_url: str = ""):
         "error": None,
         "email": None,
         "display_name": None,
+        "csrf_token": _generate_csrf_token(request),
     })
 
 
@@ -211,8 +270,18 @@ async def register_submit(
     password: str = Form(...),
     display_name: str = Form(""),
     next_url: str = Form("", alias="next"),
+    csrf_token: str = Form(""),
 ):
     """Handle registration form submission."""
+    if not _validate_csrf_token(request, csrf_token):
+        return templates.TemplateResponse("register.html", {
+            "request": request,
+            "next_url": next_url,
+            "error": "Invalid or expired form submission. Please try again.",
+            "email": email,
+            "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=403)
     if len(password) < 8:
         return templates.TemplateResponse("register.html", {
             "request": request,
@@ -220,6 +289,7 @@ async def register_submit(
             "error": "Password must be at least 8 characters.",
             "email": email,
             "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
         }, status_code=422)
 
     db = await get_db()
@@ -233,6 +303,7 @@ async def register_submit(
             "error": "An account with this email already exists.",
             "email": email,
             "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
         }, status_code=409)
 
     user_id = str(uuid.uuid4())
@@ -357,6 +428,7 @@ async def consent_page(request: Request, consent_id: str):
         "max_lifetime_label": _ceiling_label(risk_tier),
         "expires_at_human": expires_human,
         "error": None,
+        "csrf_token": _generate_csrf_token(request),
     })
 
 
@@ -369,11 +441,14 @@ async def consent_approve_submit(
     request: Request,
     consent_id: str,
     token_lifetime_seconds: int = Form(900),
+    csrf_token: str = Form(""),
 ):
     """Handle consent approval form submission."""
     session = _get_session(request)
     if not session:
         return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
 
     try:
         # We call the internal function by simulating the request
@@ -455,15 +530,21 @@ async def consent_approve_submit(
 
 
 # ---------------------------------------------------------------------------
-# GET /consent/<consent_id>/decline
+# POST /consent/<consent_id>/decline
 # ---------------------------------------------------------------------------
 
-@pages_router.get("/authorize/{consent_id}/decline", response_class=HTMLResponse)
-async def consent_decline(request: Request, consent_id: str):
-    """Decline an authorization request."""
+@pages_router.post("/authorize/{consent_id}/decline", response_class=HTMLResponse)
+async def consent_decline(
+    request: Request,
+    consent_id: str,
+    csrf_token: str = Form(""),
+):
+    """Decline an authorization request (POST with CSRF protection)."""
     session = _get_session(request)
     if not session:
         return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
 
     db = await get_db()
     now = datetime.now(timezone.utc).isoformat()

@@ -327,7 +327,7 @@ async def test_audit_hash_chain_detects_tamper(cafe_client):
 
 @pytest.mark.asyncio
 async def test_audit_entries_have_hash_columns(cafe_client):
-    """New audit entries should have prev_hash and entry_hash populated."""
+    """New audit entries should have prev_hash, entry_hash, and seq populated."""
     from agentcafe.db.engine import get_db
 
     await cafe_client.post("/cafe/order", json={
@@ -340,12 +340,62 @@ async def test_audit_entries_have_hash_columns(cafe_client):
 
     db = await get_db()
     cursor = await db.execute(
-        "SELECT prev_hash, entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1"
+        "SELECT prev_hash, entry_hash, seq FROM audit_log ORDER BY seq DESC LIMIT 1"
     )
     row = await cursor.fetchone()
     assert row["prev_hash"] is not None
     assert row["entry_hash"] is not None
     assert len(row["entry_hash"]) == 64  # SHA-256 hex
+    assert row["seq"] is not None and row["seq"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_audit_chain_concurrent_orders(cafe_client):
+    """Concurrent orders should produce a valid hash chain (no forks)."""
+    import asyncio
+    from agentcafe.db.engine import get_db
+
+    db = await get_db()
+
+    # Get the current max seq so we only verify our entries
+    cursor = await db.execute(
+        "SELECT COALESCE(MAX(seq), 0) AS max_seq FROM audit_log WHERE seq IS NOT NULL"
+    )
+    start_seq = (await cursor.fetchone())["max_seq"]
+
+    async def _place_order():
+        return await cafe_client.post("/cafe/order", json={
+            "service_id": "stayright-hotels",
+            "action_id": "search-availability",
+            "passport": "demo-passport",
+            "inputs": {"city": "Austin", "check_in": "2026-03-15",
+                       "check_out": "2026-03-18", "guests": 2},
+        })
+
+    # Fire 5 concurrent orders
+    results = await asyncio.gather(*[_place_order() for _ in range(5)])
+    for r in results:
+        assert r.status_code == 200
+
+    # Verify our new entries have monotonically increasing seq with no gaps
+    cursor = await db.execute(
+        "SELECT seq, prev_hash, entry_hash FROM audit_log "
+        "WHERE seq IS NOT NULL AND seq > ? ORDER BY seq ASC",
+        (start_seq,),
+    )
+    rows = await cursor.fetchall()
+    assert len(rows) == 5, f"Expected 5 new entries, got {len(rows)}"
+
+    seqs = [r["seq"] for r in rows]
+    for i in range(1, len(seqs)):
+        assert seqs[i] == seqs[i - 1] + 1, f"Seq gap: {seqs[i - 1]} → {seqs[i]}"
+
+    # Verify hash chain links among our entries
+    for i in range(1, len(rows)):
+        assert rows[i]["prev_hash"] == rows[i - 1]["entry_hash"], (
+            f"Hash chain broken at seq {seqs[i]}: "
+            f"prev_hash={rows[i]['prev_hash']} != prior entry_hash={rows[i - 1]['entry_hash']}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -423,7 +473,8 @@ async def test_suspend_endpoint_requires_api_key(cafe_client):
     """POST /cafe/services/{id}/suspend should reject invalid API keys."""
     resp = await cafe_client.post(
         "/cafe/services/stayright-hotels/suspend",
-        json={"api_key": "wrong-key", "reason": "test"},
+        json={"reason": "test"},
+        headers={"X-Api-Key": "wrong-key"},
     )
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == "forbidden"
@@ -434,7 +485,8 @@ async def test_suspend_endpoint_unknown_service(cafe_client):
     """Suspending a non-existent service should return 404."""
     resp = await cafe_client.post(
         "/cafe/services/nonexistent-service/suspend",
-        json={"api_key": "TEST_API_KEY", "reason": "test"},
+        json={"reason": "test"},
+        headers={"X-Api-Key": "TEST_API_KEY"},
     )
     assert resp.status_code == 404
 
@@ -446,7 +498,8 @@ async def test_suspend_endpoint_success(cafe_client):
 
     resp = await cafe_client.post(
         "/cafe/services/stayright-hotels/suspend",
-        json={"api_key": "TEST_API_KEY", "reason": "abuse detected"},
+        json={"reason": "abuse detected"},
+        headers={"X-Api-Key": "TEST_API_KEY"},
     )
     assert resp.status_code == 200
     data = resp.json()

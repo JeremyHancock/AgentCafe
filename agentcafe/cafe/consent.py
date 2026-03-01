@@ -58,9 +58,14 @@ def configure_consent(signing_secret: str) -> None:
 # ---------------------------------------------------------------------------
 
 class InitiateRequest(BaseModel):
-    """Request body for POST /consents/initiate."""
+    """Request body for POST /consents/initiate.
+
+    Supports multi-action consent: pass `action_ids` (list) for multiple actions,
+    or `action_id` (str) for backward compatibility with single-action requests.
+    """
     service_id: str
-    action_id: str
+    action_id: str | None = None
+    action_ids: list[str] | None = None
     requested_constraints: dict | None = None
     task_summary: str | None = None
     callback_url: str | None = None
@@ -191,35 +196,57 @@ def _issue_tier2_token(
 # POST /consents/initiate — Agent requests consent
 # ---------------------------------------------------------------------------
 
+# Risk tier ordering for multi-action consent (highest wins)
+_RISK_TIER_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
 @consent_router.post("/consents/initiate", response_model=InitiateResponse)
 async def initiate_consent(
     req: InitiateRequest,
     authorization: str = Header(default=""),
 ):
-    """Agent initiates a consent request for a specific service action.
+    """Agent initiates a consent request for one or more service actions.
 
     Requires a valid Passport (Tier-1 or Tier-2) in the Authorization header.
     Returns a consent_id and consent_url for the human to approve.
+
+    Accepts either `action_id` (single, backward compat) or `action_ids` (list).
     """
     _validate_agent_passport(authorization)
 
+    # Resolve action list (support both single and multi-action)
+    actions = req.action_ids or ([req.action_id] if req.action_id else [])
+    if not actions:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "missing_actions", "message": "Provide action_id or action_ids."},
+        )
+    # Deduplicate while preserving order
+    seen = set()
+    actions = [a for a in actions if not (a in seen or seen.add(a))]
+
     db = await get_db()
 
-    # Verify the service and action exist
-    cursor = await db.execute(
-        "SELECT 1 FROM proxy_configs WHERE service_id = ? AND action_id = ?",
-        (req.service_id, req.action_id),
-    )
-    if not await cursor.fetchone():
+    # Verify ALL actions exist for this service
+    missing = []
+    for action_id in actions:
+        cursor = await db.execute(
+            "SELECT 1 FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (req.service_id, action_id),
+        )
+        if not await cursor.fetchone():
+            missing.append(action_id)
+    if missing:
         raise HTTPException(
             status_code=404,
-            detail={"error": "action_not_found", "message": f"No action '{req.action_id}' for service '{req.service_id}'."},
+            detail={"error": "action_not_found", "message": f"Unknown action(s) for service '{req.service_id}': {', '.join(missing)}"},
         )
 
     consent_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=req.ttl_hours)
-    scope = f"{req.service_id}:{req.action_id}"
+    action_ids_csv = ",".join(actions)
+    scopes = ",".join(f"{req.service_id}:{a}" for a in actions)
 
     await db.execute(
         """INSERT INTO consents
@@ -227,7 +254,7 @@ async def initiate_consent(
             task_summary, callback_url, status, expires_at, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
         (
-            consent_id, req.service_id, req.action_id, scope,
+            consent_id, req.service_id, action_ids_csv, scopes,
             str(req.requested_constraints) if req.requested_constraints else None,
             req.task_summary, req.callback_url,
             expires_at.isoformat(), now.isoformat(), now.isoformat(),
@@ -331,13 +358,19 @@ async def approve_consent(
         await db.commit()
         raise HTTPException(status_code=410, detail={"error": "consent_expired"})
 
-    # Look up risk tier from proxy config
-    cursor = await db.execute(
-        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
-        (consent["service_id"], consent["action_ids"]),
-    )
-    proxy_row = await cursor.fetchone()
-    risk_tier = proxy_row["risk_tier"] if proxy_row else "medium"
+    # Look up risk tier from proxy config — use highest among all requested actions
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+    risk_tier = "medium"
+    for aid in action_ids:
+        cursor = await db.execute(
+            "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (consent["service_id"], aid),
+        )
+        proxy_row = await cursor.fetchone()
+        if proxy_row:
+            candidate = proxy_row["risk_tier"]
+            if _RISK_TIER_ORDER.get(candidate, 1) > _RISK_TIER_ORDER.get(risk_tier, 1):
+                risk_tier = candidate
 
     # Determine token lifetime
     ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)

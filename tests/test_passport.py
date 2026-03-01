@@ -37,6 +37,8 @@ async def _configure_real_passport(monkeypatch):
     monkeypatch.setattr(passport_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(passport_module._state, "issuer_api_key", TEST_API_KEY)
     configure_keys(legacy_hs256_secret=TEST_SECRET)
+    # Clear IP rate limit state between tests
+    passport_module._register_hits.clear()
     yield
 
 
@@ -342,9 +344,37 @@ async def test_revoke_and_reject(cafe_client):
 
 @pytest.mark.asyncio
 async def test_revoke_garbage_token(cafe_client):
-    """Revoking a non-JWT should return 400."""
+    """Revoking a non-JWT without admin key should return 403 (unauthorized)."""
     resp = await cafe_client.post("/cafe/revoke", json={"passport": "not-a-jwt"})
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "unauthorized_revocation"
+
+
+@pytest.mark.asyncio
+async def test_revoke_garbage_token_admin(cafe_client):
+    """Admin can attempt to revoke a garbage token — returns 400 (invalid_token)."""
+    resp = await cafe_client.post(
+        "/cafe/revoke",
+        json={"passport": "not-a-jwt"},
+        headers={"X-Api-Key": TEST_API_KEY},
+    )
     assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "invalid_token"
+
+
+@pytest.mark.asyncio
+async def test_revoke_admin_path(cafe_client):
+    """Admin can revoke any valid token via X-Api-Key header."""
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "admin-revoke-test"})
+    token = resp.json()["passport"]
+
+    revoke_resp = await cafe_client.post(
+        "/cafe/revoke",
+        json={"passport": token},
+        headers={"X-Api-Key": TEST_API_KEY},
+    )
+    assert revoke_resp.status_code == 200
+    assert revoke_resp.json()["status"] == "revoked"
 
 
 # ---------------------------------------------------------------------------
@@ -373,14 +403,37 @@ async def test_register_returns_tier1_passport(cafe_client):
 
 
 @pytest.mark.asyncio
-async def test_register_without_agent_tag(cafe_client):
-    """Registration without agent_tag should still work (tag is optional)."""
+async def test_register_without_agent_tag_rejected(cafe_client):
+    """Registration without agent_tag should return 422 (tag is required)."""
     resp = await cafe_client.post("/passport/register", json={})
-    assert resp.status_code == 200
+    assert resp.status_code == 422
+
+    # Empty string should also be rejected
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": ""})
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_register_ip_rate_limit(cafe_client):
+    """Exceeding the IP rate limit on /passport/register should return 429."""
+    from agentcafe.cafe.passport import _register_hits, _REGISTER_RATE_LIMIT
+    # Clear any existing hits for the test client IP
+    _register_hits.clear()
+
+    # Send requests up to the limit — all should succeed
+    for i in range(_REGISTER_RATE_LIMIT):
+        resp = await cafe_client.post("/passport/register", json={"agent_tag": f"rate-test-{i}"})
+        assert resp.status_code == 200, f"Request {i} failed: {resp.text}"
+
+    # Next request should be rate limited
+    resp = await cafe_client.post("/passport/register", json={"agent_tag": "rate-test-overflow"})
+    assert resp.status_code == 429
     data = resp.json()
-    payload = decode_passport_token(data["passport"])
-    assert payload["tier"] == "read"
-    assert payload["agent_tag"] is None
+    assert data["error"] == "rate_limit_exceeded"
+    assert "Retry-After" in resp.headers
+
+    # Clean up
+    _register_hits.clear()
 
 
 @pytest.mark.asyncio

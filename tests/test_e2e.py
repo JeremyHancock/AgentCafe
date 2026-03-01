@@ -92,6 +92,8 @@ async def e2e_db(monkeypatch):
     monkeypatch.setattr(pages_module._state, "signing_secret", _SECRET)
     monkeypatch.setattr(router_module._state, "use_real_passport", True)
     monkeypatch.setattr(router_module._state, "issuer_api_key", _API_KEY)
+    # Clear IP rate limit state between tests
+    passport_module._register_hits.clear()
 
     # Mock HTTP client so backend proxy hits our mock
     mock_client = AsyncClient(transport=_E2EBackendTransport())

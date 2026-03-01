@@ -19,6 +19,7 @@ async def init_db(db_path: str) -> aiosqlite.Connection:
     """Initialize the database connection, create tables, and run migrations."""
     _state.db = await aiosqlite.connect(db_path)
     _state.db.row_factory = aiosqlite.Row
+    await _state.db.execute("PRAGMA foreign_keys = ON")
     await _state.db.executescript(SCHEMA_SQL)
     await _state.db.commit()
     await run_migrations(_state.db)

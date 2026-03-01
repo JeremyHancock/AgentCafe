@@ -35,6 +35,7 @@
     {% endif %}
 
     <form method="post" action="/authorize/{{ consent_id }}/approve">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
             <label for="token_lifetime">Token duration</label>
             <select id="token_lifetime" name="token_lifetime_seconds">
@@ -50,8 +51,12 @@
 
         <div class="btn-row">
             <button type="submit" class="btn btn-primary">Approve</button>
-            <a href="/authorize/{{ consent_id }}/decline" class="btn btn-outline">Decline</a>
         </div>
+    </form>
+
+    <form method="post" action="/authorize/{{ consent_id }}/decline" style="margin-top:8px; text-align:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-outline">Decline</button>
     </form>
 
     <hr class="divider">

@@ -6,11 +6,12 @@ Human session tokens use aud: "human-dashboard" for strict separation from agent
 
 from __future__ import annotations
 
-import hashlib
 import logging
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import bcrypt
 import jwt
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -70,9 +71,42 @@ class LoginResponse(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
 def _hash_password(password: str) -> str:
-    """Hash a password with SHA-256. MVP only — use bcrypt/argon2 for production."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password with bcrypt."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+
+def _verify_password(password: str, stored_hash: str) -> bool:
+    """Verify a password against a stored hash.
+
+    Supports both bcrypt hashes (current) and legacy SHA-256 hex hashes.
+    Returns True if the password matches.
+    """
+    if _SHA256_HEX_RE.match(stored_hash):
+        # Legacy SHA-256 hash — verify against it
+        import hashlib
+        return hashlib.sha256(password.encode()).hexdigest() == stored_hash
+    # bcrypt hash
+    try:
+        return bcrypt.checkpw(password.encode(), stored_hash.encode())
+    except (ValueError, TypeError):
+        return False
+
+
+async def _rehash_if_legacy(db, user_id: str, password: str, stored_hash: str) -> None:
+    """If the stored hash is legacy SHA-256, re-hash with bcrypt and update DB."""
+    if _SHA256_HEX_RE.match(stored_hash):
+        new_hash = _hash_password(password)
+        now = datetime.now(timezone.utc).isoformat()
+        await db.execute(
+            "UPDATE cafe_users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (new_hash, now, user_id),
+        )
+        await db.commit()
+        logger.info("Rehashed legacy SHA-256 password to bcrypt for user %s", user_id)
 
 
 def _create_human_session_token(user_id: str, email: str) -> str:
@@ -158,11 +192,14 @@ async def login_human(req: LoginRequest):
         "SELECT id, password_hash FROM cafe_users WHERE email = ?", (req.email.lower(),)
     )
     row = await cursor.fetchone()
-    if not row or row["password_hash"] != _hash_password(req.password):
+    if not row or not _verify_password(req.password, row["password_hash"]):
         raise HTTPException(
             status_code=401,
             detail={"error": "invalid_credentials", "message": "Invalid email or password."},
         )
+
+    # Rehash legacy SHA-256 passwords to bcrypt on successful login
+    await _rehash_if_legacy(db, row["id"], req.password, row["password_hash"])
 
     session_token = _create_human_session_token(row["id"], req.email.lower())
 

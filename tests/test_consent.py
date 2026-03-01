@@ -6,6 +6,8 @@ token exchange, token refresh, policy revocation, concurrent token cap.
 
 from __future__ import annotations
 
+import re
+
 import jwt
 import pytest
 import pytest_asyncio
@@ -41,6 +43,8 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(consent_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(pages_module._state, "signing_secret", TEST_SECRET)
     configure_keys(legacy_hs256_secret=TEST_SECRET)
+    # Clear IP rate limit state between tests
+    passport_module._register_hits.clear()
     yield
 
 
@@ -597,6 +601,154 @@ async def test_high_risk_cancel_gets_short_ceiling(cafe_client):
 
 
 # ---------------------------------------------------------------------------
+# Multi-action consent tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_multi_action_consent_initiate(cafe_client):
+    """POST /consents/initiate with action_ids list should create a multi-action consent."""
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_ids": ["search-availability", "book-room"],
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    consent_id = resp.json()["consent_id"]
+
+    # Check status
+    resp = await cafe_client.get(f"/consents/{consent_id}/status")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_multi_action_consent_full_flow(cafe_client):
+    """Multi-action consent: approve → exchange → token has all scopes and authorizations."""
+    agent_token = await _register_agent(cafe_client)
+    _user_id, human_session = await _register_human(cafe_client)
+
+    # Initiate with two actions
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_ids": ["search-availability", "book-room"],
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    consent_id = resp.json()["consent_id"]
+
+    # Human approves
+    resp = await cafe_client.post(
+        f"/consents/{consent_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {human_session}"},
+    )
+    assert resp.status_code == 200
+    policy_id = resp.json()["policy_id"]
+
+    # Exchange for token
+    resp = await cafe_client.post(
+        "/tokens/exchange",
+        json={"consent_id": consent_id},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    token_data = resp.json()
+    payload = decode_passport_token(token_data["token"])
+
+    # Token should have both scopes
+    assert "stayright-hotels:search-availability" in payload["scopes"]
+    assert "stayright-hotels:book-room" in payload["scopes"]
+
+    # Token should have authorizations for both actions
+    auth_actions = {a["action_id"] for a in payload["authorizations"]}
+    assert "search-availability" in auth_actions
+    assert "book-room" in auth_actions
+
+    # Use token for the read action
+    resp = await cafe_client.post("/cafe/order", json={
+        "service_id": "stayright-hotels",
+        "action_id": "search-availability",
+        "passport": token_data["token"],
+        "inputs": {"city": "Austin", "check_in": "2026-03-15", "check_out": "2026-03-18", "guests": 2},
+    })
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_multi_action_highest_risk_tier_wins(cafe_client):
+    """Multi-action consent should use the HIGHEST risk tier among actions."""
+    agent_token = await _register_agent(cafe_client)
+    _user_id, human_session = await _register_human(cafe_client)
+
+    # search-availability is low risk, cancel-booking is high risk
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_ids": ["search-availability", "cancel-booking"],
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    resp = await cafe_client.post(
+        f"/consents/{consent_id}/approve",
+        json={"token_lifetime_seconds": 7200},  # request 2 hours
+        headers={"Authorization": f"Bearer {human_session}"},
+    )
+    assert resp.status_code == 200
+
+    # Exchange and check — should be capped at high-risk ceiling (300s), not low (3600s)
+    resp = await cafe_client.post(
+        "/tokens/exchange",
+        json={"consent_id": consent_id},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    payload = decode_passport_token(resp.json()["token"])
+    lifetime = payload["exp"] - payload["iat"]
+    assert lifetime <= 300, f"Expected <=300s (high risk ceiling), got {lifetime}s"
+
+
+@pytest.mark.asyncio
+async def test_multi_action_missing_action_rejected(cafe_client):
+    """Initiating consent with a non-existent action in the list should return 404."""
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_ids": ["search-availability", "nonexistent-action"],
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 404
+    assert "nonexistent-action" in resp.json()["detail"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_initiate_no_action_rejected(cafe_client):
+    """Initiating consent with neither action_id nor action_ids should return 422."""
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Full flow integration test
 # ---------------------------------------------------------------------------
 
@@ -754,6 +906,25 @@ async def test_no_consent_enumeration_endpoint(cafe_client):
 # Consent page UI tests (server-rendered Jinja2 pages)
 # ---------------------------------------------------------------------------
 
+def _extract_csrf(html: str) -> str:
+    """Extract the CSRF token from an HTML form response."""
+    match = re.search(r'name="csrf_token"\s+value="([^"]+)"', html)
+    assert match, "CSRF token not found in HTML"
+    return match.group(1)
+
+
+async def _login_via_form(cafe_client, email: str, password: str) -> str | None:
+    """Login via the form flow (GET page → extract CSRF → POST). Returns session cookie."""
+    page = await cafe_client.get("/login")
+    csrf = _extract_csrf(page.text)
+    resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": password,
+        "csrf_token": csrf,
+    }, follow_redirects=False)
+    return resp.cookies.get("cafe_session")
+
+
 @pytest.mark.asyncio
 async def test_login_page_renders(cafe_client):
     """GET /login should return an HTML page."""
@@ -761,6 +932,7 @@ async def test_login_page_renders(cafe_client):
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "Sign in to AgentCafe" in resp.text
+    assert "csrf_token" in resp.text
 
 
 @pytest.mark.asyncio
@@ -774,14 +946,17 @@ async def test_register_page_renders(cafe_client):
 @pytest.mark.asyncio
 async def test_login_form_bad_password(cafe_client):
     """POST /login with wrong password should show error on the login page."""
-    # Register first
     await cafe_client.post("/human/register", json={
         "email": "pagetest@example.com",
         "password": "secure-password-123",
     })
+    # GET page for CSRF token
+    page = await cafe_client.get("/login")
+    csrf = _extract_csrf(page.text)
     resp = await cafe_client.post("/login", data={
         "email": "pagetest@example.com",
         "password": "wrong-password",
+        "csrf_token": csrf,
     }, follow_redirects=False)
     assert resp.status_code == 401
     assert "Invalid email or password" in resp.text
@@ -795,12 +970,8 @@ async def test_login_sets_session_cookie(cafe_client):
         "email": email,
         "password": "secure-password-123",
     })
-    resp = await cafe_client.post("/login", data={
-        "email": email,
-        "password": "secure-password-123",
-    }, follow_redirects=False)
-    assert resp.status_code == 303
-    assert "cafe_session" in resp.cookies
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+    assert session_cookie is not None
 
 
 @pytest.mark.asyncio
@@ -818,17 +989,12 @@ async def test_consent_page_redirects_without_session(cafe_client):
 @pytest.mark.asyncio
 async def test_consent_page_renders_for_logged_in_user(cafe_client):
     """GET /consent/<id> with a valid session should render the consent page."""
-    # Set up: register human, get session cookie
     email = f"consentpage-{__import__('uuid').uuid4().hex[:6]}@example.com"
     await cafe_client.post("/human/register", json={
         "email": email,
         "password": "secure-password-123",
     })
-    login_resp = await cafe_client.post("/login", data={
-        "email": email,
-        "password": "secure-password-123",
-    }, follow_redirects=False)
-    session_cookie = login_resp.cookies.get("cafe_session")
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
 
     # Create a consent via API
     agent_token = await _register_agent(cafe_client)
@@ -851,17 +1017,13 @@ async def test_consent_page_renders_for_logged_in_user(cafe_client):
 
 @pytest.mark.asyncio
 async def test_consent_page_approve_via_form(cafe_client):
-    """POST /consent/<id>/approve should approve and show success page."""
+    """POST /consent/<id>/approve with CSRF should approve and show success page."""
     email = f"approveform-{__import__('uuid').uuid4().hex[:6]}@example.com"
     await cafe_client.post("/human/register", json={
         "email": email,
         "password": "secure-password-123",
     })
-    login_resp = await cafe_client.post("/login", data={
-        "email": email,
-        "password": "secure-password-123",
-    }, follow_redirects=False)
-    session_cookie = login_resp.cookies.get("cafe_session")
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
 
     # Create consent
     agent_token = await _register_agent(cafe_client)
@@ -872,10 +1034,17 @@ async def test_consent_page_approve_via_form(cafe_client):
     )
     consent_id = resp.json()["consent_id"]
 
-    # Approve via form
+    # GET the consent page to get CSRF token
+    page = await cafe_client.get(
+        f"/authorize/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(page.text)
+
+    # Approve via form with CSRF token
     resp = await cafe_client.post(
         f"/authorize/{consent_id}/approve",
-        data={"token_lifetime_seconds": "900"},
+        data={"token_lifetime_seconds": "900", "csrf_token": csrf},
         cookies={"cafe_session": session_cookie},
         follow_redirects=False,
     )
@@ -889,17 +1058,13 @@ async def test_consent_page_approve_via_form(cafe_client):
 
 @pytest.mark.asyncio
 async def test_consent_page_decline(cafe_client):
-    """GET /consent/<id>/decline should decline and show decline page."""
+    """POST /consent/<id>/decline with CSRF should decline and show decline page."""
     email = f"declinetest-{__import__('uuid').uuid4().hex[:6]}@example.com"
     await cafe_client.post("/human/register", json={
         "email": email,
         "password": "secure-password-123",
     })
-    login_resp = await cafe_client.post("/login", data={
-        "email": email,
-        "password": "secure-password-123",
-    }, follow_redirects=False)
-    session_cookie = login_resp.cookies.get("cafe_session")
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
 
     agent_token = await _register_agent(cafe_client)
     resp = await cafe_client.post(
@@ -909,8 +1074,17 @@ async def test_consent_page_decline(cafe_client):
     )
     consent_id = resp.json()["consent_id"]
 
-    resp = await cafe_client.get(
+    # GET the consent page to get CSRF token
+    page = await cafe_client.get(
+        f"/authorize/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(page.text)
+
+    # Decline via POST with CSRF token
+    resp = await cafe_client.post(
         f"/authorize/{consent_id}/decline",
+        data={"csrf_token": csrf},
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200
@@ -919,3 +1093,10 @@ async def test_consent_page_decline(cafe_client):
     # Verify declined via API
     resp = await cafe_client.get(f"/consents/{consent_id}/status")
     assert resp.json()["status"] == "declined"
+
+
+@pytest.mark.asyncio
+async def test_decline_get_returns_405(cafe_client):
+    """GET /authorize/{id}/decline should return 405 (method not allowed)."""
+    resp = await cafe_client.get("/authorize/fake-id/decline")
+    assert resp.status_code == 405

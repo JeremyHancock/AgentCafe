@@ -5,6 +5,7 @@ These are the agent-facing endpoints. Agents interact only with these.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -14,7 +15,7 @@ from datetime import datetime, timezone
 
 import httpx
 import jwt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from agentcafe.cafe.menu import get_full_menu
@@ -407,9 +408,9 @@ async def place_order(req: OrderRequest):
 # ---------------------------------------------------------------------------
 
 @router.get("/admin/overview")
-async def admin_overview(api_key: str = ""):
-    """Platform admin overview: full Menu + audit stats. Requires ISSUER_API_KEY."""
-    if not api_key or api_key != _state.issuer_api_key:
+async def admin_overview(x_api_key: str | None = Header(default=None, alias="X-Api-Key")):
+    """Platform admin overview: full Menu + audit stats. Requires ISSUER_API_KEY via X-Api-Key header."""
+    if not x_api_key or x_api_key != _state.issuer_api_key:
         raise HTTPException(status_code=403, detail={"error": "forbidden", "message": "Invalid admin key."})
 
     db = await get_db()
@@ -468,16 +469,19 @@ async def admin_overview(api_key: str = ""):
 class SuspendRequest(BaseModel):
     """Request body for service suspension."""
     reason: str = ""
-    api_key: str
 
 
 @router.post("/services/{service_id}/suspend")
-async def suspend_service(service_id: str, req: SuspendRequest):
+async def suspend_service(
+    service_id: str,
+    req: SuspendRequest,
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+):
     """Suspend a service immediately. All future orders return 503.
 
-    Requires the ISSUER_API_KEY for authorization (admin-only).
+    Requires the ISSUER_API_KEY via X-Api-Key header (admin-only).
     """
-    if req.api_key != _state.issuer_api_key:
+    if not x_api_key or x_api_key != _state.issuer_api_key:
         raise HTTPException(status_code=403, detail={"error": "forbidden"})
 
     db = await get_db()
@@ -534,6 +538,7 @@ def _check_human_authorization_mvp(passport: str, service_id: str, action_id: st
 
 
 _GENESIS_HASH = "0" * 64
+_audit_lock = asyncio.Lock()
 
 
 async def verify_audit_chain(db) -> dict:
@@ -545,8 +550,8 @@ async def verify_audit_chain(db) -> dict:
     cursor = await db.execute(
         """SELECT id, timestamp, service_id, action_id, passport_hash,
                   inputs_hash, outcome, response_code, latency_ms,
-                  prev_hash, entry_hash
-           FROM audit_log ORDER BY timestamp ASC"""
+                  prev_hash, entry_hash, seq
+           FROM audit_log ORDER BY seq ASC, timestamp ASC"""
     )
     rows = await cursor.fetchall()
 
@@ -578,35 +583,41 @@ async def verify_audit_chain(db) -> dict:
 async def _audit_log(
     db, req: OrderRequest, outcome: str, response_code: int, latency_ms: int = 0
 ) -> None:
-    """Write a hash-chained entry to the audit log."""
-    # Fetch the most recent entry's hash for chaining
-    cursor = await db.execute(
-        "SELECT entry_hash FROM audit_log ORDER BY timestamp DESC LIMIT 1"
-    )
-    prev_row = await cursor.fetchone()
-    prev_hash = prev_row["entry_hash"] if prev_row and prev_row["entry_hash"] else _GENESIS_HASH
+    """Write a hash-chained entry to the audit log.
 
-    entry_id = str(uuid.uuid4())
-    timestamp = datetime.now(timezone.utc).isoformat()
-    passport_hash = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
-    inputs_hash = hashlib.sha256(json.dumps(req.inputs, sort_keys=True).encode()).hexdigest()[:16]
+    Uses an asyncio Lock to serialize SELECT prev_hash + INSERT, preventing
+    concurrent tasks from forking the hash chain.
+    """
+    async with _audit_lock:
+        # Fetch the most recent entry's hash for chaining (ordered by seq)
+        cursor = await db.execute(
+            "SELECT entry_hash, seq FROM audit_log WHERE seq IS NOT NULL ORDER BY seq DESC LIMIT 1"
+        )
+        prev_row = await cursor.fetchone()
+        prev_hash = prev_row["entry_hash"] if prev_row and prev_row["entry_hash"] else _GENESIS_HASH
+        next_seq = (prev_row["seq"] + 1) if prev_row and prev_row["seq"] is not None else 1
 
-    # Compute entry hash: SHA-256(prev_hash || all fields)
-    chain_input = "|".join([
-        prev_hash, entry_id, timestamp, req.service_id, req.action_id,
-        passport_hash, inputs_hash, outcome, str(response_code), str(latency_ms),
-    ])
-    entry_hash = hashlib.sha256(chain_input.encode()).hexdigest()
+        entry_id = str(uuid.uuid4())
+        timestamp = datetime.now(timezone.utc).isoformat()
+        passport_hash = hashlib.sha256(req.passport.encode()).hexdigest()[:16]
+        inputs_hash = hashlib.sha256(json.dumps(req.inputs, sort_keys=True).encode()).hexdigest()[:16]
 
-    await db.execute(
-        """INSERT INTO audit_log (id, timestamp, service_id, action_id, passport_hash,
-                                   inputs_hash, outcome, response_code, latency_ms,
-                                   prev_hash, entry_hash)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            entry_id, timestamp, req.service_id, req.action_id,
-            passport_hash, inputs_hash, outcome, response_code, latency_ms,
-            prev_hash, entry_hash,
-        ),
-    )
-    await db.commit()
+        # Compute entry hash: SHA-256(prev_hash || all fields)
+        chain_input = "|".join([
+            prev_hash, entry_id, timestamp, req.service_id, req.action_id,
+            passport_hash, inputs_hash, outcome, str(response_code), str(latency_ms),
+        ])
+        entry_hash = hashlib.sha256(chain_input.encode()).hexdigest()
+
+        await db.execute(
+            """INSERT INTO audit_log (id, timestamp, service_id, action_id, passport_hash,
+                                       inputs_hash, outcome, response_code, latency_ms,
+                                       prev_hash, entry_hash, seq)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                entry_id, timestamp, req.service_id, req.action_id,
+                passport_hash, inputs_hash, outcome, response_code, latency_ms,
+                prev_hash, entry_hash, next_seq,
+            ),
+        )
+        await db.commit()

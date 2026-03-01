@@ -45,6 +45,9 @@ class CafeConfig:
     # Backend credential encryption
     encryption_key: str = ""
 
+    # Service quarantine (days after publish before Tier-1 access allowed)
+    quarantine_days: int = 7
+
     # CORS
     cors_allowed_origins: str = "*"
 
@@ -84,6 +87,7 @@ def load_config() -> CafeConfig:
         passport_rsa_private_key=os.getenv("PASSPORT_RSA_PRIVATE_KEY", ""),
         passport_rsa_key_file=os.getenv("PASSPORT_RSA_KEY_FILE", ""),
         encryption_key=os.getenv("CAFE_ENCRYPTION_KEY", ""),
+        quarantine_days=int(os.getenv("QUARANTINE_DAYS", "7")),
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),
     )

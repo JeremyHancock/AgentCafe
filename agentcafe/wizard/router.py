@@ -56,13 +56,15 @@ wizard_router = APIRouter(prefix="/wizard", tags=["wizard"])
 class _State:
     """Module-level mutable state (avoids global statements)."""
     signing_secret: str = ""
+    quarantine_days: int = 7
 
 _state = _State()
 
 
-def configure_wizard(signing_secret: str) -> None:
+def configure_wizard(signing_secret: str, quarantine_days: int = 7) -> None:
     """Set the signing secret for wizard session tokens. Called once at startup."""
     _state.signing_secret = signing_secret
+    _state.quarantine_days = quarantine_days
 
 
 def _create_session_token(company_id: str) -> str:
@@ -567,7 +569,7 @@ async def publish_draft_endpoint(
         raise HTTPException(status_code=403, detail={"error": "not_owner", "message": "You do not own this draft."})
 
     try:
-        result = await publish_draft(db, draft_id)
+        result = await publish_draft(db, draft_id, quarantine_days=_state.quarantine_days)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"error": str(exc)}) from exc
 

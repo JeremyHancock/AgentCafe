@@ -25,6 +25,7 @@ logger = logging.getLogger("agentcafe.wizard.publisher")
 async def publish_draft(
     db: aiosqlite.Connection,
     draft_id: str,
+    quarantine_days: int = 7,
 ) -> PublishResponse:
     """Publish a draft to the live Menu.
 
@@ -70,7 +71,7 @@ async def publish_draft(
         is_republish = True
 
     now = datetime.now(timezone.utc).isoformat()
-    quarantine_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    quarantine_until = (datetime.now(timezone.utc) + timedelta(days=quarantine_days)).isoformat()
 
     # --- Atomic transaction: publish service + proxy configs ---
     try:

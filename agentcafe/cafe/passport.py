@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 import jwt
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from agentcafe.db.engine import get_db
@@ -53,9 +56,36 @@ class AuthorizationEntry(BaseModel):
     limits: dict | None = None
 
 
+# ---------------------------------------------------------------------------
+# IP-based rate limiter for /passport/register
+# ---------------------------------------------------------------------------
+
+_REGISTER_RATE_LIMIT = 30  # max requests per window
+_REGISTER_RATE_WINDOW = 60  # window in seconds
+_register_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_register_rate_limit(client_ip: str) -> tuple[bool, int]:
+    """Check if the client IP has exceeded the registration rate limit.
+
+    Returns (allowed, retry_after_seconds). Cleans up expired entries.
+    """
+    now = time.monotonic()
+    cutoff = now - _REGISTER_RATE_WINDOW
+    hits = _register_hits[client_ip]
+    # Prune old entries
+    _register_hits[client_ip] = hits = [t for t in hits if t > cutoff]
+    if len(hits) >= _REGISTER_RATE_LIMIT:
+        oldest = hits[0]
+        retry_after = int(oldest - cutoff) + 1
+        return False, max(retry_after, 1)
+    hits.append(now)
+    return True, 0
+
+
 class RegisterRequest(BaseModel):
     """Request body for POST /passport/register (Tier-1)."""
-    agent_tag: str | None = Field(default=None, description="Untrusted self-reported agent label. Audit trail only.")
+    agent_tag: str = Field(min_length=1, description="Required self-reported agent label. Used for audit trail and rate-limit grouping.")
 
 
 class RegisterResponse(BaseModel):
@@ -205,16 +235,28 @@ _TIER1_LIFETIME_HOURS = 3
 
 
 @passport_router.post("/passport/register", response_model=RegisterResponse)
-async def register_agent(req: RegisterRequest):
+async def register_agent(req: RegisterRequest, request: Request):
     """Register an agent and receive a Tier-1 read-only Passport.
 
-    No authentication required. The agent provides an optional agent_tag
-    (untrusted, for audit trail only). The Cafe returns a rate-limited
-    read Passport with a hashed agent handle for tracking.
+    Requires a non-empty agent_tag. IP-based rate limiting enforced
+    (default 30/min). The Cafe returns a rate-limited read Passport
+    with a hashed agent handle for tracking.
 
     See docs/passport/v2-spec.md §3.1.
     """
-    tag = req.agent_tag or ""
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = _check_register_rate_limit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limit_exceeded",
+                "message": f"Too many registration requests. Try again in {retry_after}s.",
+                "retry_after_seconds": retry_after,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+    tag = req.agent_tag
     agent_handle = hashlib.sha256(
         f"agent:{tag}:{uuid.uuid4()}".encode()
     ).hexdigest()[:16]
@@ -301,22 +343,46 @@ async def issue_passport(
 # ---------------------------------------------------------------------------
 
 @passport_router.post("/cafe/revoke")
-async def revoke_passport(req: RevokeRequest):
+async def revoke_passport(
+    req: RevokeRequest,
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+):
     """Revoke a Passport by adding its jti to the blacklist.
 
-    Accepts the full passport token, extracts the jti, and blacklists it.
+    Authentication required:
+    - Admin: provide X-Api-Key header matching ISSUER_API_KEY
+    - Self-revoke: the passport token must have a valid cryptographic signature
+      (proof-of-possession — only the holder of a legitimately issued token can revoke it)
     """
-    # Decode without full verification — we just need the jti
-    try:
-        payload = decode_passport_token(
-            req.passport,
-            options={"verify_exp": False, "verify_aud": False, "require": []},
-        )
-    except jwt.InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "invalid_token", "message": "Could not decode the passport."},
-        ) from exc
+    is_admin = bool(x_api_key and _state.issuer_api_key and x_api_key == _state.issuer_api_key)
+
+    if is_admin:
+        # Admin path — decode without strict verification (can revoke expired tokens)
+        try:
+            payload = decode_passport_token(
+                req.passport,
+                options={"verify_exp": False, "verify_aud": False, "require": []},
+            )
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_token", "message": "Could not decode the passport."},
+            ) from exc
+    else:
+        # Self-revoke path — signature MUST be valid (proof-of-possession)
+        try:
+            payload = decode_passport_token(
+                req.passport,
+                options={"verify_exp": False, "verify_aud": False, "require": ["jti"]},
+            )
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "unauthorized_revocation",
+                    "message": "Revocation requires a valid token signature (self-revoke) or X-Api-Key header (admin).",
+                },
+            ) from exc
 
     jti = payload.get("jti")
     if not jti:

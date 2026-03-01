@@ -52,7 +52,7 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret)
-    configure_wizard(cfg.passport_signing_secret)
+    configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
@@ -77,11 +77,16 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
         description="The Cafe for Agents. Browse the Menu, present your Passport, and order.",
         lifespan=lifespan,
     )
-    origins = [o.strip() for o in cors_origins.split(",")] if cors_origins != "*" else ["*"]
+    if cors_origins == "*":
+        origins = ["*"]
+        allow_creds = False  # CORS spec forbids * + credentials=True
+    else:
+        origins = [o.strip() for o in cors_origins.split(",")]
+        allow_creds = True
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=allow_creds,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -154,7 +159,7 @@ async def main() -> None:
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret)
-    configure_wizard(cfg.passport_signing_secret)
+    configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
