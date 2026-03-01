@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from agentcafe.cafe.human import validate_human_session
 from agentcafe.db.engine import get_db
+from agentcafe.keys import sign_passport_token, decode_passport_token
 
 logger = logging.getLogger("agentcafe.consent")
 
@@ -125,15 +126,7 @@ def _validate_agent_passport(authorization: str) -> dict:
         raise HTTPException(status_code=401, detail={"error": "missing_passport"})
     token = authorization[7:]
     try:
-        payload = jwt.decode(
-            token,
-            _state.signing_secret,
-            algorithms=["HS256"],
-            issuer="agentcafe",
-            audience="agentcafe",
-            options={"require": ["exp", "iat", "jti", "sub", "iss", "aud"]},
-        )
-        return payload
+        return decode_passport_token(token)
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(status_code=401, detail={"error": "passport_expired"}) from exc
     except jwt.InvalidTokenError as exc:
@@ -190,7 +183,7 @@ def _issue_tier2_token(
         "agent_tag": agent_tag,
     }
 
-    token = jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+    token = sign_passport_token(payload)
     return token, exp.isoformat(), jti
 
 
@@ -501,14 +494,7 @@ async def refresh_token(authorization: str = Header(default="")):
 
     token_str = authorization[7:]
     try:
-        payload = jwt.decode(
-            token_str,
-            _state.signing_secret,
-            algorithms=["HS256"],
-            issuer="agentcafe",
-            audience="agentcafe",
-            options={"require": ["exp", "iat", "jti", "sub", "iss", "aud"]},
-        )
+        payload = decode_passport_token(token_str)
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(status_code=401, detail={"error": "passport_expired"}) from exc
     except jwt.InvalidTokenError as exc:

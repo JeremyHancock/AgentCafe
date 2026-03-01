@@ -54,39 +54,58 @@ async def publish_draft(
     backend_auth_header = encrypt(draft.get("backend_auth_header", ""))
     policy_data = json.loads(draft.get("policy_json") or "{}")
 
-    # Check service_id uniqueness
+    # Check if this is a re-publish (edit flow) or a new service
     cursor = await db.execute(
-        "SELECT 1 FROM published_services WHERE service_id = ?",
+        "SELECT company_id FROM published_services WHERE service_id = ?",
         (service_id,),
     )
-    if await cursor.fetchone():
-        raise ValueError(
-            f"A service with ID '{service_id}' already exists on the Menu. "
-            "Please choose a different service_id."
-        )
+    existing = await cursor.fetchone()
+    is_republish = False
+    if existing:
+        if existing["company_id"] != company_id:
+            raise ValueError(
+                f"A service with ID '{service_id}' already exists on the Menu "
+                "and is owned by a different company."
+            )
+        is_republish = True
 
     now = datetime.now(timezone.utc).isoformat()
     quarantine_until = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
 
     # --- Atomic transaction: publish service + proxy configs ---
     try:
-        # Insert published service
-        await db.execute(
-            """INSERT INTO published_services
-               (id, company_id, service_id, name, description, menu_entry_json,
-                status, published_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?)""",
-            (
-                str(uuid.uuid4()),
-                company_id,
-                service_id,
-                name,
-                description,
-                json.dumps(final_menu),
-                now,
-                now,
-            ),
-        )
+        if is_republish:
+            # Update existing published service
+            await db.execute(
+                """UPDATE published_services
+                   SET name = ?, description = ?, menu_entry_json = ?,
+                       status = 'live', updated_at = ?
+                   WHERE service_id = ?""",
+                (name, description, json.dumps(final_menu), now, service_id),
+            )
+            # Remove old proxy configs (replaced below)
+            await db.execute(
+                "DELETE FROM proxy_configs WHERE service_id = ?",
+                (service_id,),
+            )
+        else:
+            # Insert new published service
+            await db.execute(
+                """INSERT INTO published_services
+                   (id, company_id, service_id, name, description, menu_entry_json,
+                    status, published_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'live', ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    company_id,
+                    service_id,
+                    name,
+                    description,
+                    json.dumps(final_menu),
+                    now,
+                    now,
+                ),
+            )
 
         # Build and insert proxy configs from the final menu + policy
         actions = final_menu.get("actions", [])

@@ -612,18 +612,17 @@ async def test_wizard_full_flow(wizard_client):
 
 
 @pytest.mark.asyncio
-async def test_wizard_publish_duplicate_service_id_rejected(wizard_client):
-    """Publishing a duplicate service_id returns an error."""
-    # Create company and two drafts with the same service_id
+async def test_wizard_republish_same_company_succeeds(wizard_client):
+    """Same company re-publishing the same service_id updates the existing service."""
     company_resp = await wizard_client.post("/wizard/companies", json={
-        "name": "DupeCorp",
-        "email": "dupe-svc@test.example.com",
+        "name": "RepubCorp",
+        "email": "repub@test.example.com",
         "password": "pass1234",
     })
     token = company_resp.json()["session_token"]
     auth = {"Authorization": f"Bearer {token}"}
 
-    # First draft — full flow to publish
+    # First publish
     parse1 = await wizard_client.post("/wizard/specs/parse", json={
         "raw_spec": SAMPLE_OPENAPI_JSON,
     }, headers=auth)
@@ -631,12 +630,12 @@ async def test_wizard_publish_duplicate_service_id_rejected(wizard_client):
     candidate = parse1.json()["candidate_menu"]
 
     await wizard_client.put(f"/wizard/drafts/{draft_id_1}/review", json={
-        "service_id": "unique-pets",
-        "name": "Unique Pets",
+        "service_id": "repub-pets",
+        "name": "Repub Pets",
         "actions": candidate["actions"],
         "excluded_actions": [],
     }, headers=auth)
-    policy = {a["action_id"]: {"scope": f"unique-pets:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"} for a in candidate["actions"]}
+    policy = {a["action_id"]: {"scope": f"repub-pets:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"} for a in candidate["actions"]}
     await wizard_client.put(f"/wizard/drafts/{draft_id_1}/policy", json={
         "actions": policy,
         "backend_url": "https://api.example.com",
@@ -645,25 +644,70 @@ async def test_wizard_publish_duplicate_service_id_rejected(wizard_client):
     pub1 = await wizard_client.post(f"/wizard/drafts/{draft_id_1}/publish", headers=auth)
     assert pub1.status_code == 200
 
-    # Second draft — same service_id should fail
+    # Re-publish same service_id — should succeed (update)
     parse2 = await wizard_client.post("/wizard/specs/parse", json={
         "raw_spec": SAMPLE_OPENAPI_JSON,
     }, headers=auth)
     draft_id_2 = parse2.json()["draft_id"]
 
     await wizard_client.put(f"/wizard/drafts/{draft_id_2}/review", json={
-        "service_id": "unique-pets",
-        "name": "Unique Pets Again",
+        "service_id": "repub-pets",
+        "name": "Repub Pets Updated",
         "actions": candidate["actions"],
-        "excluded_actions": [],
+        "excluded_actions": ["delete-pet"],
     }, headers=auth)
+    policy2 = {a["action_id"]: {"scope": f"repub-pets:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"} for a in candidate["actions"] if a["action_id"] != "delete-pet"}
     await wizard_client.put(f"/wizard/drafts/{draft_id_2}/policy", json={
-        "actions": policy,
+        "actions": policy2,
         "backend_url": "https://api.example.com",
     }, headers=auth)
     await wizard_client.get(f"/wizard/drafts/{draft_id_2}/preview", headers=auth)
     pub2 = await wizard_client.post(f"/wizard/drafts/{draft_id_2}/publish", headers=auth)
-    assert pub2.status_code == 400
+    assert pub2.status_code == 200
+    assert pub2.json()["actions_published"] == 3  # delete-pet excluded
+
+    # Verify the Menu shows updated name
+    menu_resp = await wizard_client.get("/cafe/menu")
+    svc = next(s for s in menu_resp.json()["services"] if s["service_id"] == "repub-pets")
+    assert svc["name"] == "Repub Pets Updated"
+    assert len(svc["actions"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_wizard_publish_cross_company_duplicate_rejected(wizard_client):
+    """A different company publishing the same service_id is rejected."""
+    # Company A publishes
+    _auth_a, _svc_id = await _publish_service(wizard_client, "cross-pets", "cross-a@test.example.com")
+
+    # Company B tries to publish with the same service_id
+    resp_b = await wizard_client.post("/wizard/companies", json={
+        "name": "CompanyB",
+        "email": "cross-b@test.example.com",
+        "password": "pass1234",
+    })
+    token_b = resp_b.json()["session_token"]
+    auth_b = {"Authorization": f"Bearer {token_b}"}
+
+    parse_b = await wizard_client.post("/wizard/specs/parse", json={
+        "raw_spec": SAMPLE_OPENAPI_JSON,
+    }, headers=auth_b)
+    draft_id_b = parse_b.json()["draft_id"]
+    candidate = parse_b.json()["candidate_menu"]
+
+    await wizard_client.put(f"/wizard/drafts/{draft_id_b}/review", json={
+        "service_id": "cross-pets",
+        "name": "Stolen Pets",
+        "actions": candidate["actions"],
+        "excluded_actions": [],
+    }, headers=auth_b)
+    policy = {a["action_id"]: {"scope": f"cross-pets:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"} for a in candidate["actions"]}
+    await wizard_client.put(f"/wizard/drafts/{draft_id_b}/policy", json={
+        "actions": policy,
+        "backend_url": "https://api.example.com",
+    }, headers=auth_b)
+    await wizard_client.get(f"/wizard/drafts/{draft_id_b}/preview", headers=auth_b)
+    pub_b = await wizard_client.post(f"/wizard/drafts/{draft_id_b}/publish", headers=auth_b)
+    assert pub_b.status_code == 400
 
 
 # ===========================================================================
@@ -1105,3 +1149,98 @@ async def test_wizard_preview_includes_confidence(wizard_client):
     # Per-action confidence
     for action in final["actions"]:
         assert "confidence" in action
+
+
+# ===========================================================================
+# Edit-after-publish tests (Phase 6)
+# ===========================================================================
+
+@pytest.mark.asyncio
+async def test_edit_published_service_creates_draft(wizard_client):
+    """POST /wizard/services/{id}/edit creates a pre-populated draft."""
+    auth, svc_id = await _publish_service(wizard_client, "edit-pets", "edit@test.example.com")
+
+    resp = await wizard_client.post(f"/wizard/services/{svc_id}/edit", headers=auth)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "draft_id" in data
+    assert data["service_id"] == svc_id
+    assert "Draft created" in data["message"]
+
+
+@pytest.mark.asyncio
+async def test_edit_then_republish_updates_service(wizard_client):
+    """Full edit flow: edit → review → policy → preview → publish updates the service."""
+    auth, svc_id = await _publish_service(wizard_client, "editflow-pets", "editflow@test.example.com")
+
+    # Verify original name on Menu
+    menu_resp = await wizard_client.get("/cafe/menu")
+    svc = next(s for s in menu_resp.json()["services"] if s["service_id"] == svc_id)
+    assert svc["name"] == "MgmtPets Store"
+    original_actions = svc["actions"]
+
+    # Edit the published service
+    edit_resp = await wizard_client.post(f"/wizard/services/{svc_id}/edit", headers=auth)
+    draft_id = edit_resp.json()["draft_id"]
+
+    # Review with updated name (use the original actions from the Menu)
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/review", json={
+        "service_id": svc_id,
+        "name": "EditFlow Pets UPDATED",
+        "actions": original_actions,
+        "excluded_actions": [],
+    }, headers=auth)
+
+    # Policy
+    policy = {
+        a["action_id"]: {"scope": f"{svc_id}:{a['action_id']}", "human_auth": False, "rate_limit": "60/minute"}
+        for a in original_actions
+    }
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/policy", json={
+        "actions": policy,
+        "backend_url": "https://api.example.com",
+    }, headers=auth)
+
+    # Preview
+    preview_resp = await wizard_client.get(f"/wizard/drafts/{draft_id}/preview", headers=auth)
+    assert preview_resp.status_code == 200
+
+    # Re-publish
+    pub_resp = await wizard_client.post(f"/wizard/drafts/{draft_id}/publish", headers=auth)
+    assert pub_resp.status_code == 200
+
+    # Verify updated name on Menu
+    menu_resp = await wizard_client.get("/cafe/menu")
+    svc = next(s for s in menu_resp.json()["services"] if s["service_id"] == svc_id)
+    assert svc["name"] == "EditFlow Pets UPDATED"
+
+
+@pytest.mark.asyncio
+async def test_edit_unpublished_service_rejected(wizard_client):
+    """Cannot edit an unpublished service."""
+    auth, svc_id = await _publish_service(wizard_client, "unpubedit-pets", "unpubedit@test.example.com")
+
+    # Unpublish first
+    await wizard_client.put(f"/wizard/services/{svc_id}/unpublish", headers=auth)
+
+    # Try to edit — should fail
+    resp = await wizard_client.post(f"/wizard/services/{svc_id}/edit", headers=auth)
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "service_unpublished"
+
+
+@pytest.mark.asyncio
+async def test_edit_other_company_service_rejected(wizard_client):
+    """Cannot edit another company's published service."""
+    _auth_a, svc_id = await _publish_service(wizard_client, "otheredit-pets", "otheredit-a@test.example.com")
+
+    # Company B
+    resp_b = await wizard_client.post("/wizard/companies", json={
+        "name": "CompanyB",
+        "email": "otheredit-b@test.example.com",
+        "password": "pass1234",
+    })
+    auth_b = {"Authorization": f"Bearer {resp_b.json()['session_token']}"}
+
+    resp = await wizard_client.post(f"/wizard/services/{svc_id}/edit", headers=auth_b)
+    assert resp.status_code == 403

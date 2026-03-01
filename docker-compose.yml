@@ -1,4 +1,4 @@
-# AgentCafe — Docker Compose (Phase 2.1)
+# AgentCafe — Docker Compose (Phase 6 hardened)
 #
 # Runs the Cafe and 3 demo backends as separate containers on a shared network.
 # The Cafe proxies requests to backends by service name (real HTTP, not in-process).
@@ -7,6 +7,12 @@
 #   docker compose up --build
 #   curl http://localhost:8000/cafe/menu
 #   docker compose down
+#
+# Production notes:
+#   - Set PASSPORT_SIGNING_SECRET to a strong random value (≥32 bytes)
+#   - Set OPENAI_API_KEY for the wizard AI enrichment (LiteLLM)
+#   - SQLite DB persists in the cafe_data volume across restarts
+#   - RS256 passport signing auto-generates keys in dev; set PASSPORT_RSA_PRIVATE_KEY for production
 
 services:
   cafe:
@@ -23,7 +29,13 @@ services:
       - HOME_SERVICE_BACKEND_HOST=home-service
       - HOME_SERVICE_BACKEND_PORT=8003
       - CAFE_DESIGN_DIR=/app/docs/design
-      - CAFE_DB_PATH=/app/agentcafe.db
+      - CAFE_DB_PATH=/app/data/agentcafe.db
+      - PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!!
+      - ISSUER_API_KEY=admin123
+      - USE_REAL_PASSPORT=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - cafe_data:/app/data
     depends_on:
       hotel:
         condition: service_healthy
@@ -36,7 +48,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 15s
+    restart: unless-stopped
 
   hotel:
     build: .
@@ -49,6 +62,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
 
   lunch:
     build: .
@@ -61,6 +75,7 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
 
   home-service:
     build: .
@@ -73,3 +88,8 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  cafe_data:
+    driver: local

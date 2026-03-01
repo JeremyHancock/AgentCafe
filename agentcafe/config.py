@@ -33,10 +33,14 @@ class CafeConfig:
     # Path to design files (single source of truth for Menu entries)
     design_dir: str = ""
 
-    # Passport system (Phase 2)
-    passport_signing_secret: str = ""
+    # Passport system (Phase 2 HS256 sessions, Phase 6 RS256 passports)
+    passport_signing_secret: str = ""  # HS256 — internal session tokens (human, wizard)
     issuer_api_key: str = ""
     use_real_passport: bool = False
+
+    # RS256 passport signing (Phase 6)
+    passport_rsa_private_key: str = ""  # PEM string (e.g. from env var)
+    passport_rsa_key_file: str = ""     # path to PEM file (alternative)
 
     # Backend credential encryption
     encryption_key: str = ""
@@ -77,6 +81,8 @@ def load_config() -> CafeConfig:
         passport_signing_secret=os.getenv("PASSPORT_SIGNING_SECRET", secrets.token_urlsafe(32)),
         issuer_api_key=os.getenv("ISSUER_API_KEY", ""),
         use_real_passport=os.getenv("USE_REAL_PASSPORT", "false").lower() == "true",
+        passport_rsa_private_key=os.getenv("PASSPORT_RSA_PRIVATE_KEY", ""),
+        passport_rsa_key_file=os.getenv("PASSPORT_RSA_KEY_FILE", ""),
         encryption_key=os.getenv("CAFE_ENCRYPTION_KEY", ""),
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),

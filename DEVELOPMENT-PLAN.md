@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 3.2 complete. Passport V2 design fully converged (8 locked positions, MVP scope defined). ADR-023 + ADR-024 recorded.  
-**Last Updated:** February 27, 2026
+**Current Status:** Phase 6 complete (194 tests, pylint 10.00/10). v0.1.0 ready. Phase 7 next (Deployment & Real-Agent Beta).  
+**Last Updated:** March 1, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -109,12 +109,48 @@ We can run end-to-end locally:
 - ✅ **Local admin dashboard** — `/admin` page with ISSUER_API_KEY login gate. Calls `GET /cafe/admin/overview` (protected endpoint returning full Menu + audit stats). Shows 6 stat cards (services, actions, total requests, 24h requests, quarantine count, suspended count), expandable service cards with quarantine/suspended badges, per-service request stats, per-action security table, and recent audit log (last 50 entries).
 - ✅ **Dashboard UX polish** — Confidence badges simplified to single "Review suggested" / "Needs review" hints (hidden when high confidence). Removed confidence from preview step (agent-facing view). Unpublish requires confirmation dialog with permanent-action warning. Spec input text persists on back-navigation. `example_response` model accepts any JSON type (dict, list, string, etc.). Error handler properly stringifies object error details. Sample spec at `dashboard/sample-spec.yaml`.
 
-**Phase 6: Packaging & Release Prep**
-- ⬜ **Passport signing key management** — migrate from single HS256 secret → RS256 asymmetric with cloud KMS (private key never leaves KMS, JWKS endpoint for public keys, `kid` in JWT header, dual-key rotation). Addresses single-key compromise risk identified in §3. Moved from Phase 4 — requires production infrastructure decisions.
-- ⬜ Production Docker images (multi-stage builds, hardened base images)
-- ⬜ Docker Compose hardening: set `PASSPORT_SIGNING_SECRET` env var, add SQLite volume for persistence, install `[wizard]` deps in image, add `OPENAI_API_KEY` for LiteLLM
-- ⬜ **Edit published service** — create new draft from existing published service config, re-enter wizard flow, re-publish overwrites existing. Requires backend `POST /wizard/services/{id}/edit` endpoint.
-- ⬜ Open-core split, launch assets
+**Phase 6: Packaging & Release Prep** (finish first — blocking for any public release)
+- ✅ **Passport signing key management** — RS256 asymmetric signing via `agentcafe/keys.py`. JWKS endpoint at `/.well-known/jwks.json`, `kid` in JWT header, dual-key rotation support. HS256 legacy fallback for migration window. Config: `PASSPORT_RSA_PRIVATE_KEY` (PEM env var) or `PASSPORT_RSA_KEY_FILE` (file path), auto-generates in dev. 12 new tests in `test_keys.py`.
+- ✅ **Production Docker images** — multi-stage build (builder + runtime), `python:3.12-slim` base, non-root `cafe` user, `[wizard]` deps (LiteLLM) included, templates and design files copied.
+- ✅ **Docker Compose hardening** — SQLite persistent volume (`cafe_data`), `USE_REAL_PASSPORT=true`, `OPENAI_API_KEY` passthrough, `restart: unless-stopped`, DB path in `/app/data/`, production notes in header.
+- ✅ **Edit published service** — `POST /wizard/services/{id}/edit` creates a pre-populated draft (wizard_step=3) from the live Menu entry + proxy configs. Re-publishing via the normal wizard flow updates the existing service in-place (publisher detects same company + service_id → UPDATE instead of INSERT). Cross-company duplicate service_id still rejected. 6 new tests (edit creates draft, full edit→republish flow, unpublished rejection, cross-company rejection, same-company re-publish, cross-company duplicate). `EditServiceResponse` model added.
+- ✅ **Open-core split, launch assets** — MIT LICENSE file, README updated for v0.1.0 (194 tests, RS256 architecture, edit-after-publish, production Docker), project layout reflects current state.
+
+**Phase 7: Deployment & Real-Agent Beta** (starts immediately after Phase 6)
+
+**Deployment Pipeline**
+- ⬜ Cloud platform deploy (Fly.io or Railway) — one-command deploy
+- ⬜ TLS + custom domains (`api.agentcafe.com`, `cafe.agentcafe.com` for dashboard)
+- ⬜ CI/CD via GitHub Actions (lint → test → build → deploy on main)
+- ⬜ Structured JSON logs with request IDs + platform-native metrics
+- SQLite remains for beta (handles expected load; Postgres migration deferred to Phase 8)
+
+**Real-Agent Testing & Dogfooding**
+- ⬜ Public Menu endpoint live (`GET /cafe/menu` requires no auth)
+- ⬜ Integration examples: copy-paste snippets for GPT function calling, Claude tool use, and LangGraph
+- ⬜ Test with 3–5 real external agents (GPT-4o, Claude 4, Grok-3, plus 1–2 custom agents)
+- ⬜ Immediate dogfooding: connect our own agents to the live instance
+- ⬜ Feedback capture: log what agents struggle with (Menu clarity, consent flow, error messages, rate limits) and feed into v2
+
+**Observability (beta level)**
+- ⬜ Structured JSON logs with request IDs
+- ⬜ Platform-provided health, latency, and error-rate dashboard
+- ⬜ Alerting on 5xx spikes or service suspensions (email/Slack)
+
+**Beta Success Criteria**
+- At least 3 external AI agents successfully complete a write action (e.g., book a hotel room) using only the public Menu + consent flow
+- Zero security incidents in first 48 hours
+- <5 % of agent requests rejected for unexpected reasons
+- Real usage visible in logs + quarantine/suspension features exercised
+
+
+**Phase 8: Scale & Harden** (deferred — post-beta)
+- ⬜ SQLite → PostgreSQL migration (Alembic, connection string swap, test all 6 migrations)
+- ⬜ Agent SDK (`agentcafe-py` client library) — only after API surface stabilizes
+- ⬜ OpenTelemetry distributed tracing
+- ⬜ Prometheus + Grafana observability stack
+- ⬜ Secrets manager integration (Doppler / 1Password)
+- ⬜ Audit-log web viewer (tamper-evident chain browser for humans)
 
 ---
 

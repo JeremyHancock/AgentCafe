@@ -30,6 +30,7 @@ import agentcafe.cafe.consent as consent_module
 import agentcafe.cafe.pages as pages_module
 from agentcafe.db.engine import init_db
 import agentcafe.db.engine as engine_module
+from agentcafe.keys import configure_keys
 from agentcafe.main import create_cafe_app
 from agentcafe.wizard.router import configure_wizard
 
@@ -82,6 +83,7 @@ class _E2EBackendTransport:
 async def e2e_db(monkeypatch):
     """Fresh in-memory DB with all modules configured for real Passport V2."""
     # Configure all modules
+    configure_keys(legacy_hs256_secret=_SECRET)
     configure_wizard(_SECRET)
     monkeypatch.setattr(passport_module._state, "signing_secret", _SECRET)
     monkeypatch.setattr(passport_module._state, "issuer_api_key", _API_KEY)

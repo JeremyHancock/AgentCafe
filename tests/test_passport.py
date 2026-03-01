@@ -5,7 +5,6 @@ These tests enable USE_REAL_PASSPORT mode and exercise the full JWT flow.
 
 from __future__ import annotations
 
-import jwt
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -15,6 +14,7 @@ import agentcafe.cafe.passport as passport_module
 from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
+from agentcafe.keys import configure_keys, decode_passport_token, sign_passport_token
 
 # pylint: disable=redefined-outer-name,protected-access
 
@@ -32,10 +32,11 @@ TEST_API_KEY = "test-issuer-api-key"
 
 @pytest_asyncio.fixture(autouse=True)
 async def _configure_real_passport(monkeypatch):
-    """Enable real passport mode and set test signing secret for all tests in this file."""
+    """Enable real passport mode and configure RS256 keys for all tests in this file."""
     monkeypatch.setattr(router_module._state, "use_real_passport", True)
     monkeypatch.setattr(passport_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(passport_module._state, "issuer_api_key", TEST_API_KEY)
+    configure_keys(legacy_hs256_secret=TEST_SECRET)
     yield
 
 
@@ -111,7 +112,7 @@ async def test_issue_passport_success(cafe_client):
     """Valid API key + valid request should return a signed JWT."""
     token = await _issue_passport(cafe_client, scopes=["stayright-hotels:*"])
     # Decode and verify structure
-    payload = jwt.decode(token, TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(token)
     assert payload["iss"] == "agentcafe"
     assert payload["sub"] == "user:test@example.com"
     assert payload["agent_id"] == "test-agent"
@@ -362,7 +363,7 @@ async def test_register_returns_tier1_passport(cafe_client):
     assert "agent_handle" in data
 
     # Decode and verify JWT structure
-    payload = jwt.decode(data["passport"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(data["passport"])
     assert payload["iss"] == "agentcafe"
     assert payload["tier"] == "read"
     assert payload["granted_by"] == "self"
@@ -377,7 +378,7 @@ async def test_register_without_agent_tag(cafe_client):
     resp = await cafe_client.post("/passport/register", json={})
     assert resp.status_code == 200
     data = resp.json()
-    payload = jwt.decode(data["passport"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(data["passport"])
     assert payload["tier"] == "read"
     assert payload["agent_tag"] is None
 
@@ -493,7 +494,7 @@ async def _create_policy_and_token(revoked: bool = False):
         "scopes": ["stayright-hotels:search-availability"],
         "policy_id": policy_id,
     }
-    token = jwt.encode(payload, TEST_SECRET, algorithm="HS256")
+    token = sign_passport_token(payload)
     return policy_id, token
 
 

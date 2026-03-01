@@ -19,6 +19,7 @@ import agentcafe.cafe.pages as pages_module
 from agentcafe.demo_backends.hotel import app as hotel_app
 from agentcafe.demo_backends.lunch import app as lunch_app
 from agentcafe.demo_backends.home_service import app as home_service_app
+from agentcafe.keys import configure_keys, decode_passport_token
 
 # pylint: disable=redefined-outer-name,protected-access
 
@@ -39,6 +40,7 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(human_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(consent_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(pages_module._state, "signing_secret", TEST_SECRET)
+    configure_keys(legacy_hs256_secret=TEST_SECRET)
     yield
 
 
@@ -374,7 +376,7 @@ async def test_exchange_returns_tier2_token(cafe_client):
     """Exchanging an approved consent should return a Tier-2 write token."""
     _agent_token, tier2_token, policy_id = await _full_consent_flow(cafe_client)
 
-    payload = jwt.decode(tier2_token, TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(tier2_token)
     assert payload["tier"] == "write"
     assert payload["granted_by"] == "human_consent"
     assert payload["policy_id"] == policy_id
@@ -554,7 +556,7 @@ async def test_ceiling_caps_requested_lifetime(cafe_client):
     )
     assert resp.status_code == 200
     token_data = resp.json()
-    payload = jwt.decode(token_data["token"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(token_data["token"])
 
     # Token lifetime should be at most ceiling (3600s for low risk)
     lifetime = payload["exp"] - payload["iat"]
@@ -588,7 +590,7 @@ async def test_high_risk_cancel_gets_short_ceiling(cafe_client):
         headers={"Authorization": f"Bearer {agent_token}"},
     )
     assert resp.status_code == 200
-    payload = jwt.decode(resp.json()["token"], TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(resp.json()["token"])
 
     lifetime = payload["exp"] - payload["iat"]
     assert lifetime <= 300
@@ -618,7 +620,7 @@ async def test_full_consent_flow_end_to_end(cafe_client):
     # Consent status should show approved
     # Extract consent_id from the flow — re-run initiate to get a new one and check the old pattern
     # Instead, verify the token claims
-    payload = jwt.decode(tier2_token, TEST_SECRET, algorithms=["HS256"], audience="agentcafe")
+    payload = decode_passport_token(tier2_token)
     assert payload["tier"] == "write"
     assert payload["policy_id"] == policy_id
     assert payload["granted_by"] == "human_consent"

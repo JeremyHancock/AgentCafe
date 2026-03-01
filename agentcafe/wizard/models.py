@@ -247,3 +247,10 @@ class ServiceLogsResponse(BaseModel):
     service_id: str
     total_entries: int
     entries: list[AuditLogEntry]
+
+
+class EditServiceResponse(BaseModel):
+    """Response body for POST /wizard/services/{service_id}/edit."""
+    draft_id: str
+    service_id: str
+    message: str

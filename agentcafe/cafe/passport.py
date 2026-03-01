@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 
 from agentcafe.db.engine import get_db
+from agentcafe.keys import sign_passport_token, decode_passport_token
 
 logger = logging.getLogger("agentcafe.passport")
 
@@ -137,16 +138,9 @@ async def validate_passport_jwt(
 
     Returns (success, error_code) where error_code is empty on success.
     """
-    # Step 1: Decode and verify signature, expiry, issuer, audience
+    # Step 1: Decode and verify signature, expiry, issuer, audience (RS256 + HS256 legacy)
     try:
-        payload = jwt.decode(
-            passport_token,
-            _state.signing_secret,
-            algorithms=["HS256"],
-            issuer="agentcafe",
-            audience="agentcafe",
-            options={"require": ["exp", "iat", "jti", "sub", "iss", "aud"]},
-        )
+        payload = decode_passport_token(passport_token)
     except jwt.ExpiredSignatureError:
         return False, "passport_expired"
     except jwt.InvalidTokenError:
@@ -240,7 +234,7 @@ async def register_agent(req: RegisterRequest):
         "agent_tag": tag if tag else None,
     }
 
-    token = jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+    token = sign_passport_token(payload)
 
     return RegisterResponse(
         passport=token,
@@ -294,7 +288,7 @@ async def issue_passport(
         "human_consent": True,
     }
 
-    token = jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+    token = sign_passport_token(payload)
 
     return IssueResponse(
         passport=token,
@@ -314,11 +308,9 @@ async def revoke_passport(req: RevokeRequest):
     """
     # Decode without full verification — we just need the jti
     try:
-        payload = jwt.decode(
+        payload = decode_passport_token(
             req.passport,
-            _state.signing_secret,
-            algorithms=["HS256"],
-            options={"verify_exp": False, "verify_aud": False},
+            options={"verify_exp": False, "verify_aud": False, "require": []},
         )
     except jwt.InvalidTokenError as exc:
         raise HTTPException(

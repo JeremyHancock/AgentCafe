@@ -23,6 +23,7 @@ from agentcafe.config import load_config
 from agentcafe.crypto import configure_crypto
 from agentcafe.db.engine import close_db, init_db
 from agentcafe.db.seed import seed_demo_data
+from agentcafe.keys import configure_keys, get_key_manager
 from agentcafe.wizard.router import configure_wizard, wizard_router
 
 logger = logging.getLogger("agentcafe")
@@ -42,6 +43,11 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
     configure_crypto(cfg.encryption_key)
+    configure_keys(
+        rsa_private_key_pem=cfg.passport_rsa_private_key,
+        rsa_key_file=cfg.passport_rsa_key_file,
+        legacy_hs256_secret=cfg.passport_signing_secret,
+    )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)
@@ -90,6 +96,11 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     async def health():
         return {"status": "ok", "service": "agentcafe"}
 
+    @app.get("/.well-known/jwks.json")
+    async def jwks():
+        """Public JWKS endpoint — agents and verifiers use this to validate Passport JWTs."""
+        return get_key_manager().jwks()
+
     return app
 
 
@@ -132,8 +143,13 @@ async def main() -> None:
     await seed_demo_data(db, cfg)
     logger.info("Database ready.")
 
-    # Configure encryption and Passport system
+    # Configure encryption, RSA keys, and Passport system
     configure_crypto(cfg.encryption_key)
+    configure_keys(
+        rsa_private_key_pem=cfg.passport_rsa_private_key,
+        rsa_key_file=cfg.passport_rsa_key_file,
+        legacy_hs256_secret=cfg.passport_signing_secret,
+    )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(cfg.passport_signing_secret)
     configure_consent(cfg.passport_signing_secret)

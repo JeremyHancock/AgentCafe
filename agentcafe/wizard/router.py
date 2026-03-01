@@ -26,6 +26,7 @@ from agentcafe.wizard.models import (
     CompanyLoginResponse,
     DryRunResponse,
     DryRunResult,
+    EditServiceResponse,
     PolicySaveRequest,
     PreviewResponse,
     PublishResponse,
@@ -593,6 +594,82 @@ async def _get_published_service(db, service_id: str, company_id: str) -> dict:
             detail={"error": "not_owner", "message": "You do not own this service."},
         )
     return svc
+
+
+@wizard_router.post("/services/{service_id}/edit", response_model=EditServiceResponse)
+async def edit_published_service(
+    service_id: str,
+    authorization: str | None = Header(default=None),
+):
+    """Create a new draft from an existing published service for re-editing.
+
+    Pre-populates the draft with the current Menu entry and policy config,
+    starting at the review step (wizard_step=3). Re-publishing overwrites
+    the existing published service.
+    """
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+
+    svc = await _get_published_service(db, service_id, company_id)
+    if svc["status"] == "unpublished":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "service_unpublished", "message": "Cannot edit an unpublished service."},
+        )
+
+    menu_entry = json.loads(svc["menu_entry_json"])
+
+    # Reconstruct policy_json from current proxy_configs
+    cursor = await db.execute(
+        "SELECT * FROM proxy_configs WHERE service_id = ?", (service_id,),
+    )
+    proxy_rows = await cursor.fetchall()
+
+    policy_data = {}
+    backend_url = ""
+    backend_auth_header = ""
+    for row in proxy_rows:
+        row = dict(row)
+        action_id = row["action_id"]
+        if not backend_url:
+            backend_url = row.get("backend_url", "")
+            backend_auth_header = row.get("backend_auth_header", "")
+        policy_data[action_id] = {
+            "scope": row["scope"],
+            "human_auth": bool(row["human_auth_required"]),
+            "rate_limit": row["rate_limit"],
+        }
+
+    # Create the draft at wizard_step=3 (review), pre-populated
+    draft_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    await db.execute(
+        """INSERT INTO draft_services
+           (id, company_id, wizard_step, raw_spec_text, parsed_spec_json,
+            candidate_menu_json, policy_json, backend_url, backend_auth_header,
+            created_at, updated_at)
+           VALUES (?, ?, 3, '', '{}', ?, ?, ?, ?, ?, ?)""",
+        (
+            draft_id,
+            company_id,
+            json.dumps(menu_entry),
+            json.dumps(policy_data),
+            backend_url,
+            backend_auth_header,
+            now,
+            now,
+        ),
+    )
+    await db.commit()
+
+    logger.info("Created edit draft %s from published service %s", draft_id, service_id)
+
+    return EditServiceResponse(
+        draft_id=draft_id,
+        service_id=service_id,
+        message=f"Draft created from '{svc['name']}'. Resume the wizard to review and re-publish.",
+    )
 
 
 @wizard_router.get("/services", response_model=ServiceListResponse)
