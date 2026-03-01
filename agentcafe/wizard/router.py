@@ -31,6 +31,7 @@ from agentcafe.wizard.models import (
     PublishResponse,
     ReviewSaveRequest,
     ServiceDashboardResponse,
+    ServiceListResponse,
     ServiceLogsResponse,
     ServiceStatusResponse,
     SpecFetchRequest,
@@ -592,6 +593,54 @@ async def _get_published_service(db, service_id: str, company_id: str) -> dict:
             detail={"error": "not_owner", "message": "You do not own this service."},
         )
     return svc
+
+
+@wizard_router.get("/services", response_model=ServiceListResponse)
+async def list_services(
+    authorization: str | None = Header(default=None),
+):
+    """List all published services for the authenticated company."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT service_id, name, description, status, published_at, menu_entry_json "
+        "FROM published_services WHERE company_id = ? ORDER BY published_at DESC",
+        (company_id,),
+    )
+    rows = await cursor.fetchall()
+
+    services = []
+    for row in rows:
+        menu_entry = json.loads(row["menu_entry_json"])
+        actions_count = len(menu_entry.get("actions", []))
+
+        # Total requests
+        req_cursor = await db.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE service_id = ?",
+            (row["service_id"],),
+        )
+        total_requests = (await req_cursor.fetchone())[0]
+
+        # Recent requests (last 24h)
+        req_cursor = await db.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE service_id = ? AND timestamp > datetime('now', '-1 day')",
+            (row["service_id"],),
+        )
+        recent_requests = (await req_cursor.fetchone())[0]
+
+        services.append(ServiceDashboardResponse(
+            service_id=row["service_id"],
+            name=row["name"],
+            description=row["description"],
+            status=row["status"],
+            published_at=row["published_at"],
+            actions_count=actions_count,
+            total_requests=total_requests,
+            recent_requests=recent_requests,
+        ))
+
+    return ServiceListResponse(services=services)
 
 
 @wizard_router.get("/services/{service_id}/dashboard", response_model=ServiceDashboardResponse)

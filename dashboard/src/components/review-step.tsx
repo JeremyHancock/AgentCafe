@@ -10,13 +10,23 @@ interface ReviewStepProps {
   loading: boolean;
 }
 
-function ConfidenceBadge({ score }: { score: number }) {
-  const color = score >= 0.8 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-    : score >= 0.5 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-    : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
+function AiQualityHint({ confidence }: { confidence: Record<string, number> | undefined }) {
+  if (!confidence) return null;
+  const values = Object.values(confidence);
+  if (values.length === 0) return null;
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+  if (avg >= 0.75) return null; // High confidence — no noise needed
+  if (avg >= 0.5) {
+    return (
+      <span className="text-xs text-yellow-600 dark:text-yellow-400" title="Some auto-generated fields may need editing">
+        Review suggested
+      </span>
+    );
+  }
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${color}`}>
-      {Math.round(score * 100)}% confident
+    <span className="text-xs text-red-600 dark:text-red-400" title="Low confidence — please verify these fields">
+      Needs review
     </span>
   );
 }
@@ -61,15 +71,7 @@ export function ReviewStep({ candidate, onSave, onBack, loading }: ReviewStepPro
       <div className="rounded-xl border p-6 bg-[var(--card)] space-y-5">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold">Review AI-generated Menu entry</h2>
-          {candidate.confidence && (
-            <div className="flex gap-2">
-              {Object.entries(candidate.confidence).map(([k, v]) => (
-                <div key={k} className="text-xs text-[var(--muted-foreground)]">
-                  {k}: <ConfidenceBadge score={v} />
-                </div>
-              ))}
-            </div>
-          )}
+          <AiQualityHint confidence={candidate.confidence} />
         </div>
 
         <p className="text-sm text-[var(--muted-foreground)]">
@@ -120,9 +122,7 @@ export function ReviewStep({ candidate, onSave, onBack, loading }: ReviewStepPro
                 {action.source_method && <span className="text-xs text-[var(--muted-foreground)]">{action.source_method} {action.source_path}</span>}
               </div>
               <div className="flex items-center gap-3">
-                {action.confidence && Object.entries(action.confidence).map(([k, v]) => (
-                  <span key={k} className="text-xs"><ConfidenceBadge score={v} /></span>
-                ))}
+                <AiQualityHint confidence={action.confidence} />
                 <button onClick={() => toggleExclude(action.action_id)}
                   className={`text-xs px-3 py-1 rounded-lg border transition-colors ${excluded.has(action.action_id) ? "bg-[var(--primary)] text-white border-[var(--primary)]" : "hover:bg-[var(--muted)]"}`}>
                   {excluded.has(action.action_id) ? "Re-include" : "Exclude"}
@@ -141,8 +141,8 @@ export function ReviewStep({ candidate, onSave, onBack, loading }: ReviewStepPro
                   <div>
                     <label className="text-xs font-medium text-[var(--muted-foreground)]">Required inputs</label>
                     <div className="mt-1 flex flex-wrap gap-2">
-                      {action.required_inputs.map((inp) => (
-                        <span key={inp.name} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--muted)] text-xs">
+                      {action.required_inputs.map((inp, i) => (
+                        <span key={`${inp.name}-${i}`} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[var(--muted)] text-xs">
                           <code>{inp.name}</code>
                           <span className="text-[var(--muted-foreground)]">({inp.type})</span>
                         </span>

@@ -44,8 +44,6 @@ export function PreviewStep({ preview, onPublish, onBack, loading }: PreviewStep
             const cost = action.cost as Record<string, unknown> | undefined;
             const limits = cost?.limits as Record<string, unknown> | undefined;
             const humanAuth = cost?.human_authorization_required as boolean;
-            const confidence = action.confidence as Record<string, number> | undefined;
-
             return (
               <div key={action.action_id as string} className="rounded-lg border p-4 space-y-2">
                 <div className="flex items-center justify-between">
@@ -75,20 +73,6 @@ export function PreviewStep({ preview, onPublish, onBack, loading }: PreviewStep
                   </div>
                 )}
 
-                {/* Confidence */}
-                {confidence && (
-                  <div className="flex gap-2 mt-1">
-                    {Object.entries(confidence).map(([key, val]) => (
-                      <span key={key} className={`text-xs px-1.5 py-0.5 rounded ${
-                        val >= 0.8 ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-                        : val >= 0.5 ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400"
-                        : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-                      }`}>
-                        {key}: {Math.round(val * 100)}%
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
             );
           })}

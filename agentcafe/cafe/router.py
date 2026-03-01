@@ -403,6 +403,65 @@ async def place_order(req: OrderRequest):
 
 
 # ---------------------------------------------------------------------------
+# GET /cafe/admin/overview — Platform admin overview (requires ISSUER_API_KEY)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/overview")
+async def admin_overview(api_key: str = ""):
+    """Platform admin overview: full Menu + audit stats. Requires ISSUER_API_KEY."""
+    if not api_key or api_key != _state.issuer_api_key:
+        raise HTTPException(status_code=403, detail={"error": "forbidden", "message": "Invalid admin key."})
+
+    db = await get_db()
+    menu = await get_full_menu(db)
+
+    # Global audit stats
+    cursor = await db.execute("SELECT COUNT(*) FROM audit_log")
+    total_requests = (await cursor.fetchone())[0]
+
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE timestamp > datetime('now', '-1 day')"
+    )
+    recent_requests = (await cursor.fetchone())[0]
+
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE outcome != 'success'"
+    )
+    failed_requests = (await cursor.fetchone())[0]
+
+    # Per-service audit stats
+    cursor = await db.execute(
+        "SELECT service_id, COUNT(*) as cnt, "
+        "SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) as ok, "
+        "SUM(CASE WHEN outcome != 'success' THEN 1 ELSE 0 END) as err "
+        "FROM audit_log GROUP BY service_id ORDER BY cnt DESC"
+    )
+    rows = await cursor.fetchall()
+    per_service_stats = {
+        row["service_id"]: {"total": row["cnt"], "success": row["ok"], "errors": row["err"]}
+        for row in rows
+    }
+
+    # Recent audit entries (last 50)
+    cursor = await db.execute(
+        "SELECT timestamp, service_id, action_id, outcome, response_code, latency_ms "
+        "FROM audit_log ORDER BY timestamp DESC LIMIT 50"
+    )
+    recent_entries = [dict(row) for row in await cursor.fetchall()]
+
+    return {
+        "services": menu["services"],
+        "stats": {
+            "total_requests": total_requests,
+            "recent_requests_24h": recent_requests,
+            "failed_requests": failed_requests,
+            "per_service": per_service_stats,
+        },
+        "recent_audit": recent_entries,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /cafe/services/{service_id}/suspend — Admin suspends a service (ADR-025)
 # ---------------------------------------------------------------------------
 

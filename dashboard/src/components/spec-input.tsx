@@ -7,13 +7,14 @@ interface SpecInputStepProps {
   onUpload: (file: File) => void;
   onFetch: (url: string) => void;
   loading: boolean;
+  rawSpec: string;
+  onRawSpecChange: (value: string) => void;
 }
 
 type InputMode = "paste" | "upload" | "url";
 
-export function SpecInputStep({ onPaste, onUpload, onFetch, loading }: SpecInputStepProps) {
+export function SpecInputStep({ onPaste, onUpload, onFetch, loading, rawSpec, onRawSpecChange }: SpecInputStepProps) {
   const [mode, setMode] = useState<InputMode>("paste");
-  const [rawSpec, setRawSpec] = useState("");
   const [url, setUrl] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -59,7 +60,7 @@ export function SpecInputStep({ onPaste, onUpload, onFetch, loading }: SpecInput
         <div className="space-y-3">
           <textarea
             value={rawSpec}
-            onChange={(e) => setRawSpec(e.target.value)}
+            onChange={(e) => onRawSpecChange(e.target.value)}
             placeholder='{"openapi": "3.1.0", "info": {"title": "My API", ...}}'
             rows={14}
             className="w-full rounded-lg border bg-[var(--background)] px-4 py-3 text-sm font-mono outline-none focus:ring-2 focus:ring-[var(--primary)] resize-y"

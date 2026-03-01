@@ -22,7 +22,10 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: { message: res.statusText } }));
-    throw new Error(err?.detail?.message || err?.detail || `HTTP ${res.status}`);
+    const detail = err?.detail;
+    const msg = typeof detail === "string" ? detail
+      : detail?.message ?? detail?.error ?? (detail ? JSON.stringify(detail) : `HTTP ${res.status}`);
+    throw new Error(msg);
   }
 
   return res.json();
@@ -96,4 +99,71 @@ export interface SpecParseResponse {
 export interface PreviewResponse {
   final_menu_entry: Record<string, unknown>;
   proxy_configs: Record<string, unknown>[];
+}
+
+export interface PublishResponse {
+  service_id: string;
+  name: string;
+  actions_published: number;
+  message: string;
+}
+
+export interface ServiceDashboard {
+  service_id: string;
+  name: string;
+  description: string;
+  status: string;
+  published_at: string;
+  actions_count: number;
+  total_requests: number;
+  recent_requests: number;
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  action_id: string;
+  outcome: string;
+  response_code: number;
+  latency_ms: number | null;
+}
+
+export interface ServiceLogsResponse {
+  service_id: string;
+  total_entries: number;
+  entries: AuditLogEntry[];
+}
+
+export interface ServiceStatusResponse {
+  service_id: string;
+  status: string;
+  message: string;
+}
+
+export interface MenuService {
+  service_id: string;
+  name: string;
+  description: string;
+  category: string;
+  actions: {
+    action_id: string;
+    description: string;
+    cost?: {
+      human_authorization_required?: boolean;
+      limits?: { rate_limit?: string };
+    };
+    security_status?: {
+      quarantine_until?: string;
+      suspended_at?: string;
+    };
+  }[];
+}
+
+export interface MenuResponse {
+  services: MenuService[];
+}
+
+export async function fetchMenu(): Promise<MenuResponse> {
+  const res = await fetch("/api/cafe/menu");
+  if (!res.ok) throw new Error(`Menu fetch failed: ${res.status}`);
+  return res.json();
 }

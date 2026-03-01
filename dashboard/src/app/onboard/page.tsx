@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { getToken, getCompanyName, clearToken } from "@/lib/auth";
-import { api, uploadSpec, type SpecParseResponse, type CandidateMenu, type CandidateAction, type PreviewResponse } from "@/lib/api";
+import { api, uploadSpec, type SpecParseResponse, type CandidateMenu, type CandidateAction, type PreviewResponse, type PublishResponse } from "@/lib/api";
 import { SpecInputStep } from "@/components/spec-input";
 import { ReviewStep } from "@/components/review-step";
 import { PolicyStep } from "@/components/policy-step";
@@ -21,7 +21,8 @@ export default function OnboardPage() {
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [published, setPublished] = useState(false);
+  const [published, setPublished] = useState<PublishResponse | null>(null);
+  const [rawSpec, setRawSpec] = useState("");
 
   useEffect(() => {
     const t = getToken();
@@ -139,8 +140,8 @@ export default function OnboardPage() {
     setError("");
     setLoading(true);
     try {
-      await api(`/drafts/${draftId}/publish`, { method: "POST", token });
-      setPublished(true);
+      const pub = await api<PublishResponse>(`/drafts/${draftId}/publish`, { method: "POST", token });
+      setPublished(pub);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Publish failed");
     } finally {
@@ -196,23 +197,53 @@ export default function OnboardPage() {
 
         {/* Published success */}
         {published ? (
-          <div className="rounded-xl border p-8 bg-[var(--card)] text-center space-y-4">
-            <div className="text-5xl">🎉</div>
-            <h2 className="text-2xl font-bold">Published!</h2>
-            <p className="text-[var(--muted-foreground)]">
-              Your service is now live on the AgentCafe Menu. Agents can discover and use it immediately.
-            </p>
-            <p className="text-sm text-[var(--warning)]">
-              Note: New services start in quarantine mode (30 days). All actions require human consent during this period.
-            </p>
-            <button onClick={() => { setStep(0); setDraftId(null); setCandidate(null); setPreview(null); setPublished(false); }}
-              className="rounded-lg bg-[var(--primary)] px-6 py-2.5 text-sm font-medium text-[var(--primary-foreground)] hover:opacity-90 transition-opacity">
-              Onboard another service
-            </button>
+          <div className="rounded-xl border p-8 bg-[var(--card)] space-y-6">
+            <div className="text-center space-y-3">
+              <div className="text-5xl">🎉</div>
+              <h2 className="text-2xl font-bold">Published!</h2>
+              <p className="text-[var(--muted-foreground)]">{published.message}</p>
+            </div>
+
+            {/* Service info card */}
+            <div className="rounded-lg border p-4 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold">{published.name}</span>
+                  <code className="text-xs bg-[var(--muted)] px-2 py-0.5 rounded">{published.service_id}</code>
+                </div>
+                <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 px-2 py-0.5 rounded font-medium">Live</span>
+              </div>
+              <p className="text-sm text-[var(--muted-foreground)]">{published.actions_published} actions published</p>
+            </div>
+
+            {/* Quarantine badge */}
+            <div className="rounded-lg border border-yellow-300 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-950/30 p-4 flex items-start gap-3">
+              <span className="text-2xl">🛡️</span>
+              <div className="space-y-1">
+                <p className="font-medium text-yellow-800 dark:text-yellow-300">Quarantine active (30 days)</p>
+                <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                  All actions require human consent (Tier-2 Passport) during quarantine. This protects users while your service builds trust on the platform.
+                </p>
+                <p className="text-xs text-yellow-600 dark:text-yellow-500 mt-2">
+                  Quarantine lifts automatically. No action needed from you.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 justify-center">
+              <a href="/services"
+                className="rounded-lg border px-6 py-2.5 text-sm font-medium hover:bg-[var(--muted)] transition-colors">
+                View your services
+              </a>
+              <button onClick={() => { setStep(0); setDraftId(null); setCandidate(null); setPreview(null); setPublished(null); }}
+                className="rounded-lg bg-[var(--primary)] px-6 py-2.5 text-sm font-medium text-[var(--primary-foreground)] hover:opacity-90 transition-opacity">
+                Onboard another service
+              </button>
+            </div>
           </div>
         ) : (
           <>
-            {step === 0 && <SpecInputStep onPaste={handleSpecPaste} onUpload={handleSpecUpload} onFetch={handleSpecFetch} loading={loading} />}
+            {step === 0 && <SpecInputStep onPaste={handleSpecPaste} onUpload={handleSpecUpload} onFetch={handleSpecFetch} loading={loading} rawSpec={rawSpec} onRawSpecChange={setRawSpec} />}
             {step === 1 && candidate && <ReviewStep candidate={candidate} onSave={handleReviewSave} onBack={() => setStep(0)} loading={loading} />}
             {step === 2 && candidate && <PolicyStep candidate={candidate} onSave={handlePolicySave} onBack={() => setStep(1)} loading={loading} />}
             {step === 3 && preview && <PreviewStep preview={preview} onPublish={handlePublish} onBack={() => setStep(2)} loading={loading} />}

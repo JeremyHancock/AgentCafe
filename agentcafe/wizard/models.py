@@ -58,7 +58,7 @@ class CandidateAction(BaseModel):
     action_id: str
     description: str = ""
     required_inputs: list[CandidateInput] = Field(default_factory=list)
-    example_response: dict = Field(default_factory=dict)
+    example_response: dict | list | str | int | float | bool | None = Field(default_factory=dict)
     suggested_scope: str = ""
     suggested_human_auth: bool = False
     suggested_rate_limit: str = "60/minute"
@@ -219,6 +219,11 @@ class ServiceDashboardResponse(BaseModel):
     actions_count: int
     total_requests: int
     recent_requests: int
+
+
+class ServiceListResponse(BaseModel):
+    """Response body for GET /wizard/services."""
+    services: list[ServiceDashboardResponse]
 
 
 class ServiceStatusResponse(BaseModel):
