@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** February 27, 2026
+**Last Updated:** February 28, 2026
 
 ---
 
@@ -233,7 +233,7 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 **Date:** February 26, 2026
 **Context:** During live testing, `POST /wizard/companies` returned `sqlite3.OperationalError: table companies has no column named password_hash`. The `agentcafe.db` file on disk was created by a previous run before the `password_hash` column was added. `CREATE TABLE IF NOT EXISTS` does not alter existing tables.
 **Decision:** Document the caveat prominently in all "How to Run" docs. The local startup instructions now include `rm -f agentcafe.db` before `python -m agentcafe.main`. Tests are unaffected because they use in-memory databases (`":memory:"`).
-**Rationale:** SQLite has no built-in migration system. For MVP, deleting the DB is acceptable since it only contains seeded demo data. Phase 6 should add proper schema migrations (e.g., `alembic` or manual `ALTER TABLE` scripts) for production use where data persistence matters.
+**Rationale:** SQLite has no built-in migration system. For MVP, deleting the DB is acceptable since it only contains seeded demo data. Phase 4 added a numbered SQL migration system (`db/migrate.py` + `db/migrations/0001–0006`) that handles incremental schema changes. The `rm -f` caveat remains relevant if the base schema (in `models.py`) changes, since migrations only handle additive changes.
 
 ---
 

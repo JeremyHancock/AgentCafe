@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: February 26, 2026 (Phase 3 complete)
+Last Updated: February 28, 2026 (Phase 5 complete)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -16,7 +16,7 @@ Key principles (locked):
 - Double validation on every order: Human Passport + Company Policy
 - The Menu is semantic, lightweight, and future-proof for 2026–2027 agents
 
-## 2. Locked Menu Format (Feb 22 2026)
+## 2. Locked Menu Format (Feb 22 2026, extended ADR-023)
 Agents receive a clean semantic menu (no HTTP methods, no paths, no full schemas).  
 Schema policy: **no breaking changes**; additive fields allowed with an ADR (see `DECISIONS.md`).
 
@@ -24,17 +24,25 @@ Schema policy: **no breaking changes**; additive fields allowed with an ADR (see
 - service_id (slug, format: `{brand}-{category}`, e.g. `stayright-hotels`)
 - name
 - category (string, e.g. `"hotels"`, `"food-delivery"`, `"home-services"`)
-- capability_tags (array of strings for agent discovery, e.g. `["travel", "booking", "accommodation"]`)
+- capability_tags (array of strings for agent discovery)
 - description
 
 **Actions**:
 - action_id (slug)
 - description (what it accomplishes)
 - example_response (JSON preview)
-- cost (object: required_scopes, human_authorization_required, limits)
+- cost (object: human_authorization_required, limits with rate_limit)
 - required_inputs (array of {name, description, example})
+- security_status (object: quarantine_until, suspended_at) — ADR-023 extension
 
 When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
+
+**Passport V2 (Phase 4, locked):**
+- Two-tier model: Tier-1 (read-only, agent self-requests) and Tier-2 (write-scope, requires human consent)
+- The Passport is a HUMAN authorization document (ADR-024: "I authorize the bearer")
+- Consent flow: agent initiates → human approves → Cafe issues short-lived JWT
+- Token expiry enforced by risk-tier ceilings (low: 60m, medium: 15m, high: 5m, critical: single-use)
+- See `docs/passport/v2-design-discussion.md` §13 for full convergence summary
 
 ## 3. Core Metaphor & Rules
 - Central Cafe/Menu discovery is the core bet — inevitable and agent-first.
@@ -52,32 +60,32 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 
 ## 5. Current Status & What Exists
 
-**Phase 0.2 — COMPLETE.** Design deliverables in `docs/design/`:
-- Three demo services fully designed (WHY.md, OpenAPI 3.1 specs, locked Menu entries)
-- Company Onboarding Wizard fully designed (FLOW.md, UI-SCREENS.md, ARCHITECTURE.md)
-- Combined Menu preview at `docs/design/menu/full-menu.json`
+**Phase 0.2 — COMPLETE.** Design deliverables in `docs/design/`.
 
-**Phase 1 — COMPLETE.** Working codebase in `agentcafe/` (Python package):
-- Three demo backends running (hotel, lunch, home services) with realistic mock data
-- `GET /cafe/menu` returns the full locked Menu format from the database
-- `POST /cafe/order` proxies requests through double validation to the correct backend
-- Audit logging on every order
+**Phase 1 — COMPLETE.** Core Cafe: 3 demo backends, `GET /cafe/menu`, `POST /cafe/order` proxy, audit logging.
 
-**Phase 3 — COMPLETE.** Company Onboarding Wizard in `agentcafe/wizard/`:
-- Spec Parser: OpenAPI 3.0/3.1 ingestion (YAML + JSON), recursive `$ref` resolution, operation extraction, read/write classification, required-only input filtering
-- AI Enricher: LiteLLM-based Menu entry generation with rule-based fallback, no parameter truncation
-- Review Engine: Draft management, company edits preserved in `company_edits_json` (separate from AI-generated `candidate_menu_json`), preview generation
-- Publisher: Atomic one-click publish to `published_services` + `proxy_configs`
-- Full wizard API: `/wizard/companies`, `/wizard/specs/parse`, `/wizard/drafts/{id}/review|policy|preview|dry-run|publish`
-- JWT session tokens (`Authorization: Bearer <token>`) on all wizard endpoints with draft ownership enforcement
-- bcrypt password hashing, Pydantic input validation on company create
-- Dry-run endpoint with resolved action path HEAD requests
+**Phase 3 — COMPLETE.** Company Onboarding Wizard: spec parser, AI enricher, review engine, publisher, full `/wizard/*` API.
 
-**Phase 3.1 — COMPLETE.** Code quality and lint cleanup:
-- Pylint 10.00/10 — zero warnings across all source and test files
-- `_State` class pattern replaces all `global` statements repo-wide
-- Proper exception chaining, narrowed exception types, removed dead code
-- 77 passing tests (48 existing + 29 wizard tests)
+**Phase 4 — COMPLETE.** Security & Guardrails (7 waves):
+- Schema migration system (numbered SQL in `db/migrations/`)
+- Passport V2: Tier-1 read tokens, Tier-2 write tokens via human consent
+- Human accounts (`cafe/human.py`): register/login, session JWT, passkey enforcement
+- Full consent flow (`cafe/consent.py`): initiate → approve → exchange → refresh
+- Risk-tier token ceilings, policy revocation, max 20 active tokens per policy
+- Identity verification (Gate 1b), ADR-023 Menu fields, implicit read
+- Consent page UI (Jinja2 templates at `/authorize/`)
+- Input injection protection, consent privacy enforcement (JWT audience separation)
+- Backend credential encryption (AES-256-GCM, `crypto.py`)
+- Tamper-evident audit logging (SHA-256 hash chain)
+- Service onboarding security: quarantine mode (30-day, forces Tier-2), instant suspension
+
+**Phase 5 — COMPLETE.** Testing & Polish:
+- E2E demo agent CLI (`python -m agentcafe.demo_agent`)
+- `ENRICHMENT_MODEL` configurable via env var, `x-agentcafe-*` extension merging
+- Confidence scores in review/preview, spec upload (multipart) + URL fetch
+- Company Onboarding Wizard Dashboard (Next.js 15 / React 19 / Tailwind 4)
+  - Pages: `/login`, `/register`, `/onboard` (4-step wizard), `/services` (management), `/admin` (platform admin)
+- 11 E2E integration tests, 177 total tests passing, pylint 10.00/10
 
 ## 6. Codebase Map
 
@@ -86,41 +94,64 @@ AgentCafe/
 ├── agentcafe/                      # Python package
 │   ├── main.py                     # Entry point — starts Cafe (port 8000) + 3 demo backends (8001-8003)
 │   ├── config.py                   # Env-based config (CafeConfig dataclass)
+│   ├── crypto.py                   # AES-256-GCM encrypt/decrypt for backend credentials
 │   ├── db/
-│   │   ├── models.py               # SQLite schema: companies, published_services, proxy_configs, audit_log, draft_services
+│   │   ├── models.py               # SQLite schema (all tables)
 │   │   ├── engine.py               # DB connection singleton (aiosqlite)
-│   │   └── seed.py                 # Loads Menu entries from docs/design JSON files + seeds proxy configs on startup
+│   │   ├── seed.py                 # Seeds demo data on startup
+│   │   ├── migrate.py              # Numbered SQL migration runner
+│   │   └── migrations/             # 0001–0006 SQL migration files
 │   ├── cafe/
-│   │   ├── menu.py                 # Assembles the locked Menu from published_services
-│   │   ├── passport.py             # JWT Passport: issuance, validation, revocation (Phase 2)
-│   │   ├── policy.py               # Company Policy: rate limiting + input type validation (Phase 2.3)
-│   │   └── router.py               # GET /cafe/menu + POST /cafe/order (proxy + double validation + audit)
-│   ├── wizard/                     # Company Onboarding Wizard (Phase 3)
-│   │   ├── models.py               # Pydantic models for all wizard data
+│   │   ├── menu.py                 # Assembles locked Menu (incl. security_status)
+│   │   ├── passport.py             # Passport V2: Tier-1 register, JWT validation, revocation
+│   │   ├── policy.py               # Rate limiting + input type validation
+│   │   ├── router.py               # GET /cafe/menu, POST /cafe/order, GET /cafe/admin/overview
+│   │   ├── human.py                # Human accounts: register/login, session JWT
+│   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
+│   │   └── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/)
+│   ├── wizard/                     # Company Onboarding Wizard
+│   │   ├── models.py               # Pydantic models for all wizard + service management data
 │   │   ├── spec_parser.py          # OpenAPI 3.x parsing + validation + operation extraction
 │   │   ├── ai_enricher.py          # LiteLLM enrichment with rule-based fallback
 │   │   ├── review_engine.py        # Draft management, edits, preview generation
-│   │   ├── publisher.py            # Atomic publish to Menu + proxy configs
-│   │   └── router.py               # FastAPI router for all /wizard/* endpoints
-│   └── demo_backends/
-│       ├── hotel.py                # StayRight Hotels — 4 endpoints, in-memory data
-│       ├── lunch.py                # QuickBite Delivery — 4 endpoints, in-memory data
-│       └── home_service.py         # FixRight Home — 4 endpoints, in-memory data
+│   │   ├── publisher.py            # Atomic publish to Menu + proxy configs (sets quarantine)
+│   │   └── router.py               # /wizard/* endpoints incl. service management (pause/resume/unpublish/logs)
+│   ├── demo_agent/
+│   │   └── __main__.py             # E2E demo agent CLI (--headless for CI)
+│   ├── demo_backends/
+│   │   ├── hotel.py                # StayRight Hotels — 4 endpoints
+│   │   ├── lunch.py                # QuickBite Delivery — 4 endpoints
+│   │   └── home_service.py         # FixRight Home — 4 endpoints
+│   └── templates/                  # Jinja2 HTML templates (login, register, authorize)
+├── dashboard/                      # Next.js 15 Company Dashboard
+│   ├── src/app/
+│   │   ├── login/page.tsx          # Company login
+│   │   ├── register/page.tsx       # Company registration
+│   │   ├── onboard/page.tsx        # 4-step onboarding wizard
+│   │   ├── services/page.tsx       # Service management (pause/resume/unpublish/logs)
+│   │   └── admin/page.tsx          # Platform admin dashboard (ISSUER_API_KEY gated)
+│   ├── src/components/             # Wizard step components (spec-input, review, policy, preview)
+│   ├── src/lib/                    # API client (api.ts) + auth helpers (auth.ts)
+│   └── next.config.ts              # API proxy to FastAPI backend
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: in-memory DB, ASGI test client
-│   ├── test_menu.py                # 7 tests: format compliance, actions, auth requirements
-│   ├── test_order.py               # 8 tests: rejection + input validation + happy-path proxy (MVP mode)
-│   ├── test_passport.py            # 12 tests: JWT issuance, scope/wildcard/authorization validation, revocation
-│   ├── test_policy.py              # 21 tests: rate limiting (unit + integration), input type validation
-│   └── test_wizard.py              # 29 tests: spec parsing, enrichment, hotel spec $ref, full wizard API flow, ownership, auth, dry-run
+│   ├── test_menu.py                # Menu format compliance tests
+│   ├── test_order.py               # Order proxy + input validation + audit tests
+│   ├── test_passport.py            # JWT issuance, scope validation, revocation, Tier-1/Tier-2 tests
+│   ├── test_policy.py              # Rate limiting + input type validation tests
+│   ├── test_consent.py             # Full consent flow + human account tests
+│   ├── test_wizard.py              # Spec parsing, enrichment, full wizard flow tests
+│   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
+│   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
 ├── docs/
 │   ├── design/                     # Service specs, menu format, onboarding wizard design
-│   └── passport/                   # Passport system design + threat model (v1.4, locked)
-├── Dockerfile                      # Single image, multi-service (Python 3.12-slim)
-├── docker-compose.yml              # 4 containers: Cafe + 3 demo backends on shared network
+│   ├── passport/                   # Passport V2 design + threat model
+│   ├── e2e-test-plan.md            # E2E test plan with scenario coverage
+│   └── building-agents-for-agentcafe.md  # Developer guide for agent builders
+├── Dockerfile, docker-compose.yml  # Container setup
 ├── pyproject.toml                  # Dependencies and build config
 ├── AGENT_CONTEXT.md                # This file
-├── DECISIONS.md                    # Architectural decisions log
+├── DECISIONS.md                    # Architectural decisions log (ADR-001 through ADR-025)
 └── DEVELOPMENT-PLAN.md             # Ordered phases with completion status
 ```
 
@@ -128,16 +159,20 @@ AgentCafe/
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Menu format | **LOCKED & REAL** | No breaking changes. Additive fields allowed with an ADR. Includes `category` and `capability_tags` (ADR-009). |
-| Menu discovery (`GET /cafe/menu`) | **Real** | Reads from SQLite, assembles locked format |
-| Proxy (`POST /cafe/order`) | **Real** | Routes to correct backend, resolves path params, returns response |
-| Demo backends (hotel, lunch, home) | **Real mock data** | In-memory, realistic responses, no persistence across restarts |
-| Passport validation | **Real (behind flag)** | `USE_REAL_PASSPORT=true` enables JWT validation (HS256, scopes, expiry, revocation). Default: MVP mode (`"demo-passport"`). |
-| Human authorization check | **Real (behind flag)** | JWT `authorizations` array with per-action mandates and `valid_until` enforcement. Default: MVP mode. |
-| Rate limiting | **Real** | Sliding-window per passport+action using audit_log. Enforces `rate_limit` from proxy_configs (e.g., `60/minute`). |
-| Company Onboarding Wizard | **Real** | Spec parser, AI enricher (LiteLLM + rule-based fallback), review engine, publisher. Full API at `/wizard/*`. |
-| Audit log | **Real** | Every order writes to `audit_log` table (hashed passport, hashed inputs, outcome, latency) |
-| DB encryption for backend creds | **Not implemented** | Backend auth headers stored as plaintext in MVP. Phase 4. |
+| Menu format | **LOCKED & REAL** | No breaking changes. ADR-023 added security_status fields. |
+| Menu discovery (`GET /cafe/menu`) | **Real** | Includes quarantine_until, suspended_at per action |
+| Proxy (`POST /cafe/order`) | **Real** | Full Passport V2 validation, scope check, rate limit, audit |
+| Demo backends (hotel, lunch, home) | **Real mock data** | In-memory, no persistence across restarts |
+| Passport V2 (Tier-1 + Tier-2) | **Real** | JWT validation (HS256), scopes, expiry, risk-tier ceilings, revocation |
+| Human consent flow | **Real** | Initiate → approve → exchange → refresh. Full lifecycle. |
+| Human accounts | **Real** | Register/login with bcrypt, session JWT, passkey enforcement |
+| Rate limiting | **Real** | Sliding-window per passport+action, V2 429 response with retry_after |
+| Company Onboarding Wizard | **Real** | Full API + Next.js dashboard. Spec parse/upload/fetch → review → policy → publish |
+| Audit log | **Real** | SHA-256 hash chain, tamper detection via `verify_audit_chain()` |
+| Backend credential encryption | **Real** | AES-256-GCM at rest (`crypto.py`), `CAFE_ENCRYPTION_KEY` env var |
+| Quarantine / suspension | **Real** | 30-day quarantine on new services, instant suspension via admin endpoint |
+| Dashboard (Next.js) | **Real** | Login, register, 4-step wizard, service management, platform admin |
+| Passport signing keys | **Placeholder** | HS256 shared secret. Phase 6: RS256 + KMS. |
 
 ## 8. How to Run
 
@@ -151,61 +186,58 @@ docker compose down                # Stop and remove containers
 
 **Local (all-in-one process):**
 ```bash
-source .venv/bin/activate          # venv already created (at repo root)
-rm -f agentcafe.db                 # IMPORTANT: delete stale DB after schema changes
-python -m agentcafe.main           # Starts all 4 servers in one process
+source .venv/bin/activate
+PASSPORT_SIGNING_SECRET=your-secret-min-32-bytes!! \
+ISSUER_API_KEY=your-admin-key \
+python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-8003)
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
-# Passport: POST http://127.0.0.1:8000/passport/issue + POST /cafe/revoke
-# Wizard: POST http://127.0.0.1:8000/wizard/companies + /wizard/specs/parse + ...
 # API docs: http://127.0.0.1:8000/docs
-pytest tests/ -v                   # 77 tests passing
+python -m pytest tests/ -v         # 177 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 
-**⚠️ Stale DB caveat:** SQLite uses `CREATE TABLE IF NOT EXISTS`, so if `agentcafe.db` exists from a previous run with an older schema, new columns (like `password_hash`) won't be added. Always `rm -f agentcafe.db` after schema changes. Tests use in-memory DBs and are unaffected.
-
-**Wizard onboarding walkthrough (curl):**
+**Dashboard (Next.js):**
 ```bash
-# 1. Create company account
-curl -s -X POST http://localhost:8000/wizard/companies \
-  -H "Content-Type: application/json" \
-  -d '{"name":"My Company","email":"dev@example.com","password":"secure1234"}'
-# → {"company_id": "...", "session_token": "<JWT>"}
-
-# 2. Parse OpenAPI spec (use session_token from step 1)
-curl -s -X POST http://localhost:8000/wizard/specs/parse \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d "{\"raw_spec\": $(python3 -c "import json; print(json.dumps(open('docs/design/services/hotel-booking/openapi.yaml').read()))")}"
-# → {"draft_id": "...", "parsed_spec": {...}, "candidate_menu": {...}}
-
-# 3. Review — MUST include actions array (see Known Limitations below)
-curl -s -X PUT http://localhost:8000/wizard/drafts/<DRAFT_ID>/review \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json" \
-  -d '{"service_id":"my-service","name":"My Service","actions":[...]}'
-
-# 4. Policy — set scopes, rate limits, backend URL
-# 5. Preview — GET .../preview to see final Menu entry
-# 6. Publish — POST .../publish to go live on GET /cafe/menu
+cd dashboard && npm run dev        # http://localhost:3000
+# Proxies /api/* to localhost:8000 (backend must be running)
+# Pages: /login, /register, /onboard, /services, /admin
 ```
+
+**Demo agent:**
+```bash
+python -m agentcafe.demo_agent --headless  # Full lifecycle, auto-approves consent
+```
+
+**⚠️ Stale DB caveat:** SQLite uses `CREATE TABLE IF NOT EXISTS`. Always `rm -f agentcafe.db` after schema changes. The migration system handles incremental changes, but if the base schema changed you need a fresh DB. Tests use in-memory DBs and are unaffected.
+
+**Key env vars:**
+- `PASSPORT_SIGNING_SECRET` — JWT signing key (random if unset, tokens invalidate on restart)
+- `ISSUER_API_KEY` — Admin key for suspend endpoint and `/admin` dashboard
+- `CAFE_ENCRYPTION_KEY` — 64 hex chars for AES-256-GCM backend credential encryption (disabled if unset)
+- `OPENAI_API_KEY` — Enables LLM enrichment in wizard (rule-based fallback if unset)
+- `ENRICHMENT_MODEL` — LiteLLM model name (default: `gpt-4o-mini`)
 
 ## 9. Architecture Notes
 
-- **`_State` class pattern**: All module-level mutable state uses a `_State` class instead of `global` statements. Access via `_state.attribute`. Tests monkeypatch via `monkeypatch.setattr(module._state, "attr", value)`. Applied in `engine.py`, `passport.py`, `cafe/router.py`, `wizard/router.py`.
-- **Shared httpx.AsyncClient**: `cafe/router.py` uses `_state.http_client` (`get_http_client()`) for proxying — reuses TCP connections. Closed on shutdown via `close_http_client()` in `main.py`.
-- **Named row access**: All `aiosqlite.Row` results use `row["column_name"]` (not positional `row[0]`). `row_factory = aiosqlite.Row` is set in `engine.py`.
-- **Audit log indexes**: `audit_log` has indexes on `timestamp`, `(service_id, action_id)`, and `passport_hash` for future query performance.
-- **Wizard auth**: JWT session tokens signed with `PASSPORT_SIGNING_SECRET`, 8-hour expiry, `iss=agentcafe-wizard`. All draft endpoints validate token + check `draft.company_id == token.sub`.
-- **Test mocking pattern**: Happy-path order tests use a `_MultiBackendTransport` class that routes httpx requests to the correct demo backend via ASGI transport — no running servers needed. See `test_order.py`.
-- **Decisions log**: See `DECISIONS.md` for rationale behind architectural choices.
+- **`_State` class pattern**: All module-level mutable state uses a `_State` class. Tests monkeypatch via `monkeypatch.setattr(module._state, "attr", value)`. Applied across all modules.
+- **`configure_*()` functions**: Each module (`passport`, `consent`, `human`, `wizard`, `pages`) has a `configure_*()` function called at startup in `main.py` to inject shared secrets.
+- **Shared httpx.AsyncClient**: `cafe/router.py` uses `_state.http_client` for proxying — reuses TCP connections.
+- **Named row access**: All `aiosqlite.Row` results use `row["column_name"]`. `row_factory = aiosqlite.Row` set in `engine.py`.
+- **Audit hash chain**: Each `audit_log` entry stores `prev_hash` and `entry_hash` (SHA-256 of all fields + prev_hash). `verify_audit_chain()` walks the chain to detect tampering.
+- **Wizard auth**: JWT session tokens signed with `PASSPORT_SIGNING_SECRET`, 8-hour expiry, `iss=agentcafe-wizard`. Draft ownership enforced on all endpoints.
+- **Passport V2 validation chain**: JWT decode → JTI revoked check → policy revoked_at check → tier check → scope check → authorization check.
+- **Test patterns**: `_MultiBackendTransport` for backend mocking, DB save/restore in E2E tests to avoid session-scoped interference.
+- **Decisions log**: See `DECISIONS.md` (ADR-001 through ADR-025).
 
-## 9.1 Known Limitations (from live testing)
+## 9.1 Known Limitations
 
-- **Review replaces, doesn't merge**: `PUT /wizard/drafts/{id}/review` stores company edits as a complete replacement of the candidate menu. Submitting a review with no `actions` array results in an empty preview. The Phase 5 dashboard must pre-populate the form with AI-generated values and merge partial edits.
-- **MVP passport vs wizard-published services**: `demo-passport` has hardcoded scopes for the 3 seeded services only. Orders to wizard-published services are correctly rejected with `scope_missing`. To test wizard-published services end-to-end, enable `USE_REAL_PASSPORT=true` and issue a JWT with the wizard-assigned scopes.
-- **LLM enrichment model hardcoded**: `ENRICHMENT_MODEL = "gpt-4o-mini"` in `ai_enricher.py` line 27. Not configurable via env var yet. Rule-based fallback works without any LLM.
+- **Review replaces, doesn't merge**: `PUT /wizard/drafts/{id}/review` stores company edits as a complete replacement. The dashboard pre-populates forms with AI values, but the API itself does full replacement.
+- **No edit-after-publish**: Published services cannot be edited. Requires unpublish + re-onboard. Phase 6 will add `POST /wizard/services/{id}/edit` to create a draft from existing config.
+- **HS256 signing**: Passport JWTs use a shared HMAC secret. Phase 6 will migrate to RS256 + KMS.
+- **In-memory DB by default**: SQLite on disk (`agentcafe.db`) or `:memory:` for tests. No replication or backup.
+- **Rule-based enricher confidence is static**: Hardcoded at 60%/80%/40% (description/inputs/example_response). LLM path returns genuinely calibrated scores.
+- **Read-keyword regex in spec parser**: `_classify_write()` uses substring matching for read keywords (`search`, `list`, `get`, etc.). This can misclassify operations whose IDs contain these as substrings (e.g., `widget` contains `get`). Use operationIds that avoid these substrings, or override `is_write` in the review step.
 
 ## 10. Rules for All AI Contributors
 - Always respect the locked Menu format and proxy architecture.

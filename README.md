@@ -44,6 +44,8 @@ pip install -e ".[dev]"
 rm -f agentcafe.db
 
 # Start the Cafe (launches 4 servers: Cafe + 3 demo backends)
+PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!! \
+ISSUER_API_KEY=admin123 \
 python -m agentcafe.main
 
 # Browse the Menu
@@ -54,8 +56,26 @@ curl -X POST http://localhost:8000/cafe/order \
   -H "Content-Type: application/json" \
   -d '{"service_id":"stayright-hotels","action_id":"search-availability","passport":"demo-passport","inputs":{"city":"Austin","check_in":"2026-03-15","check_out":"2026-03-18","guests":2}}'
 
-# Run tests
+# Run tests (177 passing)
 pytest tests/ -v
+```
+
+### Company Dashboard (Next.js)
+
+```bash
+cd dashboard && npm install && npm run dev
+# http://localhost:3000 (proxies API to backend on :8000)
+```
+
+Pages: `/login`, `/register`, `/onboard` (4-step wizard), `/services` (manage your services), `/admin` (platform admin, requires ISSUER_API_KEY).
+
+A sample spec is included at `dashboard/sample-spec.yaml` for testing the onboarding flow.
+
+### Demo Agent
+
+```bash
+python -m agentcafe.demo_agent --headless
+# Full lifecycle: browse menu → register → read → consent → approve → write → refresh
 ```
 
 ### Consent Flow (try it locally)
@@ -121,10 +141,13 @@ AgentCafe/
 │   ├── wizard/             # Company Onboarding Wizard (spec parser, AI enricher, review, publish)
 │   ├── db/                 # SQLite schema, engine, migrations, seed data
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
-├── tests/                  # 134 tests (menu, order, passport, consent, policy, wizard, UI)
+├── dashboard/             # Next.js 15 Company Dashboard (React 19, Tailwind 4)
+│   └── src/app/           # /login, /register, /onboard, /services, /admin
+├── tests/                  # 177 tests (menu, order, passport, consent, policy, wizard, crypto, e2e)
 ├── docs/
 │   ├── design/             # Service specs, menu format, onboarding wizard
-│   └── passport/           # Passport system design + threat model
+│   ├── passport/           # Passport V2 design + threat model
+│   └── building-agents-for-agentcafe.md  # Developer guide
 ├── Dockerfile              # Single image, multi-service
 ├── docker-compose.yml      # 4 containers: Cafe + 3 demo backends
 ├── AGENT_CONTEXT.md        # Project bible for AI contributors (read first)
@@ -143,6 +166,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 4 in progress — Passport V2 with two-tier JWT system, full human consent flow (initiate → approve → exchange → refresh), risk-tier token ceilings, identity verification (read-before-write), server-rendered consent UI, and schema migration system. Plus everything from Phase 3: Menu discovery, proxy ordering, rate limiting, input validation, Company Onboarding Wizard. 134 tests passing, pylint 10.00/10.
-**Next:** Phase 4 remaining (signing key management, input injection protection, audit hardening) then Phase 5 (Wizard Dashboard UI, end-to-end agent demo)
+**Status:** Phase 5 complete. Full stack operational: Passport V2 (two-tier JWT, human consent flow, risk-tier ceilings, identity verification), backend credential encryption (AES-256-GCM), tamper-evident audit logging (SHA-256 hash chain), Company Onboarding Wizard (API + Next.js dashboard), service quarantine & suspension, platform admin dashboard, E2E demo agent. 177 tests passing, pylint 10.00/10.  
+**Next:** Phase 6 — Passport signing key management (RS256 + KMS), production Docker hardening, edit-after-publish, open-core split.  
 **Built for:** The inevitable agent economy
