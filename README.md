@@ -56,7 +56,7 @@ curl -X POST http://localhost:8000/cafe/order \
   -H "Content-Type: application/json" \
   -d '{"service_id":"stayright-hotels","action_id":"search-availability","passport":"demo-passport","inputs":{"city":"Austin","check_in":"2026-03-15","check_out":"2026-03-18","guests":2}}'
 
-# Run tests (194 passing)
+# Run tests (214 passing)
 pytest tests/ -v
 ```
 
@@ -144,16 +144,14 @@ AgentCafe/
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
 ├── dashboard/             # Next.js 15 Company Dashboard (React 19, Tailwind 4)
 │   └── src/app/           # /login, /register, /onboard, /services, /admin
-├── tests/                  # 194 tests (menu, order, passport, consent, policy, wizard, crypto, keys, e2e)
+├── tests/                  # 214 tests (menu, order, passport, consent, policy, wizard, crypto, keys, e2e)
 ├── docs/
-│   ├── design/             # Service specs, menu format, onboarding wizard
-│   ├── passport/           # Passport V2 design + threat model
-│   └── building-agents-for-agentcafe.md  # Developer guide
+│   ├── architecture/       # ADRs, Passport V2 specs
+│   ├── planning/           # Development plan
+│   └── reviews/            # Project reviews and audit trails
 ├── Dockerfile              # Multi-stage build, hardened slim image, non-root user
 ├── docker-compose.yml      # 4 containers: Cafe + 3 demo backends
 ├── AGENT_CONTEXT.md        # Project bible for AI contributors (read first)
-├── DECISIONS.md            # Architectural decisions log
-├── DEVELOPMENT-PLAN.md     # Ordered phases with completion status
 └── pyproject.toml          # Dependencies and build config
 ```
 
@@ -167,6 +165,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 6 complete (v0.1.0). RS256 passport signing with JWKS endpoint, production Docker (multi-stage, non-root), edit-after-publish, SQLite persistence volume. 194 tests passing, pylint 10.00/10.  
+**Status:** Phase 6.1 complete (v0.1.0). RS256 passport signing, production Docker, edit-after-publish, security review (ADR-026: CSRF, bcrypt, rate limiting, multi-action consent, human dashboard, webhooks). 214 tests passing, pylint 10.00/10.  
 **Next:** Phase 7 — Deployment & Real-Agent Beta (cloud deploy, CI/CD, real external agents).  
 **Built for:** The inevitable agent economy

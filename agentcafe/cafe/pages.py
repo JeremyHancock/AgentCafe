@@ -20,6 +20,7 @@ from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from agentcafe.cafe.consent import _fire_consent_callback
 from agentcafe.cafe.human import (
     _hash_password, _verify_password, _rehash_if_legacy,
     _create_human_session_token, validate_human_session,
@@ -172,13 +173,166 @@ def _consent_text(service_name: str, actions: list[dict]) -> str:
 
 @pages_router.get("/", response_class=HTMLResponse)
 async def root_page(request: Request):
-    """Redirect root to login (or a future dashboard)."""
+    """Redirect root to dashboard if logged in, else to login."""
     session = _get_session(request)
     if session:
-        return templates.TemplateResponse("base.html", {
-            "request": request,
-        })
+        return RedirectResponse(url="/dashboard", status_code=303)
     return RedirectResponse(url="/login", status_code=303)
+
+
+@pages_router.get("/logout", response_class=HTMLResponse)
+async def logout_page(request: Request):  # noqa: ARG001  pylint: disable=unused-argument
+    """Clear the session cookie and redirect to login."""
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(_COOKIE_NAME)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboard — human policy dashboard
+# ---------------------------------------------------------------------------
+
+def _human_date(iso: str | None) -> str:
+    """Format an ISO timestamp as a short human-readable string."""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso)
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return iso
+
+
+def _lifetime_label(seconds: int) -> str:
+    """Human-readable label for a token lifetime in seconds."""
+    if seconds == 0:
+        return "single-use"
+    if seconds >= 3600:
+        h = seconds // 3600
+        return f"{h} hour{'s' if h != 1 else ''}"
+    return f"{seconds // 60} min"
+
+
+@pages_router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request, revoked: str = ""):
+    """Render the human policy dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/dashboard", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    # Fetch all policies for this user
+    cursor = await db.execute(
+        """SELECT p.id, p.service_id, p.allowed_action_ids, p.scopes,
+                  p.risk_tier, p.max_token_lifetime_seconds,
+                  p.expires_at, p.revoked_at, p.created_at
+           FROM policies p
+           WHERE p.cafe_user_id = ?
+           ORDER BY p.created_at DESC""",
+        (user_id,),
+    )
+    rows = await cursor.fetchall()
+
+    # Count active tokens per policy
+    token_counts: dict[str, int] = {}
+    if rows:
+        policy_ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(policy_ids))
+        tc_cursor = await db.execute(
+            f"SELECT policy_id, COUNT(*) AS cnt FROM active_tokens "
+            f"WHERE policy_id IN ({placeholders}) AND expires_at > ? "
+            f"GROUP BY policy_id",
+            (*policy_ids, datetime.now(timezone.utc).isoformat()),
+        )
+        for tc in await tc_cursor.fetchall():
+            token_counts[tc["policy_id"]] = tc["cnt"]
+
+    # Look up service names
+    service_names: dict[str, str] = {}
+    service_ids = list({r["service_id"] for r in rows})
+    for sid in service_ids:
+        svc_cursor = await db.execute(
+            "SELECT name FROM published_services WHERE service_id = ?", (sid,)
+        )
+        svc = await svc_cursor.fetchone()
+        service_names[sid] = svc["name"] if svc else sid
+
+    active_policies = []
+    revoked_policies = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for row in rows:
+        entry = {
+            "id": row["id"],
+            "service_name": service_names.get(row["service_id"], row["service_id"]),
+            "action_ids": row["allowed_action_ids"],
+            "risk_tier": row["risk_tier"],
+            "max_lifetime_label": _lifetime_label(row["max_token_lifetime_seconds"]),
+            "active_token_count": token_counts.get(row["id"], 0),
+            "created_at_human": _human_date(row["created_at"]),
+            "expires_at_human": _human_date(row["expires_at"]),
+            "revoked_at_human": _human_date(row["revoked_at"]),
+        }
+        if row["revoked_at"] or row["expires_at"] < now_iso:
+            revoked_policies.append(entry)
+        else:
+            active_policies.append(entry)
+
+    success_message = ""
+    if revoked == "1":
+        success_message = "Policy revoked successfully. All active tokens have been invalidated."
+
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "active_policies": active_policies,
+        "revoked_policies": revoked_policies,
+        "csrf_token": _generate_csrf_token(request),
+        "success_message": success_message,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /dashboard/revoke/<policy_id> — one-click policy revocation
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/dashboard/revoke/{policy_id}", response_class=HTMLResponse)
+async def dashboard_revoke(
+    request: Request,
+    policy_id: str,
+    csrf_token: str = Form(""),
+):
+    """Revoke a policy from the dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/dashboard", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    # Verify ownership
+    cursor = await db.execute(
+        "SELECT id FROM policies WHERE id = ? AND cafe_user_id = ?",
+        (policy_id, user_id),
+    )
+    if not await cursor.fetchone():
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE policies SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL",
+        (now, now, policy_id),
+    )
+    # Invalidate active tokens for this policy
+    await db.execute(
+        "DELETE FROM active_tokens WHERE policy_id = ?", (policy_id,)
+    )
+    await db.commit()
+
+    return RedirectResponse(url="/dashboard?revoked=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +670,9 @@ async def consent_approve_submit(
         svc_row = await svc_cursor.fetchone()
         service_name = svc_row["name"] if svc_row else consent["service_id"]
 
+        # Fire webhook callback (best-effort)
+        await _fire_consent_callback(consent["callback_url"], consent_id, "approved", policy_id)
+
         return templates.TemplateResponse("consent_done.html", {
             "request": request,
             "status": "approved",
@@ -549,11 +706,22 @@ async def consent_decline(
     db = await get_db()
     now = datetime.now(timezone.utc).isoformat()
 
+    # Look up callback_url before updating
+    cursor = await db.execute(
+        "SELECT callback_url FROM consents WHERE id = ? AND status = 'pending'",
+        (consent_id,),
+    )
+    consent_row = await cursor.fetchone()
+    callback_url = consent_row["callback_url"] if consent_row else None
+
     await db.execute(
         "UPDATE consents SET status = 'declined', updated_at = ? WHERE id = ? AND status = 'pending'",
         (now, consent_id),
     )
     await db.commit()
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(callback_url, consent_id, "declined")
 
     return templates.TemplateResponse("consent_done.html", {
         "request": request,

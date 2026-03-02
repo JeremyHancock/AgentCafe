@@ -716,7 +716,7 @@ async def test_wizard_publish_cross_company_duplicate_rejected(wizard_client):
 
 def test_parse_hotel_openapi_yaml():
     """Parse the real hotel-booking OpenAPI YAML and verify extraction."""
-    hotel_spec_path = Path(__file__).parent.parent / "docs" / "design" / "services" / "hotel-booking" / "openapi.yaml"
+    hotel_spec_path = Path(__file__).parent.parent / "agentcafe" / "db" / "services" / "hotel-booking-openapi.yaml"
     raw = hotel_spec_path.read_text()
     result = parse_openapi_spec(raw)
 
@@ -742,7 +742,7 @@ def test_parse_hotel_openapi_yaml():
 
 def test_hotel_spec_ref_resolution():
     """$ref schemas in the hotel spec resolve to real data."""
-    hotel_spec_path = Path(__file__).parent.parent / "docs" / "design" / "services" / "hotel-booking" / "openapi.yaml"
+    hotel_spec_path = Path(__file__).parent.parent / "agentcafe" / "db" / "services" / "hotel-booking-openapi.yaml"
     raw = hotel_spec_path.read_text()
     result = parse_openapi_spec(raw)
 
@@ -760,7 +760,7 @@ def test_hotel_spec_ref_resolution():
 
 def test_hotel_spec_required_inputs():
     """Required inputs extracted correctly from the hotel spec."""
-    hotel_spec_path = Path(__file__).parent.parent / "docs" / "design" / "services" / "hotel-booking" / "openapi.yaml"
+    hotel_spec_path = Path(__file__).parent.parent / "agentcafe" / "db" / "services" / "hotel-booking-openapi.yaml"
     raw = hotel_spec_path.read_text()
     result = parse_openapi_spec(raw)
     candidate = _enrich_rule_based(result)

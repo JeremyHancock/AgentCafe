@@ -25,9 +25,8 @@ WORKDIR /app
 # Copy installed Python packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application code, templates, and design files
+# Copy application code (includes templates, service data files in db/services/)
 COPY agentcafe/ agentcafe/
-COPY docs/design/ docs/design/
 
 # Create data directory for SQLite (writable by cafe user)
 RUN mkdir -p /app/data && chown -R cafe:cafe /app /app/data

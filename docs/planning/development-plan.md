@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 6 complete (194 tests, pylint 10.00/10). v0.1.0 ready. Phase 7 next (Deployment & Real-Agent Beta).  
-**Last Updated:** March 1, 2026
+**Current Status:** Phase 6 complete + security review (214 tests, pylint 10.00/10). v0.1.0 ready. Phase 7 next (Deployment & Real-Agent Beta).  
+**Last Updated:** March 2, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -24,7 +24,7 @@ We can run end-to-end locally:
 **Phase 0: Discovery & Design** ✅
 - 0.1 Competitive landscape (completed)
 - 0.2 Design the three demo backend APIs + Company Onboarding Wizard (completed)
-  - Deliverables in `docs/design/`: OpenAPI specs, locked Menu entries, Onboarding Wizard design (FLOW.md, UI-SCREENS.md, ARCHITECTURE.md)
+  - Deliverables: OpenAPI specs and locked Menu entries in `agentcafe/db/services/`. Wizard design docs removed (superseded by implementation).
 
 **Phase 1: Project Bootstrap + Demo Backends** ✅
 - ✅ Project structure: `pyproject.toml`, `agentcafe/` package, config, SQLite schema
@@ -35,7 +35,7 @@ We can run end-to-end locally:
 - ✅ Tests: 85 passing (Menu format, action correctness, auth requirements, input validation, happy-path proxy, JWT passport issuance/validation/revocation, rate limiting, type validation, wizard spec parsing, enrichment, full wizard API flow, draft ownership, dry-run, hotel spec, post-publish management)
 
 **Phase 2: Core Cafe Foundation** ✅
-- ✅ **2.0 Passport System Design** — locked in `docs/passport/design.md` (Grok + Claude collaboration)
+- ✅ **2.0 Passport System Design** — Grok + Claude collaboration. V1 design doc removed (superseded by V2 spec).
 - ✅ 2.1 Docker Compose: Cafe + 3 demo backends in separate containers, real HTTP proxying, health checks, configurable backend hosts
 - ✅ 2.2 Real Passport validation — JWT (HS256), scopes (`{service_id}:{action_id}`), wildcard (`{service_id}:*`), expiry, revocation via `revoked_jtis` table
 - ✅ 2.3 Company Policy engine: sliding-window rate limiting (per passport+action from audit_log), input type validation (explicit `type` field per ADR-015, fallback to example inference)
@@ -62,7 +62,7 @@ We can run end-to-end locally:
 - ✅ Proper exception chaining (`raise ... from exc`) on all re-raised HTTPExceptions
 - ✅ Narrowed broad `except Exception` to specific types where possible
 - ✅ Removed unused imports and variables in test files
-- ✅ See `FIX_PROGRESS.md` for the complete 12-fix improvement tracker
+- ✅ See `docs/reviews/wizard-fix-progress.md` for the complete 12-fix improvement tracker
 
 **Phase 3.2: Project Review Fixes** ✅
 - ✅ Fixed scope mismatch: updated `cost.required_scopes` in all 4 design files (13 values) to match `seed.py` proxy_configs (e.g., `hotel:search` → `stayright-hotels:search-availability`)
@@ -72,7 +72,7 @@ We can run end-to-end locally:
 - ✅ 8 new tests (dashboard, pause, pause-idempotency, resume, unpublish, logs, ownership 403, not-found 404)
 - ✅ Comprehensive `PROJECT_REVIEW.md` documenting all findings and remaining gaps
 
-**Phase 4: Passport V2 & Security** (design converged — see `docs/passport/v2-design-discussion.md` §13)
+**Phase 4: Passport V2 & Security** (design converged — see `docs/architecture/passport/v2-discussion.md` §13)
 - ✅ Real double validation with JWT verification (done in Phase 2)
 - ✅ Passport revocation (done in Phase 2)
 - ✅ Passport V2 design: 8 locked positions via three-way review (ADR-024)
@@ -91,8 +91,8 @@ We can run end-to-end locally:
 - ✅ **Tamper-evident audit logging** — SHA-256 hash chaining on audit_log entries. Each entry stores `prev_hash` (previous entry's hash) and `entry_hash` (SHA-256 of all fields + prev_hash). Migration 0005 adds columns. `verify_audit_chain()` walks the chain to detect tampering. Graceful skip for legacy entries. 3 new tests.
 - ✅ Schema migration system — lightweight numbered SQL migrations in `agentcafe/db/migrations/`, version tracking via `schema_version` table, auto-applied on startup. Migration 0001 adds `policies` table with `revoked_at`.
 - ✅ **Token response `policy_limits` snapshot** — `active_tokens` and `max_active_tokens` (20) included in `/tokens/exchange` and `/tokens/refresh` responses via `PolicyLimits` model. Rate limit info remains per-action (returned reactively via 429). 2 new tests.
-- ✅ **Service onboarding security** — ADR-025. Quarantine mode (`quarantine_until` on proxy_configs, 30-day default for new services, forces Tier-2 consent for all actions). Instant suspension (`suspended_at`, returns 503 `service_suspended`). `POST /cafe/services/{id}/suspend` admin endpoint. Cafe-owned consent text (already enforced). Migration 0006. Publisher sets quarantine on publish. Demo data pre-lifted. 5 new tests.
-- ✅ **"Building Agents for AgentCafe" developer guide** — `docs/building-agents-for-agentcafe.md`. Covers two-tier Passport system, consent flow sequence diagram, token lifecycle, rate limits, risk tiers, identity verification, error codes, multi-agent coordination, and Cafe guarantees.
+- ✅ **Service onboarding security** — ADR-025. Quarantine mode (`quarantine_until` on proxy_configs, 7-day default for new services, configurable via `QUARANTINE_DAYS` env var, forces Tier-2 consent for all actions). Instant suspension (`suspended_at`, returns 503 `service_suspended`). `POST /cafe/services/{id}/suspend` admin endpoint. Cafe-owned consent text (already enforced). Migration 0006. Publisher sets quarantine on publish. Demo data pre-lifted. 5 new tests.
+- ✅ ~~**"Building Agents for AgentCafe" developer guide**~~ — removed during doc cleanup (March 2, 2026). Agent-facing info belongs in `AGENT_CONTEXT.md` and API auto-docs, not a human-written integration guide.
 
 **Phase 5: Testing & Polish**
 - ✅ **End-to-end demo agent** — `python -m agentcafe.demo_agent` CLI. Full lifecycle: browse menu → Tier-1 register → read order → consent initiate → human approve → token exchange → write order → token refresh. `--headless` flag auto-approves for CI. `--service`, `--read-action`, `--write-action` args. Colored terminal output.
@@ -114,7 +114,13 @@ We can run end-to-end locally:
 - ✅ **Production Docker images** — multi-stage build (builder + runtime), `python:3.12-slim` base, non-root `cafe` user, `[wizard]` deps (LiteLLM) included, templates and design files copied.
 - ✅ **Docker Compose hardening** — SQLite persistent volume (`cafe_data`), `USE_REAL_PASSPORT=true`, `OPENAI_API_KEY` passthrough, `restart: unless-stopped`, DB path in `/app/data/`, production notes in header.
 - ✅ **Edit published service** — `POST /wizard/services/{id}/edit` creates a pre-populated draft (wizard_step=3) from the live Menu entry + proxy configs. Re-publishing via the normal wizard flow updates the existing service in-place (publisher detects same company + service_id → UPDATE instead of INSERT). Cross-company duplicate service_id still rejected. 6 new tests (edit creates draft, full edit→republish flow, unpublished rejection, cross-company rejection, same-company re-publish, cross-company duplicate). `EditServiceResponse` model added.
-- ✅ **Open-core split, launch assets** — MIT LICENSE file, README updated for v0.1.0 (194 tests, RS256 architecture, edit-after-publish, production Docker), project layout reflects current state.
+- ✅ **Open-core split, launch assets** — MIT LICENSE file, README updated for v0.1.0 (RS256 architecture, edit-after-publish, production Docker), project layout reflects current state.
+
+**Phase 6.1: Security Review (ADR-026)** ✅
+- ✅ **Sprint 1 — Security hygiene (7 fixes):** Revoke endpoint auth, consent decline→POST, bcrypt password hashing, registration rate limiting, CORS hardening, foreign key enforcement, admin API key in header.
+- ✅ **Sprint 2 — Structural fixes (3 fixes):** Multi-action consent, audit hash chain concurrency (asyncio.Lock + seq column, migration 0007), configurable quarantine (QUARANTINE_DAYS env var, default 7).
+- ✅ **Sprint 3 — UX (2 fixes):** Human dashboard (active/revoked policies, one-click revoke with CSRF), consent webhook/callback (`_fire_consent_callback`, POST to `callback_url` on approve/decline).
+- 214 tests passing (up from 194 pre-review). See `docs/reviews/review-2.md` and ADR-026 in `docs/architecture/decisions.md`.
 
 **Phase 7: Deployment & Real-Agent Beta** (starts immediately after Phase 6)
 

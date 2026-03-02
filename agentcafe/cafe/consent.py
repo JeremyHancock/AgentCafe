@@ -10,6 +10,7 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
+import httpx
 import jwt
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
@@ -19,6 +20,41 @@ from agentcafe.db.engine import get_db
 from agentcafe.keys import sign_passport_token, decode_passport_token
 
 logger = logging.getLogger("agentcafe.consent")
+
+_CALLBACK_TIMEOUT = 10  # seconds
+
+
+async def _fire_consent_callback(
+    callback_url: str | None,
+    consent_id: str,
+    status: str,
+    policy_id: str | None = None,
+) -> None:
+    """POST a status update to the agent's callback_url (fire-and-forget).
+
+    Silently logs failures — callback delivery is best-effort and must not
+    block or fail the consent flow.
+    """
+    if not callback_url:
+        return
+    payload = {
+        "consent_id": consent_id,
+        "status": status,
+    }
+    if policy_id:
+        payload["policy_id"] = policy_id
+    try:
+        async with httpx.AsyncClient(timeout=_CALLBACK_TIMEOUT) as client:
+            resp = await client.post(callback_url, json=payload)
+            logger.info(
+                "Consent callback %s → %s (HTTP %d)",
+                consent_id, callback_url, resp.status_code,
+            )
+    except Exception:  # pylint: disable=broad-except
+        logger.warning(
+            "Consent callback failed for %s → %s", consent_id, callback_url,
+            exc_info=True,
+        )
 
 consent_router = APIRouter(tags=["consent"])
 
@@ -408,6 +444,9 @@ async def approve_consent(
     await db.commit()
 
     logger.info("Consent %s approved by user %s → policy %s", consent_id, email, policy_id)
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(consent["callback_url"], consent_id, "approved", policy_id)
 
     return ApproveResponse(
         consent_id=consent_id,

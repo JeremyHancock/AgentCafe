@@ -28,7 +28,6 @@ services:
       - LUNCH_BACKEND_PORT=8002
       - HOME_SERVICE_BACKEND_HOST=home-service
       - HOME_SERVICE_BACKEND_PORT=8003
-      - CAFE_DESIGN_DIR=/app/docs/design
       - CAFE_DB_PATH=/app/data/agentcafe.db
       - PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!!
       - ISSUER_API_KEY=admin123

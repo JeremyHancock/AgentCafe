@@ -552,8 +552,15 @@ All 3 Sprint 2 items implemented and verified. **204 tests passing.**
 | 9 | **Audit hash chain concurrency fix** | `cafe/router.py`, `db/migrations/0007_audit_seq_column.sql`, `tests/test_order.py` | `asyncio.Lock` serializes SELECT prev_hash + INSERT. Monotonic `seq INTEGER` column replaces timestamp ordering. `verify_audit_chain` orders by `seq ASC`. Concurrent-order test verifies no chain forks. |
 | 10 | **Quarantine period configurable** | `config.py`, `wizard/publisher.py`, `wizard/router.py`, `main.py` | `QUARANTINE_DAYS` env var (default 7). Passed through `configure_wizard` → `publish_draft`. Was hardcoded 30 days. |
 
-### 12.4 Sprint 3 — Next
+### 12.4 Sprint 3 — Implementation Complete (March 2, 2026)
 
-Remaining items (UX):
-1. Human dashboard (active policies, one-click revoke)
-2. Consent webhook/callback (use existing `callback_url` field)
+All 2 Sprint 3 items implemented and verified. **214 tests passing.**
+
+| # | Fix | File(s) Changed | Details |
+|---|-----|-----------------|---------|
+| 11 | **Human dashboard** | `cafe/pages.py`, `templates/dashboard.html`, `tests/test_consent.py` | `GET /dashboard` shows active & revoked policies with service name, risk tier, action IDs, active token count, lifetime. `POST /dashboard/revoke/{id}` one-click revoke with CSRF + ownership check. `GET /logout` clears session. Root `/` redirects to dashboard when logged in. 5 new tests. |
+| 12 | **Consent webhook/callback** | `cafe/consent.py`, `cafe/pages.py`, `tests/test_consent.py` | `_fire_consent_callback()` POSTs `{consent_id, status, policy_id}` to `callback_url` (best-effort, 10s timeout, logged failures). Fires on API approve, form approve, and form decline. 5 new tests (integration + unit). |
+
+### 12.5 All Review Items Complete
+
+Sprints 1–3 delivered **12 fixes** across security hygiene, structural improvements, and UX. Total: **214 tests passing, 0 failures.**

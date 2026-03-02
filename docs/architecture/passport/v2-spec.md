@@ -4,7 +4,7 @@
 **Date:** February 27, 2026  
 **Status:** **LOCKED** — 9 converged positions (Feb 27 three-way review). Implementation may begin.  
 **Authors:** Jeremy (project lead), Claude (advisor), Grok (beneficial adversary)  
-**Supersedes:** Passport V1 (POA model). Phase 2 implementation (`design.md`) remains valid; V2 extends it.  
+**Supersedes:** Passport V1 (POA model). V2 extends Phase 2 implementation.  
 **ADRs:** ADR-023 (Menu schema extension), ADR-024 (bearer authorization model)
 
 ---
@@ -48,7 +48,7 @@ Agent identity is intentionally out of scope. Agents are ephemeral, copyable, an
 ### 3.2 Tier-2: Write-Scope Passport
 
 - Requires human consent via Cafe-owned flow (§4).
-- Human must have a Cafe account with passkey (no exceptions).
+- Human must have a Cafe account (password-based for now; passkey planned for Phase 7).
 - Token is short-lived; lifetime governed by risk-tier ceilings (§6.2).
 - Scoped to specific actions, services, and human-set constraints.
 
@@ -507,9 +507,9 @@ Each sub-agent self-requests its own Tier-1 Passport. Unlimited parallel browsin
 - Rate-limit 429 response with machine-readable error body.
 - `cost.limits.rate_limit_scope` in Menu responses.
 
-### 14.2 Not in MVP
+### 14.2 Not in MVP (updated March 2, 2026)
 
-- Webhook consent notifications.
+- ~~Webhook consent notifications.~~ ✅ Implemented (Sprint 3, `_fire_consent_callback`).
 - Identity verification beyond agent-supplied input matching (no read-before-write yet).
 - Anomaly detection.
 - Multi-agent concurrency enforcement (hard cap of 20 is enforced; `concurrency_guidance` populated but not policed).
@@ -517,27 +517,30 @@ Each sub-agent self-requests its own Tier-1 Passport. Unlimited parallel browsin
 - Rolling proof / hash chain.
 - `on_behalf_of` resource constraints.
 - Beautiful consent page UI (functional Jinja2 is sufficient).
+- Passkey/WebAuthn enrollment (password-based accounts for now).
 
 ---
 
-## 15. Key Management (Post-MVP)
+## 15. Key Management
 
-- Migrate from HS256 shared secret → RS256 asymmetric with cloud KMS.
-- Private key never leaves KMS. Public keys via `/.well-known/jwks.json`.
+✅ **Implemented** (Phase 6, `agentcafe/keys.py`).
+
+- RS256 asymmetric signing. HS256 legacy fallback.
+- Public keys via `/.well-known/jwks.json` (JWKS endpoint).
 - `kid` claim in every JWT header for key lookup.
 - Dual-key overlap rotation for zero-downtime.
+- Cloud KMS integration deferred to production deployment (Phase 7).
 
 ---
 
 ## 16. Relationship to Existing Documents
 
-| Document | Relationship |
-|----------|-------------|
-| `design.md` (Phase 2) | Still accurate. V2 extends, does not replace. |
-| `threat-model.md` (v1.4) | Core principles hold. Layer 1 entry requirements and POA framing need revision per V2. Do not modify until deferred questions are resolved. |
-| `v2-design-discussion.md` | Source material for this spec. Contains rationale, rejected alternatives, and discussion history. |
-| `DECISIONS.md` | ADR-023 (Menu schema), ADR-024 (bearer model). |
-| `DEVELOPMENT-PLAN.md` | Phase 4 implementation tasks track this spec. |
+| Document | Path | Relationship |
+|----------|------|--------------|
+| Threat model (v1.4) | `docs/architecture/passport/threat-model.md` | Core principles hold. POA framing updated to bearer model (March 2026). |
+| V2 design discussion | `docs/architecture/passport/v2-discussion.md` | Source material for this spec. Contains rationale, rejected alternatives, and discussion history. |
+| Decisions log | `docs/architecture/decisions.md` | ADR-023 (Menu schema), ADR-024 (bearer model), ADR-026 (Sprint 1–3 fixes). |
+| Development plan | `docs/planning/development-plan.md` | Phase 4 implementation tasks track this spec. |
 
 ---
 

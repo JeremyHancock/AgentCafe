@@ -32,9 +32,9 @@ DEMO_COMPANY = {
 # ---------------------------------------------------------------------------
 
 MENU_ENTRY_FILES = {
-    "hotel": "services/hotel-booking/menu-entry.json",
-    "lunch": "services/lunch-delivery/menu-entry.json",
-    "home_service": "services/home-service-appointment/menu-entry.json",
+    "hotel": "hotel-booking-menu.json",
+    "lunch": "lunch-delivery-menu.json",
+    "home_service": "home-service-menu.json",
 }
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ def _load_menu_entries(design_dir: str) -> list[dict]:
             raise FileNotFoundError(
                 f"Design file not found: {filepath}\n"
                 f"Expected design files in: {design_path}\n"
-                f"Set CAFE_DESIGN_DIR env var or check that docs/design/ exists at the project root"
+                f"Set CAFE_DESIGN_DIR env var or check that agentcafe/db/services/ exists"
             )
         with open(filepath, encoding="utf-8") as f:
             entry = json.load(f)

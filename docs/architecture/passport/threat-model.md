@@ -2,7 +2,7 @@
 
 **Date:** February 22, 2026
 **Authors:** Grok (advisor), Claude (lead implementer), Jeremy (project lead)
-**Status:** **Locked for Phase 3 scoping.** All open items resolved. Pending: legal review before Phase 3 beta.
+**Status:** **Locked.** Core principles and threat model remain current. Implementation has progressed through Phase 6 (v0.1.0). The "Power of Attorney" framing was superseded by the "bearer authorization" model in ADR-024 (Feb 27, 2026) — see §0 Core Philosophy note.
 **Revision history:** v1.0 Grok draft → v1.2 Claude review + pushback → v1.3 merged tensions → v1.4 final (kill limited-mode, activation code flow, Layer 2.5, legal gate)
 
 ---
@@ -17,7 +17,9 @@
 
 ## Core Philosophy
 
-A passport is a digital Power of Attorney.
+> **Note (Feb 27, 2026):** The original "Power of Attorney" analogy was superseded by ADR-024. A passport is now framed as a **human-issued bearer authorization** — "I authorize the bearer" rather than "I authorize Agent X." Agent identity is intentionally out of scope (see Design Principle One). The POA analogy breaks because POA names a specific, verifiable second party, but agents are ephemeral software with no persistent identity. The core requirements below remain unchanged.
+
+A passport is a human-issued bearer authorization.
 It must prove **knowing, specific, revocable, and auditable** human intent at a level that companies and regulators will accept for real-world actions. Ordinary auth flows are insufficient.
 
 ---
@@ -217,7 +219,7 @@ The first-time experience is the biggest UX risk. Without optimization, the huma
 
 ---
 
-## 8. Why this is defensible at POA level
+## 8. Why this is defensible (bearer authorization model)
 
 - **Physical-world identity anchor** — the system's trust root is hardware the agent cannot possess. Every account requires a passkey. No exceptions.
 - **No fallback tiers** — there is no weaker account type for an attacker to exploit at scale
@@ -235,12 +237,14 @@ The first-time experience is the biggest UX risk. Without optimization, the huma
 
 ## 9. Phased Implementation
 
-| Phase | What ships | Security level |
-|-------|-----------|---------------|
-| **2 (current)** | JWT issuance/validation, revocation table, scopes + authorizations, migration flag | MVP: API-key issuance for dev/testing. Not yet suitable for real money. |
-| **3** | Human account creation with passkey, activation code flow, consent ceremony UI, standing mandates, Layer 2.5 first-use confirmation, Layer 3 async confirmation, velocity data model + per-service enforcement, total exposure calculation + dashboard | Production-grade for low-to-medium risk actions. **Requires legal review before beta.** |
-| **4** | Cross-service velocity, push notifications, periodic re-confirmation, risk-based tiering refinements | Production-grade for high-value actions |
-| **5+** | Open standard for other Cafes/gateways, insurance/liability partnerships, SOC 2, biometric options, agent attestation (if industry standard emerges) | Enterprise / regulated use |
+| Phase | What ships | Security level | Status |
+|-------|-----------|---------------|--------|
+| **2** | JWT issuance/validation, revocation table, scopes + authorizations | MVP: API-key issuance for dev/testing. | ✅ Complete |
+| **3** | Company onboarding wizard, spec parser, AI enricher, publisher | Wizard-published services with quarantine. | ✅ Complete |
+| **4** | Human accounts, full consent flow (Tier-1/Tier-2), risk-tier ceilings, consent UI, credential encryption, tamper-evident audit log | Production-grade for low-to-medium risk actions. | ✅ Complete |
+| **5** | E2E demo agent, spec upload/fetch, confidence scores, extension merging | Integration testing and developer tooling. | ✅ Complete |
+| **6** | RS256 passport signing (JWKS), production Docker, edit-after-publish | v0.1.0 release-ready. | ✅ Complete |
+| **7 (next)** | Deployment, real-agent beta, passkey/WebAuthn enrollment, standing mandates, Layer 2.5/3 confirmation, velocity enforcement | Production-grade for high-value actions. **Requires legal review before beta.** | Planned |
 
 ### Legal review gate (before Phase 3 beta)
 

@@ -4,7 +4,7 @@
 **Participants:** Jeremy (project lead) + Claude (advisor) + Grok (beneficial adversary)
 **Status:** **Eight core positions locked** (Feb 27 three-way review + follow-up session). MVP scope defined. Ready for canonical spec drafting. Deferred questions listed in §11.
 **External review:** ChatGPT (Feb 27) provided adversarial feedback on the concrete flow — selectively incorporated where it added specificity. Grok (Feb 27) red-teamed all positions across two rounds; convergence reached on all eight. Core framing, Cafe-side identity verification, and bearer-model reasoning are original to this discussion.
-**Depends on:** `design.md` (Phase 2 implementation), `threat-model.md` (v1.4, locked)
+**Depends on:** `threat-model.md` (v1.4, locked). V1 design doc (`design.md`) removed — superseded by `v2-spec.md`.
 
 ---
 
@@ -167,9 +167,10 @@ The `consent_id` is a **durable claim ticket** — not a transient polling handl
 - Works when the human approves within minutes. Probably 80% of real-world cases — agent asks, human is already in the conversation, approves quickly.
 - Not recommended for delays >30 minutes. Documented as such in API docs.
 
-**Secondary pattern: Webhook (opt-in, persistent agent platforms).**
+**Secondary pattern: Webhook (opt-in, persistent agent platforms).** ✅ *Implemented March 2, 2026 (Sprint 3).*
 - Agent provides an optional `callback_url` in `POST /consents/initiate`.
-- Cafe posts once on approval: `POST <callback_url>` with `{consent_id, status}`. Idempotent. Agent must validate HTTPS and provide a secret in the URL query param for authentication.
+- Cafe posts on approval or decline: `POST <callback_url>` with `{consent_id, status, policy_id}`. Best-effort delivery (10s timeout, logged failures).
+- Fires from both API approve path (`consent.py`) and form-based approve/decline paths (`pages.py`).
 - Designed for platforms like LangGraph, CrewAI, etc. that have persistent backends but ephemeral agent processes.
 
 **No consent discovery endpoint.** A `GET /consents?agent_tag=...` endpoint would be a privacy foot-gun — anyone with a stolen `agent_tag` could enumerate pending consents. The human's dashboard will show "Pending approvals" (queried by `cafe_user_id`), but agents cannot query it.
@@ -496,10 +497,10 @@ The 96% passkey coverage number should be re-verified, but the principle is soun
 
 ## 12. Relationship to Existing Documents
 
-- **`design.md` (Phase 2):** Still accurate for what's currently implemented. V2 does not change the existing JWT structure or validation — it extends it.
-- **`threat-model.md` (v1.4):** Core principles and Layers 2–3 hold. Layer 1 entry requirements, agent registration during setup, and the POA framing need revision per V2 reframing. The threat model should not be modified until remaining open questions are resolved.
-- **`DECISIONS.md`:** ADR-023 (Menu schema extension, ADR-009 amendment) + ADR-024 (Passport V2 bearer authorization model).
-- **`DEVELOPMENT-PLAN.md`:** Updated to reflect Passport V2 design convergence. Phase 4 rewritten with specific implementation items.
+- **`threat-model.md`** (`docs/architecture/passport/threat-model.md`): Core principles and Layers 2–3 hold. POA framing updated to bearer model (March 2026). Phase table updated through Phase 6.
+- **`decisions.md`** (`docs/architecture/decisions.md`): ADR-023 (Menu schema extension) + ADR-024 (V2 bearer model) + ADR-026 (Sprint 1–3 security fixes).
+- **`development-plan.md`** (`docs/planning/development-plan.md`): Updated to reflect Passport V2 design convergence. Phase 4 rewritten with specific implementation items.
+- **`v2-spec.md`** (`docs/architecture/passport/v2-spec.md`): Canonical spec derived from this discussion. Implementation reference.
 
 ---
 

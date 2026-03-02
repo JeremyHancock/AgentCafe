@@ -1100,3 +1100,325 @@ async def test_decline_get_returns_405(cafe_client):
     """GET /authorize/{id}/decline should return 405 (method not allowed)."""
     resp = await cafe_client.get("/authorize/fake-id/decline")
     assert resp.status_code == 405
+
+
+# ---------------------------------------------------------------------------
+# Human dashboard tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_dashboard_redirects_without_session(cafe_client):
+    """GET /dashboard without a session should redirect to login."""
+    resp = await cafe_client.get(
+        "/dashboard",
+        cookies={"cafe_session": ""},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/login" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_empty_for_new_user(cafe_client):
+    """Dashboard for a user with no policies should show empty state."""
+    email = f"dash-empty-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+
+    resp = await cafe_client.get(
+        "/dashboard",
+        cookies={"cafe_session": session_cookie},
+    )
+    assert resp.status_code == 200
+    assert "No policies yet" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shows_policy_after_approval(cafe_client):
+    """After approving a consent, the dashboard should show the policy."""
+    email = f"dash-policy-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+
+    # Create and approve a consent via form
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    page = await cafe_client.get(
+        f"/authorize/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(page.text)
+
+    await cafe_client.post(
+        f"/authorize/{consent_id}/approve",
+        data={"token_lifetime_seconds": "900", "csrf_token": csrf},
+        cookies={"cafe_session": session_cookie},
+        follow_redirects=False,
+    )
+
+    # Check dashboard
+    resp = await cafe_client.get(
+        "/dashboard",
+        cookies={"cafe_session": session_cookie},
+    )
+    assert resp.status_code == 200
+    assert "StayRight Hotels" in resp.text or "stayright-hotels" in resp.text
+    assert "Active (1)" in resp.text
+    assert "Revoke" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_revoke_policy(cafe_client):
+    """POST /dashboard/revoke/<id> should revoke the policy and redirect."""
+    email = f"dash-revoke-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+
+    # Create and approve consent
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    page = await cafe_client.get(
+        f"/authorize/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post(
+        f"/authorize/{consent_id}/approve",
+        data={"token_lifetime_seconds": "900", "csrf_token": csrf},
+        cookies={"cafe_session": session_cookie},
+        follow_redirects=False,
+    )
+
+    # Find the policy_id from the consent
+    status_resp = await cafe_client.get(f"/consents/{consent_id}/status")
+    policy_id = status_resp.json()["policy_id"]
+
+    # Get dashboard page for CSRF token
+    dash = await cafe_client.get(
+        "/dashboard",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(dash.text)
+
+    # Revoke
+    resp = await cafe_client.post(
+        f"/dashboard/revoke/{policy_id}",
+        data={"csrf_token": csrf},
+        cookies={"cafe_session": session_cookie},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "revoked=1" in resp.headers["location"]
+
+    # Dashboard should now show the policy as revoked (follow the redirect URL)
+    dash = await cafe_client.get(
+        "/dashboard?revoked=1",
+        cookies={"cafe_session": session_cookie},
+    )
+    assert "Revoked (1)" in dash.text
+    assert "Policy revoked successfully" in dash.text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_revoke_wrong_user_ignored(cafe_client):
+    """Revoking another user's policy should silently redirect (no crash)."""
+    email = f"dash-wrong-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+
+    # Get CSRF from login page (empty dashboard has no forms)
+    page = await cafe_client.get("/login")
+    csrf = _extract_csrf(page.text)
+
+    # Try revoking a non-existent/other-user policy
+    resp = await cafe_client.post(
+        "/dashboard/revoke/fake-policy-id",
+        data={"csrf_token": csrf},
+        cookies={"cafe_session": session_cookie},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/dashboard" in resp.headers["location"]
+
+
+# ---------------------------------------------------------------------------
+# Consent webhook/callback tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_callback_fired_on_api_approve(cafe_client, monkeypatch):
+    """When callback_url is set, _fire_consent_callback should be called on API approve."""
+    from unittest.mock import AsyncMock
+    import agentcafe.cafe.consent as cm
+
+    mock_cb = AsyncMock()
+    monkeypatch.setattr(cm, "_fire_consent_callback", mock_cb)
+
+    agent_token = await _register_agent(cafe_client)
+    _user_id, human_session = await _register_human(cafe_client)
+
+    # Initiate with a callback_url
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_id": "search-availability",
+            "callback_url": "https://agent.example.com/webhook",
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    assert resp.status_code == 200
+    consent_id = resp.json()["consent_id"]
+
+    # Approve via API
+    resp = await cafe_client.post(
+        f"/consents/{consent_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {human_session}"},
+    )
+    assert resp.status_code == 200
+    policy_id = resp.json()["policy_id"]
+
+    # Verify callback was fired
+    mock_cb.assert_called_once_with(
+        "https://agent.example.com/webhook", consent_id, "approved", policy_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_callback_fired_on_form_decline(cafe_client, monkeypatch):
+    """When callback_url is set, callback should fire on form-based decline."""
+    from unittest.mock import AsyncMock
+    import agentcafe.cafe.pages as pm
+
+    mock_cb = AsyncMock()
+    monkeypatch.setattr(pm, "_fire_consent_callback", mock_cb)
+
+    email = f"cb-decline-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+    })
+    session_cookie = await _login_via_form(cafe_client, email, "secure-password-123")
+
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={
+            "service_id": "stayright-hotels",
+            "action_id": "search-availability",
+            "callback_url": "https://agent.example.com/decline-hook",
+        },
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    page = await cafe_client.get(
+        f"/authorize/{consent_id}",
+        cookies={"cafe_session": session_cookie},
+    )
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post(
+        f"/authorize/{consent_id}/decline",
+        data={"csrf_token": csrf},
+        cookies={"cafe_session": session_cookie},
+    )
+    assert resp.status_code == 200
+
+    mock_cb.assert_called_once_with(
+        "https://agent.example.com/decline-hook", consent_id, "declined",
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_callback_when_url_not_set(cafe_client, monkeypatch):
+    """When no callback_url is provided, _fire_consent_callback should still be called but be a no-op."""
+    from unittest.mock import AsyncMock
+    import agentcafe.cafe.consent as cm
+
+    mock_cb = AsyncMock()
+    monkeypatch.setattr(cm, "_fire_consent_callback", mock_cb)
+
+    agent_token = await _register_agent(cafe_client)
+    _user_id, human_session = await _register_human(cafe_client)
+
+    # Initiate WITHOUT callback_url
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    consent_id = resp.json()["consent_id"]
+
+    resp = await cafe_client.post(
+        f"/consents/{consent_id}/approve",
+        json={},
+        headers={"Authorization": f"Bearer {human_session}"},
+    )
+    assert resp.status_code == 200
+
+    # callback_url will be None — function called but should be a no-op internally
+    mock_cb.assert_called_once()
+    assert mock_cb.call_args[0][0] is None  # first arg is callback_url
+
+
+@pytest.mark.asyncio
+async def test_fire_consent_callback_unit():
+    """Unit test: _fire_consent_callback POSTs the correct payload."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from agentcafe.cafe.consent import _fire_consent_callback
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    mock_client_instance = AsyncMock()
+    mock_client_instance.post = AsyncMock(return_value=mock_response)
+    mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+    mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("agentcafe.cafe.consent.httpx.AsyncClient", return_value=mock_client_instance):
+        await _fire_consent_callback(
+            "https://example.com/hook", "consent-123", "approved", "policy-456",
+        )
+
+    mock_client_instance.post.assert_called_once_with(
+        "https://example.com/hook",
+        json={"consent_id": "consent-123", "status": "approved", "policy_id": "policy-456"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_fire_consent_callback_skips_when_no_url():
+    """Unit test: _fire_consent_callback returns immediately when callback_url is None."""
+    from unittest.mock import patch
+    from agentcafe.cafe.consent import _fire_consent_callback
+
+    with patch("agentcafe.cafe.consent.httpx.AsyncClient") as mock_client:
+        await _fire_consent_callback(None, "consent-123", "approved")
+        mock_client.assert_not_called()

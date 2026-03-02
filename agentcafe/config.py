@@ -30,7 +30,7 @@ class CafeConfig:
     # Database
     db_path: str = "agentcafe.db"
 
-    # Path to design files (single source of truth for Menu entries)
+    # Path to service data files (single source of truth for Menu entries)
     design_dir: str = ""
 
     # Passport system (Phase 2 HS256 sessions, Phase 6 RS256 passports)
@@ -69,7 +69,7 @@ class CafeConfig:
 
 def load_config() -> CafeConfig:
     """Load config from environment variables, falling back to defaults."""
-    default_design_dir = str(_PROJECT_ROOT / "docs" / "design")
+    default_design_dir = str(_PROJECT_ROOT / "agentcafe" / "db" / "services")
     return CafeConfig(
         cafe_host=os.getenv("CAFE_HOST", "127.0.0.1"),
         cafe_port=int(os.getenv("CAFE_PORT", "8000")),

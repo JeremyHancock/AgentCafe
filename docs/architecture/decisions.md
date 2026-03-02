@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** February 28, 2026
+**Last Updated:** March 2, 2026
 
 ---
 
@@ -17,9 +17,9 @@
 ### ADR-002: Menu entries loaded from Phase 0.2 JSON files (single source of truth)
 
 **Date:** February 20, 2026  
-**Context:** The original `seed.py` hardcoded ~350 lines of Menu entry dicts, duplicating what was already defined in `docs/design/services/*/menu-entry.json`.  
+**Context:** The original `seed.py` hardcoded ~350 lines of Menu entry dicts, duplicating what was already defined in the service Menu JSON files (now in `agentcafe/db/services/`).  
 **Decision:** `seed.py` loads Menu entries from the JSON files at startup. Proxy configs remain hardcoded in `seed.py` (they're implementation details, not design artifacts).  
-**Rationale:** Single source of truth. If someone edits a Menu entry, they edit the design file and it flows through automatically. No risk of the design files and the seeded database drifting apart. `config.py` has a `design_dir` setting (defaults to `docs/design` relative to project root, overridable via `CAFE_DESIGN_DIR` env var).
+**Rationale:** Single source of truth. If someone edits a Menu entry, they edit the design file and it flows through automatically. No risk of the design files and the seeded database drifting apart. `config.py` has a `design_dir` setting (overridable via `CAFE_DESIGN_DIR` env var).
 
 ---
 
@@ -70,6 +70,8 @@
 
 ### ADR-008: MVP passport accepts only "demo-passport" (Phase 2 replaces)
 
+> **SUPERSEDED** by ADR-011 (JWT Passport) and ADR-024 (V2 bearer model). The `_validate_passport_mvp()` code has been removed. Kept here for historical context.
+
 **Date:** February 20, 2026  
 **Context:** Real JWT-based Passport validation is complex (key management, scope parsing, expiry, human authorization claims).  
 **Decision:** `_validate_passport_mvp()` accepts `"demo-passport"` with all scopes. `_check_human_authorization_mvp()` always passes for demo-passport. Both are clearly marked as MVP placeholders in `router.py`.  
@@ -98,7 +100,7 @@
 ### ADR-011: JWT Passport system (Phase 2.0)
 
 **Date:** February 22, 2026
-**Context:** The MVP "demo-passport" magic string provided no real security. Phase 2 required a cryptographically secure, scoped, revocable delegation system — designed collaboratively with Grok (advisor) and documented in `docs/passport/design.md`.
+**Context:** The MVP "demo-passport" magic string provided no real security. Phase 2 required a cryptographically secure, scoped, revocable delegation system — designed collaboratively with Grok (advisor). Original V1 design doc removed (superseded by V2 spec).
 **Decision:**
 1. **JWT (HS256)** signed with `PASSPORT_SIGNING_SECRET` env var. Upgrade path to RS256 later.
 2. **Two-layer auth**: `scopes` gate all actions; `authorizations` array gates human-auth-required actions.
@@ -254,7 +256,7 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 ### ADR-024: Passport V2 — bearer authorization model (core reframing)
 
 **Date:** February 27, 2026
-**Context:** The V1 Passport design (`docs/passport/design.md`) framed the Passport as a "digital Power of Attorney" — "this agent represents this human." Discussion revealed the POA analogy breaks down: POA names a specific, verifiable second party, but agents are ephemeral software with no persistent, verifiable identity. The V2 design discussion (`docs/passport/v2-design-discussion.md`) established a new framing through three-way review (Jeremy + Claude + Grok).
+**Context:** The V1 Passport design framed the Passport as a "digital Power of Attorney" — "this agent represents this human." Discussion revealed the POA analogy breaks down: POA names a specific, verifiable second party, but agents are ephemeral software with no persistent, verifiable identity. The V2 design discussion (`docs/architecture/passport/v2-discussion.md`) established a new framing through three-way review (Jeremy + Claude + Grok).
 **Decision:**
 1. **The Passport is a human-issued bearer authorization**, not an agent identity document. "I authorize the bearer" not "I authorize Agent X."
 2. **Agent identity is intentionally out of scope.** Design Principle One is strengthened: `agent_id` is not just untrusted but irrelevant to the security model. The Passport works regardless of whether agents develop stable identities.
@@ -263,7 +265,7 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 5. **Cafe-side identity verification** (Proposed Principle Two): the Cafe enforces human-scoping by inspecting proxied data — no backend changes, no human identity broadcast. Layered by risk tier: agent-supplied identifier match for low-risk, +read-before-write for medium+, mandatory read for high/critical.
 6. **Token expiry:** per-policy human-chosen with Cafe-enforced risk-tier ceilings. Single-use tokens for critical operations. Asymmetric ceremony preserved (easy to tighten, hard to loosen).
 7. **Rolling proof deferred** to Phase 4. Short-lived tokens + rule-based anomaly detection + human audit dashboard sufficient for Phase 3.
-**Rationale:** This reframing honestly acknowledges a new paradigm — a verified human delegating authority to an unverifiable autonomous entity — with no clean real-world analog. Anchoring trust exclusively to human identity (the only thing we can verify) produces a system that is robust regardless of how agent identity evolves. Design Principles Zero and One are preserved and strengthened. See `docs/passport/v2-design-discussion.md` §13 for the full convergence summary.
+**Rationale:** This reframing honestly acknowledges a new paradigm — a verified human delegating authority to an unverifiable autonomous entity — with no clean real-world analog. Anchoring trust exclusively to human identity (the only thing we can verify) produces a system that is robust regardless of how agent identity evolves. Design Principles Zero and One are preserved and strengthened. See `docs/architecture/passport/v2-discussion.md` §13 for the full convergence summary.
 
 ---
 
@@ -272,7 +274,7 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 **Date:** February 28, 2026
 **Context:** Company onboarding (Phase 3 Wizard) is the sole entry point for every Menu item agents will ever discover. A malicious, compromised, or sloppy service can publish actions that appear harmless in the Menu but perform dangerous operations (e.g., "search-availability" that silently charges a card, or "book-room" that actually cancels all bookings). This bypasses all downstream Passport, consent, and audit controls because those controls trust the Menu description as ground truth.
 **Decision:**
-1. **Quarantine mode**: All new services start in quarantine (`proxy_configs.quarantine_until` timestamp, default 30 days). Every action under quarantine forces full Tier-2 human consent (even low-risk read actions) plus Cafe admin notification. Quarantine auto-lifts after the period expires or via manual admin approval.
+1. **Quarantine mode**: All new services start in quarantine (`proxy_configs.quarantine_until` timestamp, default 7 days — configurable via `QUARANTINE_DAYS` env var). Every action under quarantine forces full Tier-2 human consent (even low-risk read actions) plus Cafe admin notification. Quarantine auto-lifts after the period expires or via manual admin approval.
 2. **Cafe owns all human-facing text**: Final consent text, `risk_tier`, `human_identifier_field`, `constraints_schema`, etc. are authored by the Cafe (AI enricher + review_engine + manual override). Service suggestions are advisory only and never reach the human or agent directly. (Already enforced — consent text generated by `_consent_text()` in `cafe/pages.py`.)
 3. **Service suspension**: Any detected abuse triggers instant suspension (`proxy_configs.suspended_at` timestamp). Suspended services return `503 service_suspended` on all orders. Suspension is logged in the audit trail.
 4. **Onboarding gates** (future): domain ownership verification (DNS TXT), contactable legal contact, optional manual review for actions flagged "high" or "critical" by static analysis. Deferred to Phase 6 — requires production infrastructure.
@@ -280,3 +282,32 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 **Rationale:** The Menu is the root of discovery trust. Poisoned entries undermine Design Principle Zero and the entire layered model. By making the Cafe the single source of truth for semantics presented to humans, we eliminate misrepresentation at source while keeping onboarding frictionless for honest companies. Quarantine adds near-zero friction for good actors but blocks the attack entirely. Complements existing risk_tier (ADR-023), consent flow (ADR-024), and audit chain.
 **Implementation:** Migration 0006 adds `quarantine_until` and `suspended_at` columns to `proxy_configs`. Router enforces quarantine (forces Tier-2) and suspension (blocks all). Publisher sets `quarantine_until` on publish. New tests for quarantine enforcement, suspension flow. No breaking changes to existing demo services (demo data sets `quarantine_until` to epoch past = already lifted).
 **Status:** Approved. Cross-references: ADR-023 (Menu schema), ADR-024 (bearer model).
+
+---
+
+### ADR-026: Security Review Sprint 1–3 fixes (PROJECT_REVIEW_2 remediation)
+
+**Date:** March 1–2, 2026
+**Context:** A comprehensive security audit (`docs/reviews/review-2.md`) identified 12 items across three priority tiers: critical security hygiene (Sprint 1), structural fixes (Sprint 2), and UX improvements (Sprint 3). All 12 were implemented and verified with 214 tests passing.
+**Decisions:**
+
+**Sprint 1 — Security hygiene (7 fixes):**
+1. **Revoke endpoint auth** (`cafe/passport.py`): `POST /cafe/revoke` now requires either `X-Api-Key` (admin) or valid token signature (self-revoke). Unauthenticated requests get 401/403.
+2. **Consent decline → POST** (`cafe/pages.py`): Decline changed from GET to POST. CSRF tokens (HMAC-SHA256, 1-hour TTL, session-bound) added to all form endpoints (login, register, approve, decline).
+3. **Human password hashing → bcrypt** (`cafe/human.py`): Replaced SHA-256 with bcrypt. Legacy SHA-256 hashes auto-upgrade to bcrypt on next login via `_rehash_if_legacy()`.
+4. **Registration rate limiting** (`cafe/passport.py`): IP-based sliding-window rate limit (10/hour) on `POST /passport/register`. `agent_tag` required.
+5. **CORS hardening** (`main.py`): `CORS_ALLOWED_ORIGINS` env var replaces wildcard. Credentials mode disabled when origin is `*`.
+6. **Foreign keys enforced** (`db/engine.py`): `PRAGMA foreign_keys = ON` set on every connection.
+7. **Admin API key in header** (`cafe/passport.py`, `wizard/router.py`): Moved from query parameter to `X-Api-Key` header. Added `POST /admin/services/{id}/suspend` endpoint.
+
+**Sprint 2 — Structural fixes (3 fixes):**
+8. **Multi-action consent** (`cafe/consent.py`): `InitiateRequest` accepts `action_ids: list[str]` with single `action_id` backward compat. Risk tier = highest among requested actions.
+9. **Audit hash chain concurrency** (`cafe/router.py`): `asyncio.Lock` serializes SELECT+INSERT. Monotonic `seq INTEGER` column (migration 0007) replaces timestamp ordering.
+10. **Configurable quarantine** (`config.py`, `wizard/publisher.py`): `QUARANTINE_DAYS` env var (default 7, was hardcoded 30).
+
+**Sprint 3 — UX (2 fixes):**
+11. **Human dashboard** (`cafe/pages.py`, `templates/dashboard.html`): `GET /dashboard` lists active/revoked policies. `POST /dashboard/revoke/{id}` one-click revoke with CSRF + ownership check. `GET /logout` added.
+12. **Consent webhook** (`cafe/consent.py`, `cafe/pages.py`): `_fire_consent_callback()` POSTs `{consent_id, status, policy_id}` to `callback_url` on approve/decline. Best-effort, 10s timeout.
+
+**Rationale:** The audit identified real attack surfaces (unauthenticated revoke, CSRF-less state changes, weak hashing) and structural gaps (timestamp-only audit ordering, hardcoded quarantine). Each fix was minimal and targeted — no over-engineering. All changes are backward compatible. See `docs/reviews/review-2.md` §12 for the full sprint log.
+**Status:** Complete. 214 tests passing (up from 194 pre-review).
