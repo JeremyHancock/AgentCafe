@@ -9,6 +9,10 @@ build/
 # Virtual environment
 .venv/
 
+# Environment secrets
+.env
+.env.*
+
 # Database
 agentcafe.db
 
