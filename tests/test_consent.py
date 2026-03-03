@@ -651,7 +651,7 @@ async def test_multi_action_consent_full_flow(cafe_client):
         headers={"Authorization": f"Bearer {human_session}"},
     )
     assert resp.status_code == 200
-    policy_id = resp.json()["policy_id"]
+    _policy_id = resp.json()["policy_id"]
 
     # Exchange for token
     resp = await cafe_client.post(
@@ -1274,7 +1274,7 @@ async def test_dashboard_revoke_wrong_user_ignored(cafe_client):
 async def test_callback_fired_on_api_approve(cafe_client, monkeypatch):
     """When callback_url is set, _fire_consent_callback should be called on API approve."""
     from unittest.mock import AsyncMock
-    import agentcafe.cafe.consent as cm
+    import agentcafe.cafe.consent as cm  # pylint: disable=reimported
 
     mock_cb = AsyncMock()
     monkeypatch.setattr(cm, "_fire_consent_callback", mock_cb)
@@ -1314,7 +1314,7 @@ async def test_callback_fired_on_api_approve(cafe_client, monkeypatch):
 async def test_callback_fired_on_form_decline(cafe_client, monkeypatch):
     """When callback_url is set, callback should fire on form-based decline."""
     from unittest.mock import AsyncMock
-    import agentcafe.cafe.pages as pm
+    import agentcafe.cafe.pages as pm  # pylint: disable=reimported
 
     mock_cb = AsyncMock()
     monkeypatch.setattr(pm, "_fire_consent_callback", mock_cb)
@@ -1360,7 +1360,7 @@ async def test_callback_fired_on_form_decline(cafe_client, monkeypatch):
 async def test_no_callback_when_url_not_set(cafe_client, monkeypatch):
     """When no callback_url is provided, _fire_consent_callback should still be called but be a no-op."""
     from unittest.mock import AsyncMock
-    import agentcafe.cafe.consent as cm
+    import agentcafe.cafe.consent as cm  # pylint: disable=reimported
 
     mock_cb = AsyncMock()
     monkeypatch.setattr(cm, "_fire_consent_callback", mock_cb)

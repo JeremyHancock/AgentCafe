@@ -52,7 +52,7 @@ async def _catch_all(request: Request, path: str):
     """Accept any request and return a success response."""
     try:
         body = await request.json()
-    except Exception:
+    except (ValueError, UnicodeDecodeError):
         body = {}
     return JSONResponse({
         "status": "ok",
