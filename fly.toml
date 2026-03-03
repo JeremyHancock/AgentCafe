@@ -1,0 +1,50 @@
+# AgentCafe — Fly.io deployment configuration
+# Deploy: fly deploy
+# Secrets: fly secrets set PASSPORT_SIGNING_SECRET=... ISSUER_API_KEY=... CAFE_ENCRYPTION_KEY=...
+
+app = "agentcafe"
+primary_region = "iad"
+
+[build]
+  # Uses the Dockerfile in the repo root (multi-stage, python:3.12-slim)
+
+[processes]
+  app = "python -m agentcafe.main"
+
+[env]
+  CAFE_HOST = "0.0.0.0"
+  CAFE_PORT = "8000"
+  CAFE_DB_PATH = "/app/data/agentcafe.db"
+  USE_REAL_PASSPORT = "true"
+  CAFE_LOG_LEVEL = "INFO"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 100
+    hard_limit = 200
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[mounts]
+  source = "cafe_data"
+  destination = "/app/data"
+  processes = ["app"]
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+  processes = ["app"]
