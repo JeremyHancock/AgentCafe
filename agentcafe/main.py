@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from agentcafe.cafe.consent import configure_consent, consent_router
 from agentcafe.cafe.human import configure_human, human_router
@@ -90,6 +92,10 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
     app.include_router(cafe_router)
     app.include_router(passport_router)
     app.include_router(consent_router)

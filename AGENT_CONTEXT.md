@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 2, 2026 (Phase 6.1 complete — 214 tests, pylint 10.00/10)
+Last Updated: March 2, 2026 (Phase 7 in progress — deployed to agentcafe.io, 214 tests, pylint 10.00/10)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -69,7 +69,7 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 **Phase 4 — COMPLETE.** Security & Guardrails (7 waves):
 - Schema migration system (numbered SQL in `db/migrations/`)
 - Passport V2: Tier-1 read tokens, Tier-2 write tokens via human consent
-- Human accounts (`cafe/human.py`): register/login, session JWT, passkey enforcement
+- Human accounts (`cafe/human.py`): register/login, session JWT (passkeys planned, currently email+password)
 - Full consent flow (`cafe/consent.py`): initiate → approve → exchange → refresh
 - Risk-tier token ceilings, policy revocation, max 20 active tokens per policy
 - Identity verification (Gate 1b), ADR-023 Menu fields, implicit read
@@ -98,6 +98,15 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Sprint 2: Multi-action consent, audit hash chain concurrency fix (seq column + asyncio.Lock), configurable quarantine
 - Sprint 3: Human dashboard (policy management + one-click revoke), consent webhook/callback
 - 214 tests passing, pylint 10.00/10
+
+**Phase 7 — IN PROGRESS.** Deployment & Real-Agent Beta:
+- Deployed to Fly.io (app: agentcafe, region: iad). Live at **agentcafe.io** (Cloudflare DNS + Let’s Encrypt TLS)
+- CI/CD via GitHub Actions: lint → test → deploy on push to main
+- Landing page with beta banner, light/dark mode, live service cards
+- Demo agent tested against production (headless + interactive human consent approval)
+- Integration examples: `examples/openai_agent.py` (GPT function calling), `examples/claude_agent.py` (Claude tool_use)
+- Human-facing UX uses cafe metaphor ("Tab" not "Passport"), ☕ emoji branding
+- HIGH PRIORITY pending: WebAuthn passkeys, production UX flows (company wizard, admin dashboard)
 
 ## 6. Codebase Map
 
@@ -130,12 +139,12 @@ AgentCafe/
 │   │   ├── publisher.py            # Atomic publish to Menu + proxy configs (sets quarantine)
 │   │   └── router.py               # /wizard/* endpoints incl. service management (pause/resume/unpublish/logs)
 │   ├── demo_agent/
-│   │   └── __main__.py             # E2E demo agent CLI (--headless for CI)
+│   │   └── __main__.py             # E2E demo agent CLI (--headless for CI, 9 steps incl. read-before-write)
 │   ├── demo_backends/
 │   │   ├── hotel.py                # StayRight Hotels — 4 endpoints
 │   │   ├── lunch.py                # QuickBite Delivery — 4 endpoints
 │   │   └── home_service.py         # FixRight Home — 4 endpoints
-│   └── templates/                  # Jinja2 HTML templates (login, register, authorize)
+│   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard)
 ├── dashboard/                      # Next.js 15 Company Dashboard
 │   ├── src/app/
 │   │   ├── login/page.tsx          # Company login
@@ -146,6 +155,9 @@ AgentCafe/
 │   ├── src/components/             # Wizard step components (spec-input, review, policy, preview)
 │   ├── src/lib/                    # API client (api.ts) + auth helpers (auth.ts)
 │   └── next.config.ts              # API proxy to FastAPI backend
+├── examples/                      # Integration snippets
+│   ├── openai_agent.py            # GPT function-calling agent for AgentCafe
+│   └── claude_agent.py            # Claude tool_use agent for AgentCafe
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: in-memory DB, ASGI test client
 │   ├── test_menu.py                # Menu format compliance tests
@@ -219,7 +231,8 @@ cd dashboard && npm run dev        # http://localhost:3000
 
 **Demo agent:**
 ```bash
-python -m agentcafe.demo_agent --headless  # Full lifecycle, auto-approves consent
+python -m agentcafe.demo_agent --headless  # 9-step lifecycle, auto-approves consent
+python -m agentcafe.demo_agent --base-url https://agentcafe.io  # Against live site (interactive)
 ```
 
 **⚠️ Stale DB caveat:** SQLite uses `CREATE TABLE IF NOT EXISTS`. Always `rm -f agentcafe.db` after schema changes. The migration system handles incremental changes, but if the base schema changed you need a fresh DB. Tests use in-memory DBs and are unaffected.

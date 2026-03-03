@@ -1,6 +1,6 @@
 # AgentCafe ☕
 
-**The Cafe for Agents.**
+**The Cafe for Agents.** Live at [agentcafe.io](https://agentcafe.io) (beta).
 
 Services voluntarily register their offerings on the Menu.
 Agents walk in, browse the clean, semantic Menu, and when they find what they need they present their Passport and order.
@@ -75,7 +75,10 @@ A sample spec is included at `dashboard/sample-spec.yaml` for testing the onboar
 
 ```bash
 python -m agentcafe.demo_agent --headless
-# Full lifecycle: browse menu → register → read → consent → approve → write → refresh
+# 9-step lifecycle: browse menu → register → read → consent → approve → exchange → read-before-write → write → refresh
+
+# Against live production:
+python -m agentcafe.demo_agent --base-url https://agentcafe.io
 ```
 
 ### Consent Flow (try it locally)
@@ -144,6 +147,7 @@ AgentCafe/
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
 ├── dashboard/             # Next.js 15 Company Dashboard (React 19, Tailwind 4)
 │   └── src/app/           # /login, /register, /onboard, /services, /admin
+├── examples/              # Integration snippets (GPT function-calling, Claude tool_use)
 ├── tests/                  # 214 tests (menu, order, passport, consent, policy, wizard, crypto, keys, e2e)
 ├── docs/
 │   ├── architecture/       # ADRs, Passport V2 specs
@@ -165,6 +169,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 6.1 complete (v0.1.0). RS256 passport signing, production Docker, edit-after-publish, security review (ADR-026: CSRF, bcrypt, rate limiting, multi-action consent, human dashboard, webhooks). 214 tests passing, pylint 10.00/10.  
-**Next:** Phase 7 — Deployment & Real-Agent Beta (cloud deploy, CI/CD, real external agents).  
+**Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let’s Encrypt TLS). CI/CD via GitHub Actions. Landing page, demo agent verified against production, GPT + Claude integration examples. 214 tests passing, pylint 10.00/10.  
+**Next:** WebAuthn passkeys, production UX flows (company wizard, admin dashboard, consent polish), real external agent testing.  
 **Built for:** The inevitable agent economy
