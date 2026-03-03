@@ -168,16 +168,30 @@ def _consent_text(service_name: str, actions: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# GET / — root redirect
+# GET / — landing page
 # ---------------------------------------------------------------------------
 
 @pages_router.get("/", response_class=HTMLResponse)
 async def root_page(request: Request):
-    """Redirect root to dashboard if logged in, else to login."""
-    session = _get_session(request)
-    if session:
-        return RedirectResponse(url="/dashboard", status_code=303)
-    return RedirectResponse(url="/login", status_code=303)
+    """Render the public landing page."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT service_id, name, menu_entry_json, status FROM published_services WHERE status = 'live'"
+    )
+    rows = await cursor.fetchall()
+    services = []
+    for row in rows:
+        entry = json.loads(row["menu_entry_json"])
+        services.append({
+            "name": row["name"],
+            "category": entry.get("category", "service").replace("-", " "),
+            "description": entry.get("description", ""),
+            "action_count": len(entry.get("actions", [])),
+        })
+    return templates.TemplateResponse("landing.html", {
+        "request": request,
+        "services": services,
+    })
 
 
 @pages_router.get("/logout", response_class=HTMLResponse)

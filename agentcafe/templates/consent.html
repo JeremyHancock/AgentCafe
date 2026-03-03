@@ -5,7 +5,7 @@
 {% block content %}
 <div class="card">
     <div class="consent-header">
-        <h1>Authorization Request</h1>
+        <h1>An agent needs your OK</h1>
         <span class="badge badge-{{ risk_tier }}">{{ risk_tier }} risk</span>
     </div>
 
@@ -21,8 +21,8 @@
 
     <hr class="divider">
 
-    <h2>What you're authorizing</h2>
-    <p>The bearer of this authorization will be able to perform the following actions on <strong>{{ service_name }}</strong>:</p>
+    <h2>What you're approving</h2>
+    <p>This agent will be able to perform the following actions on <strong>{{ service_name }}</strong>:</p>
 
     <ul class="scope-list">
         {% for action in actions %}
@@ -37,7 +37,7 @@
     <form method="post" action="/authorize/{{ consent_id }}/approve">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
-            <label for="token_lifetime">Token duration</label>
+            <label for="token_lifetime">How long should this last?</label>
             <select id="token_lifetime" name="token_lifetime_seconds">
                 {% for opt in lifetime_options %}
                 <option value="{{ opt.seconds }}" {% if opt.default %}selected{% endif %}>{{ opt.label }}</option>

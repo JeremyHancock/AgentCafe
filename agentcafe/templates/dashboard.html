@@ -91,7 +91,7 @@
 <div class="dashboard-header">
     <div>
         <h1>Your Policies</h1>
-        <p class="meta">Manage agent access to services on your behalf.</p>
+        <p class="meta">Keep tabs on what your agents can do.</p>
     </div>
     <a href="/logout" class="logout-link">Sign out</a>
 </div>
@@ -147,8 +147,8 @@
 
 {% if not active_policies and not revoked_policies %}
 <div class="card empty-state">
-    <h2>No policies yet</h2>
-    <p>When an agent requests access to a service on your behalf, you'll see it here after you approve.</p>
+    <h2>Nothing here yet</h2>
+    <p>When you approve an agent's request, its policy will show up here.</p>
 </div>
 {% endif %}
 {% endblock %}

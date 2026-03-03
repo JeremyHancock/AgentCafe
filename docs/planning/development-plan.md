@@ -1,6 +1,6 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 6 complete + security review (214 tests, pylint 10.00/10). v0.1.0 ready. Phase 7 next (Deployment & Real-Agent Beta).  
+**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 214 tests, pylint 10.00/10.  
 **Last Updated:** March 2, 2026
 
 **MVP Success Criteria**
@@ -125,18 +125,31 @@ We can run end-to-end locally:
 **Phase 7: Deployment & Real-Agent Beta** (starts immediately after Phase 6)
 
 **Deployment Pipeline**
-- ⬜ Cloud platform deploy (Fly.io or Railway) — one-command deploy
-- ⬜ TLS + custom domains (`api.agentcafe.com`, `cafe.agentcafe.com` for dashboard)
-- ⬜ CI/CD via GitHub Actions (lint → test → build → deploy on main)
+- ✅ Cloud platform deploy — Fly.io (app: agentcafe, region: iad, shared-cpu-1x, 512MB, 1GB encrypted volume)
+- ✅ TLS + custom domain — `agentcafe.io` via Cloudflare DNS + Let's Encrypt (RSA+ECDSA)
+- ✅ CI/CD via GitHub Actions — lint → test → deploy on push to main (`.github/workflows/deploy.yml`)
 - ⬜ Structured JSON logs with request IDs + platform-native metrics
 - SQLite remains for beta (handles expected load; Postgres migration deferred to Phase 8)
 
 **Real-Agent Testing & Dogfooding**
-- ⬜ Public Menu endpoint live (`GET /cafe/menu` requires no auth)
-- ⬜ Integration examples: copy-paste snippets for GPT function calling, Claude tool use, and LangGraph
-- ⬜ Test with 3–5 real external agents (GPT-4o, Claude 4, Grok-3, plus 1–2 custom agents)
+- ✅ Public Menu endpoint live — `GET https://agentcafe.io/cafe/menu` returns 3 services
+- ✅ Integration examples — `examples/openai_agent.py` (GPT function calling), `examples/claude_agent.py` (Claude tool_use)
+- ✅ E2E demo agent against production — headless (all 9 steps pass) + interactive (human browser approval)
+- ✅ Read-before-write identity verification confirmed working in production
+- ⬜ Test with 3–5 real external agents (GPT-4o, Claude Sonnet, Grok-3, plus 1–2 custom agents)
 - ⬜ Immediate dogfooding: connect our own agents to the live instance
 - ⬜ Feedback capture: log what agents struggle with (Menu clarity, consent flow, error messages, rate limits) and feed into v2
+
+**⚠️ HIGH PRIORITY — Human Authentication Hardening**
+- ⬜ **WebAuthn passkeys for human registration and consent approval** — Currently email+password, which an agent can self-register and self-approve. Passkeys require physical device interaction (biometric/hardware key) that software agents cannot fake. This is the #1 security gap before real-world use. Locked design position in v2-design-discussion.md §13. Must be implemented before any real company onboards paying customers.
+- ⬜ Interim mitigations (if passkeys slip): email verification on registration, CAPTCHA, approval cooldown detection
+
+**⚠️ HIGH PRIORITY — Production UX Flows**
+- ⬜ **Company onboarding wizard UI** — The Next.js dashboard (`dashboard/`) exists but is not deployed. Companies cannot self-onboard on agentcafe.io. Either deploy the Next.js app (static export or separate process) or rebuild as server-rendered Jinja2 pages for consistency with the rest of the site. Covers: company registration, spec upload, AI review, policy config, preview, publish, post-publish management.
+- ⬜ **Human consent flow polish** — Login/register/approve pages work but need visual polish, error states, mobile responsiveness audit, loading states.
+- ⬜ **Human policy dashboard improvements** — Token activity view, audit log per policy, bulk revocation, notification preferences.
+- ⬜ **Admin dashboard deployment** — `/admin` page exists in Next.js but not served in production. Needs either deployment or Jinja2 rebuild.
+- ⬜ **Landing page → sign-up funnel** — Currently no CTA for humans or companies to sign up (intentional for beta). Before public launch, need clear paths for both audiences.
 
 **Observability (beta level)**
 - ⬜ Structured JSON logs with request IDs
@@ -148,6 +161,7 @@ We can run end-to-end locally:
 - Zero security incidents in first 48 hours
 - <5 % of agent requests rejected for unexpected reasons
 - Real usage visible in logs + quarantine/suspension features exercised
+- Passkey authentication enforced for all Tier-2 consent approvals before public beta launch
 
 
 **Phase 8: Scale & Harden** (deferred — post-beta)

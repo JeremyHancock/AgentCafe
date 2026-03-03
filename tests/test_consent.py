@@ -1011,8 +1011,8 @@ async def test_consent_page_renders_for_logged_in_user(cafe_client):
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200
-    assert "Authorization Request" in resp.text
-    assert "StayRight Hotels" in resp.text
+    assert "stayright-hotels" in resp.text or "StayRight Hotels" in resp.text
+    assert "Approve" in resp.text
 
 
 @pytest.mark.asyncio
@@ -1049,7 +1049,7 @@ async def test_consent_page_approve_via_form(cafe_client):
         follow_redirects=False,
     )
     assert resp.status_code == 200
-    assert "Authorization Approved" in resp.text
+    assert "approved" in resp.text.lower()
 
     # Verify the consent is now approved via API
     resp = await cafe_client.get(f"/consents/{consent_id}/status")
@@ -1088,7 +1088,7 @@ async def test_consent_page_decline(cafe_client):
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200
-    assert "Authorization Declined" in resp.text
+    assert "declined" in resp.text.lower()
 
     # Verify declined via API
     resp = await cafe_client.get(f"/consents/{consent_id}/status")
@@ -1133,7 +1133,7 @@ async def test_dashboard_empty_for_new_user(cafe_client):
         cookies={"cafe_session": session_cookie},
     )
     assert resp.status_code == 200
-    assert "No policies yet" in resp.text
+    assert "Nothing here yet" in resp.text
 
 
 @pytest.mark.asyncio

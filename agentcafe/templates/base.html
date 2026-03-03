@@ -228,12 +228,56 @@
             justify-content: space-between;
             margin-bottom: 20px;
         }
+
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f8f9fa;
+                --surface: #ffffff;
+                --surface-hover: #f1f3f5;
+                --border: #dee2e6;
+                --text: #1a1a2e;
+                --text-muted: #6b7280;
+                --accent: #4f46e5;
+                --accent-hover: #6366f1;
+                --danger: #dc2626;
+                --danger-hover: #ef4444;
+                --success: #16a34a;
+                --warning: #d97706;
+            }
+
+            .badge-low { background: #d1fae5; color: #065f46; }
+            .badge-medium { background: #fef3c7; color: #92400e; }
+            .badge-high { background: #fee2e2; color: #991b1b; }
+            .badge-critical { background: #fee2e2; color: #dc2626; border: 1px solid #dc2626; }
+
+            input, select {
+                background: #ffffff;
+                border-color: #d1d5db;
+            }
+
+            .alert-error {
+                background: #fef2f2;
+                border: 1px solid #fecaca;
+                color: #991b1b;
+            }
+
+            .alert-success {
+                background: #f0fdf4;
+                border: 1px solid #bbf7d0;
+                color: #166534;
+            }
+
+            .scope-list li {
+                background: #f8f9fa;
+                border-color: #dee2e6;
+            }
+        }
     </style>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
     <div class="header">
-        <a href="/" class="logo">AgentCafe <span>| Authorization</span></a>
+        <a href="/" class="logo">☕ AgentCafe</a>
     </div>
     <div class="container">
         {% block content %}{% endblock %}

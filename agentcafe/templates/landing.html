@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentCafe — Where AI Agents Get Things Done</title>
+    <meta name="description" content="AgentCafe is the open marketplace where AI agents discover and use real-world services. Browse the Menu, open a Tab, place an order.">
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface-hover: #22252f;
+            --border: #2a2d3a;
+            --text: #e4e4e7;
+            --text-muted: #9ca3af;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --danger: #ef4444;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --radius: 12px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Beta banner */
+        .beta-banner {
+            background: linear-gradient(90deg, #78350f 0%, #92400e 100%);
+            color: #fcd34d;
+            text-align: center;
+            padding: 10px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        .header {
+            width: 100%;
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+
+        .header .logo {
+            font-size: 22px;
+            font-weight: 700;
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .header-links {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .header-links a {
+            color: var(--text-muted);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: color 0.15s;
+        }
+
+        .header-links a:hover { color: var(--text); }
+
+        /* Hero */
+        .hero {
+            text-align: center;
+            padding: 80px 24px 48px;
+            max-width: 720px;
+            margin: 0 auto;
+        }
+
+        .hero h1 {
+            font-size: 44px;
+            font-weight: 700;
+            line-height: 1.15;
+            margin-bottom: 20px;
+            letter-spacing: -0.5px;
+        }
+
+        .hero h1 .highlight {
+            background: linear-gradient(135deg, var(--accent), #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero p {
+            font-size: 18px;
+            color: var(--text-muted);
+            line-height: 1.7;
+            max-width: 540px;
+            margin: 0 auto 32px;
+        }
+
+        .hero-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.15s;
+            text-align: center;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        .btn-primary:hover { background: var(--accent-hover); }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover { background: var(--surface-hover); color: var(--text); }
+
+        /* How it works */
+        .section {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 48px 24px;
+        }
+
+        .section h2 {
+            font-size: 28px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+        }
+
+        .step {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px;
+        }
+
+        .step-num {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            background: var(--accent);
+            color: white;
+            border-radius: 50%;
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 14px;
+        }
+
+        .step h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .step p {
+            font-size: 14px;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin: 0;
+        }
+
+        /* Services */
+        .services-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+        }
+
+        .service-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+        }
+
+        .service-card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .service-card .category {
+            font-size: 12px;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .service-card p {
+            font-size: 13px;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin: 0;
+        }
+
+        .svc-desc {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .service-card .action-count {
+            margin-top: 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* Beta notice */
+        .beta-notice {
+            max-width: 640px;
+            margin: 0 auto;
+            padding: 0 24px 64px;
+            text-align: center;
+        }
+
+        .beta-card {
+            background: #1c1708;
+            border: 1px solid #78350f;
+            border-radius: var(--radius);
+            padding: 28px;
+        }
+
+        .beta-card h3 {
+            color: #fcd34d;
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .beta-card p {
+            font-size: 14px;
+            color: #d4a056;
+            line-height: 1.6;
+            margin: 0;
+        }
+
+        /* Footer */
+        .footer {
+            border-top: 1px solid var(--border);
+            padding: 24px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+
+        .footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .footer a:hover { text-decoration: underline; }
+
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f8f9fa;
+                --surface: #ffffff;
+                --surface-hover: #f1f3f5;
+                --border: #dee2e6;
+                --text: #1a1a2e;
+                --text-muted: #6b7280;
+                --accent: #4f46e5;
+                --accent-hover: #6366f1;
+                --danger: #dc2626;
+                --success: #16a34a;
+                --warning: #d97706;
+            }
+
+            .beta-banner {
+                background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
+                color: #92400e;
+            }
+
+            .hero h1 .highlight {
+                background: linear-gradient(135deg, var(--accent), #7c3aed);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }
+
+            .beta-card {
+                background: #fffbeb;
+                border-color: #f59e0b;
+            }
+
+            .beta-card h3 { color: #92400e; }
+            .beta-card p { color: #78350f; }
+        }
+
+        @media (max-width: 640px) {
+            .hero h1 { font-size: 32px; }
+            .hero { padding: 48px 24px 32px; }
+            .steps { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="beta-banner">
+        BETA — You're peeking behind the curtain. Demo services only. Not for real bookings (yet).
+    </div>
+
+    <div class="header">
+        <a href="/" class="logo">☕ AgentCafe</a>
+        <div class="header-links">
+            <a href="https://github.com/JeremyHancock/AgentCafe" target="_blank">GitHub</a>
+        </div>
+    </div>
+
+    <div class="hero">
+        <h1>Where <span class="highlight">AI agents</span> go to get things done</h1>
+        <p>
+            AgentCafe is an open marketplace where AI agents discover real-world services,
+            open a Tab, and place orders — with a human in the loop for anything that matters.
+        </p>
+        <div class="hero-actions">
+            <a href="https://github.com/JeremyHancock/AgentCafe" class="btn btn-primary" target="_blank">View on GitHub</a>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>How it works</h2>
+        <div class="steps">
+            <div class="step">
+                <div class="step-num">1</div>
+                <h3>Browse the Menu</h3>
+                <p>Your agent walks in and checks what's available — hotels, food delivery, home services, and whatever gets added next.</p>
+            </div>
+            <div class="step">
+                <div class="step-num">2</div>
+                <h3>Open a Tab</h3>
+                <p>Reading is free — agents open a Tab instantly. Want to book something? Your human approves it first.</p>
+            </div>
+            <div class="step">
+                <div class="step-num">3</div>
+                <h3>Place an Order</h3>
+                <p>The Cafe validates every request, proxies it to the backend, and logs the whole thing. Two checks on every order.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>On the menu today</h2>
+        <div class="services-grid">
+            {% for svc in services %}
+            <div class="service-card">
+                <div class="category">{{ svc.category }}</div>
+                <h3>{{ svc.name }}</h3>
+                <p class="svc-desc">{{ svc.description }}</p>
+                <div class="action-count">{{ svc.action_count }} actions available</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="beta-notice">
+        <div class="beta-card">
+            <h3>Beta Preview</h3>
+            <p>
+                AgentCafe is under active development. The services above are demos
+                with simulated backends — no real bookings, no real charges, no real appointments.
+                Don't build anything mission-critical on this yet. APIs and data may be reset without warning.
+            </p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>AgentCafe &copy; 2026 &middot; MIT License &middot; <a href="https://github.com/JeremyHancock/AgentCafe">Open Source</a></p>
+    </div>
+</body>
+</html>

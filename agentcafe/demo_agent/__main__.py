@@ -166,8 +166,21 @@ async def run_demo(base_url: str, service_id: str, read_action: str, write_actio
         if limits:
             _ok(f"Policy limits: {limits['active_tokens']}/{limits['max_active_tokens']} active tokens")
 
-        # --- Step 7: Place a write order ---
-        _log(7, f"Placing write order: {service_id}/{write_action}...")
+        # --- Step 7: Read-before-write (identity verification) ---
+        _log(7, f"Read-before-write: reading {service_id}/{read_action} with Tier-2 token...")
+        resp = await client.post("/cafe/order", json={
+            "service_id": service_id,
+            "action_id": read_action,
+            "passport": tier2_token,
+            "inputs": read_inputs,
+        })
+        if resp.status_code != 200:
+            _fail(f"Read-before-write failed ({resp.status_code}): {resp.text}")
+            return False
+        _ok("Read-before-write passed (identity verified for medium+ risk tier)")
+
+        # --- Step 8: Place a write order ---
+        _log(8, f"Placing write order: {service_id}/{write_action}...")
         write_inputs = _get_write_inputs(service_id, write_action)
         resp = await client.post("/cafe/order", json={
             "service_id": service_id,
@@ -180,8 +193,8 @@ async def run_demo(base_url: str, service_id: str, read_action: str, write_actio
             return False
         _ok(f"Write order succeeded: {json.dumps(resp.json(), indent=2)[:200]}...")
 
-        # --- Step 8: Refresh token ---
-        _log(8, "Refreshing Tier-2 token...")
+        # --- Step 9: Refresh token ---
+        _log(9, "Refreshing Tier-2 token...")
         resp = await client.post(
             "/tokens/refresh",
             headers={"Authorization": f"Bearer {tier2_token}"},
@@ -192,12 +205,12 @@ async def run_demo(base_url: str, service_id: str, read_action: str, write_actio
         new_token = resp.json()["token"]
         _ok(f"New token received (different from old: {new_token != tier2_token})")
 
-        # --- Step 9: Summary ---
-        _log(9, "Demo complete!", GREEN)
+        # --- Step 10: Summary ---
+        _log(10, "Demo complete!", GREEN)
         print(f"\n{BOLD}Full lifecycle verified:{RESET}")
         print("  Menu browse → Tier-1 register → Read order → Consent initiate")
-        print("  → Human approve → Token exchange → Write order → Token refresh")
-        print(f"  {GREEN}{BOLD}All 8 steps passed.{RESET}\n")
+        print("  → Human approve → Token exchange → Read-before-write → Write order → Token refresh")
+        print(f"  {GREEN}{BOLD}All 9 steps passed.{RESET}\n")
         return True
 
 
