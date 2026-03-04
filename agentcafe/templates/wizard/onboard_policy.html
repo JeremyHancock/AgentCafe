@@ -15,13 +15,14 @@
             <div class="form-group">
                 <label for="backend_url">Backend URL <span style="color: var(--danger);">*</span></label>
                 <input type="url" id="backend_url" name="backend_url" required
+                       value="{{ saved_backend_url or '' }}"
                        placeholder="https://api.yourcompany.com">
                 <p class="meta" style="margin-top: 4px; margin-bottom: 0;">The Cafe proxies agent requests to this URL</p>
             </div>
             <div class="form-group">
                 <label for="backend_auth_header">Auth header <span style="color: var(--text-muted);">(optional, encrypted at rest)</span></label>
                 <input type="password" id="backend_auth_header" name="backend_auth_header"
-                       placeholder="Bearer sk-...">
+                       placeholder="{{ '••••••••  (saved — leave blank to keep)' if has_saved_auth else 'Bearer sk-...' }}">
                 <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Sent as Authorization header to your backend</p>
             </div>
         </div>
@@ -46,31 +47,35 @@
             </div>
         </div>
 
+        {% set sp = saved_policy.get(action.action_id, {}) if saved_policy else {} %}
+        {% set eff_scope = sp.get('scope', '') or action.suggested_scope or (candidate.service_id ~ ':' ~ action.action_id) %}
+        {% set eff_rate = sp.get('rate_limit', '') or action.suggested_rate_limit or '60/minute' %}
+        {% set eff_human = sp.get('human_auth', action.suggested_human_auth) if sp else action.suggested_human_auth %}
         <div class="form-row" style="grid-template-columns: 1fr 1fr 1fr; margin-top: 12px;">
             <div class="form-group" style="margin-bottom: 0;">
                 <label style="font-size: 12px; color: var(--text-muted);">Scope</label>
                 <input type="text" data-field="scope"
-                       value="{{ action.suggested_scope or (candidate.service_id ~ ':' ~ action.action_id) }}"
+                       value="{{ eff_scope }}"
                        style="padding: 6px 10px; font-size: 13px; font-family: monospace;">
             </div>
             <div class="form-group" style="margin-bottom: 0;">
                 <label style="font-size: 12px; color: var(--text-muted);">Rate limit</label>
                 <select data-field="rate_limit" style="padding: 6px 10px; font-size: 13px;">
-                    <option value="60/minute" {{ 'selected' if (action.suggested_rate_limit or '60/minute') == '60/minute' }}>60/minute (default read)</option>
-                    <option value="10/minute" {{ 'selected' if action.suggested_rate_limit == '10/minute' }}>10/minute (default write)</option>
-                    <option value="5/minute" {{ 'selected' if action.suggested_rate_limit == '5/minute' }}>5/minute (restrictive)</option>
-                    <option value="1/minute" {{ 'selected' if action.suggested_rate_limit == '1/minute' }}>1/minute (very restrictive)</option>
-                    <option value="100/minute" {{ 'selected' if action.suggested_rate_limit == '100/minute' }}>100/minute (generous)</option>
+                    <option value="60/minute" {{ 'selected' if eff_rate == '60/minute' }}>60/minute (default read)</option>
+                    <option value="10/minute" {{ 'selected' if eff_rate == '10/minute' }}>10/minute (default write)</option>
+                    <option value="5/minute" {{ 'selected' if eff_rate == '5/minute' }}>5/minute (restrictive)</option>
+                    <option value="1/minute" {{ 'selected' if eff_rate == '1/minute' }}>1/minute (very restrictive)</option>
+                    <option value="100/minute" {{ 'selected' if eff_rate == '100/minute' }}>100/minute (generous)</option>
                 </select>
             </div>
             <div class="form-group" style="margin-bottom: 0;">
                 <label style="font-size: 12px; color: var(--text-muted);">Human consent required</label>
                 <button type="button" data-field="human_auth"
-                        data-value="{{ 'true' if action.suggested_human_auth else 'false' }}"
-                        class="btn-sm {{ 'btn-pause' if action.suggested_human_auth }}"
+                        data-value="{{ 'true' if eff_human else 'false' }}"
+                        class="btn-sm {{ 'btn-pause' if eff_human }}"
                         style="width: 100%; padding: 8px; text-align: center;"
                         onclick="toggleHumanAuth(this)">
-                    {{ 'Yes — Tier-2 required' if action.suggested_human_auth else 'No — Tier-1 sufficient' }}
+                    {{ 'Yes — Tier-2 required' if eff_human else 'No — Tier-1 sufficient' }}
                 </button>
             </div>
         </div>

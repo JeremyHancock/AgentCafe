@@ -22,6 +22,7 @@ from fastapi import APIRouter, Request, Form, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from agentcafe.crypto import decrypt
 from agentcafe.db.engine import get_db
 from agentcafe.wizard.ai_enricher import enrich_spec
 from agentcafe.wizard.publisher import publish_draft
@@ -609,6 +610,9 @@ async def onboard_policy_page(request: Request, draft_id: str):
     candidate = json.loads(draft.get("candidate_menu_json") or "{}")
     company_edits = json.loads(draft.get("company_edits_json") or "{}")
     excluded = json.loads(draft.get("excluded_actions") or "[]")
+    saved_policy = json.loads(draft.get("policy_json") or "{}")
+    saved_backend_url = draft.get("backend_url") or ""
+    saved_auth_header = draft.get("backend_auth_header") or ""
     # Merge: company edits override candidate fields
     merged = {**candidate, **company_edits}
     # Filter out excluded actions
@@ -625,6 +629,9 @@ async def onboard_policy_page(request: Request, draft_id: str):
         "company_name": company_name,
         "draft_id": draft_id,
         "candidate": merged,
+        "saved_policy": saved_policy,
+        "saved_backend_url": saved_backend_url,
+        "has_saved_auth": bool(saved_auth_header),
         "step": 3,
         "error": None,
     })
@@ -686,12 +693,17 @@ async def onboard_policy_submit(
         for action_id, p in raw_policy.items()
     }
 
+    # If auth header is blank and one was already saved, keep the existing one
+    effective_auth = backend_auth_header
+    if not effective_auth and draft.get("backend_auth_header"):
+        effective_auth = decrypt(draft["backend_auth_header"])
+
     await save_policy(
         db,
         draft_id,
         actions_policy=actions_policy,
         backend_url=backend_url,
-        backend_auth_header=backend_auth_header,
+        backend_auth_header=effective_auth,
     )
 
     return RedirectResponse(
