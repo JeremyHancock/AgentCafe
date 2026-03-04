@@ -1,0 +1,106 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}My Services — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+{% if services | length == 0 %}
+<div class="empty-state">
+    <p style="margin-bottom: 16px;">No services published yet.</p>
+    <a href="/services/onboard" class="btn btn-primary" style="width: auto; padding: 12px 24px;">
+        Onboard your first service
+    </a>
+</div>
+{% else %}
+<div>
+    {% for svc in services %}
+    <div class="service-row">
+        <div class="service-row-header">
+            <div class="info">
+                <div class="title-row">
+                    <span style="font-weight: 600;">{{ svc.name }}</span>
+                    <code style="font-size: 12px; background: var(--bg); padding: 2px 8px; border-radius: 4px;">{{ svc.service_id }}</code>
+                    <span class="badge badge-{{ svc.status }}">{{ svc.status }}</span>
+                </div>
+                <div class="meta-row">
+                    <span>{{ svc.actions_count }} actions</span>
+                    <span>{{ svc.total_requests }} total requests</span>
+                    <span>{{ svc.recent_requests }} in last 24h</span>
+                    <span>Published {{ svc.published_at[:10] if svc.published_at else '' }}</span>
+                </div>
+            </div>
+            <div class="actions">
+                {% if svc.status == 'live' %}
+                <form method="post" action="/services/{{ svc.service_id }}/action" style="margin:0;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="pause">
+                    <button type="submit" class="btn-sm btn-pause">Pause</button>
+                </form>
+                {% endif %}
+                {% if svc.status == 'paused' %}
+                <form method="post" action="/services/{{ svc.service_id }}/action" style="margin:0;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="resume">
+                    <button type="submit" class="btn-sm btn-resume">Resume</button>
+                </form>
+                {% endif %}
+                {% if svc.status != 'unpublished' %}
+                <form method="post" action="/services/{{ svc.service_id }}/action" style="margin:0;"
+                      id="unpublish-form-{{ loop.index0 }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="unpublish">
+                    <button type="button" class="btn-sm btn-unpublish"
+                            onclick="showUnpublishModal('{{ svc.name }}', {{ loop.index0 }})">Unpublish</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Unpublish confirmation modal -->
+<div id="unpublish-modal" style="display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.5); align-items:center; justify-content:center;">
+    <div style="background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:32px; max-width:440px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <h3 style="margin:0 0 12px 0; font-size:18px; font-weight:600;">Unpublish service</h3>
+        <p id="unpublish-msg" style="color:var(--text-muted); margin:0 0 24px 0; line-height:1.5;"></p>
+        <div style="display:flex; gap:12px; justify-content:flex-end;">
+            <button type="button" class="btn btn-outline" style="width:auto; padding:10px 20px;" onclick="hideUnpublishModal()">Cancel</button>
+            <button type="button" class="btn" style="width:auto; padding:10px 20px; background:#e53e3e; color:#fff; border:none; cursor:pointer; border-radius:8px; font-weight:500;" id="unpublish-confirm-btn">Unpublish</button>
+        </div>
+    </div>
+</div>
+
+<script>
+var pendingFormIdx = null;
+
+function showUnpublishModal(name, idx) {
+    pendingFormIdx = idx;
+    document.getElementById('unpublish-msg').textContent =
+        'Unpublish ' + name + '? This action is permanent. The service will be removed from the Menu and existing tokens will stop working.';
+    var modal = document.getElementById('unpublish-modal');
+    modal.style.display = 'flex';
+}
+
+function hideUnpublishModal() {
+    document.getElementById('unpublish-modal').style.display = 'none';
+    pendingFormIdx = null;
+}
+
+document.getElementById('unpublish-confirm-btn').addEventListener('click', function() {
+    if (pendingFormIdx !== null) {
+        document.getElementById('unpublish-form-' + pendingFormIdx).submit();
+    }
+});
+
+// Close modal on backdrop click
+document.getElementById('unpublish-modal').addEventListener('click', function(e) {
+    if (e.target === this) hideUnpublishModal();
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') hideUnpublishModal();
+});
+</script>
+{% endblock %}

@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 3, 2026 (Phase 7 in progress — deployed to agentcafe.io, 253 tests, pylint 10.00/10)
+Last Updated: March 3, 2026 (Phase 7 in progress — deployed to agentcafe.io, 271 tests, pylint 10.00/10)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -83,8 +83,8 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - E2E demo agent CLI (`python -m agentcafe.demo_agent`)
 - `ENRICHMENT_MODEL` configurable via env var, `x-agentcafe-*` extension merging
 - Confidence scores in review/preview, spec upload (multipart) + URL fetch
-- Company Onboarding Wizard Dashboard (Next.js 15 / React 19 / Tailwind 4)
-  - Pages: `/login`, `/register`, `/onboard` (4-step wizard), `/services` (management), `/admin` (platform admin)
+- Company Onboarding Wizard Dashboard — **rebuilt as Jinja2 server-rendered pages** (replaced Next.js)
+  - Pages: `/services/login`, `/services/register`, `/services/onboard` (4-step wizard), `/services` (management), `/admin` (platform admin)
 - 11 E2E integration tests
 
 **Phase 6 — COMPLETE.** Packaging & Release Prep:
@@ -107,7 +107,8 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Integration examples: `examples/openai_agent.py` (GPT function calling), `examples/claude_agent.py` (Claude tool_use)
 - Human-facing UX uses cafe metaphor ("Tab" not "Passport"), ☕ emoji branding
 - WebAuthn passkeys complete (Sprints 1–4): passkey register/login, consent requires passkey assertion, activation code flow, grace period migration, enrollment prompt
-- Remaining: production UX flows (company wizard, admin dashboard)
+- Company wizard Jinja2 rebuild complete: login, register, 4-step onboard wizard, services management, admin dashboard — all server-rendered
+- 18 wizard page tests
 
 ## 6. Codebase Map
 
@@ -131,14 +132,15 @@ AgentCafe/
 │   │   ├── router.py               # GET /cafe/menu, POST /cafe/order, GET /cafe/admin/overview
 │   │   ├── human.py                # Human accounts: register/login, session JWT, WebAuthn passkeys, enrollment
 │   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
-│   │   └── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey)
+│   │   ├── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey)
+│   │   └── wizard_pages.py         # Company wizard Jinja2 pages (login, register, onboard, services, admin)
 │   ├── wizard/                     # Company Onboarding Wizard
 │   │   ├── models.py               # Pydantic models for all wizard + service management data
 │   │   ├── spec_parser.py          # OpenAPI 3.x parsing + validation + operation extraction
 │   │   ├── ai_enricher.py          # LiteLLM enrichment with rule-based fallback
 │   │   ├── review_engine.py        # Draft management, edits, preview generation
 │   │   ├── publisher.py            # Atomic publish to Menu + proxy configs (sets quarantine)
-│   │   └── router.py               # /wizard/* endpoints incl. service management (pause/resume/unpublish/logs)
+│   │   └── router.py               # /wizard/* JSON API endpoints incl. service management (pause/resume/unpublish/logs)
 │   ├── demo_agent/
 │   │   └── __main__.py             # E2E demo agent CLI (--headless for CI, 9 steps incl. read-before-write)
 │   ├── demo_backends/
@@ -147,7 +149,8 @@ AgentCafe/
 │   │   └── home_service.py         # FixRight Home — 4 endpoints
 │   ├── static/webauthn.js          # Zero-dependency WebAuthn JS helper (prepareRegistrationOptions, etc.)
 │   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard, activate, enroll_passkey)
-├── dashboard/                      # Next.js 15 Company Dashboard
+│       └── wizard/                # Company wizard templates (login, register, onboard_spec/review/policy/preview/success, services, admin)
+├── dashboard/                      # Next.js 15 Company Dashboard (LEGACY — replaced by Jinja2 wizard_pages.py)
 │   ├── src/app/
 │   │   ├── login/page.tsx          # Company login
 │   │   ├── register/page.tsx       # Company registration
@@ -169,6 +172,7 @@ AgentCafe/
 │   ├── test_consent.py             # Full consent flow + human account tests + activation code tests
 │   ├── test_webauthn.py            # WebAuthn passkey + grace period + enrollment tests
 │   ├── test_wizard.py              # Spec parsing, enrichment, full wizard flow tests
+│   ├── test_wizard_pages.py        # Company wizard Jinja2 page tests (login, register, onboard, services, admin)
 │   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
 │   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
 ├── docs/

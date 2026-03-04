@@ -1,0 +1,41 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Published! — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+<div class="section-card" style="text-align: center; padding: 48px 32px;">
+    <div style="font-size: 48px; margin-bottom: 16px;">🎉</div>
+    <h2 style="font-size: 24px; margin-bottom: 8px;">Published!</h2>
+    <p>Your service is now live on the AgentCafe Menu.</p>
+</div>
+
+<!-- Service info -->
+<div class="section-card">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-weight: 600;">{{ service_name }}</span>
+            <code style="font-size: 12px; background: var(--bg); padding: 2px 8px; border-radius: 4px;">{{ service_id }}</code>
+        </div>
+        <span class="badge badge-live">Live</span>
+    </div>
+    <p class="meta" style="margin-top: 8px; margin-bottom: 0;">{{ actions_count }} actions published</p>
+</div>
+
+<!-- Quarantine notice -->
+<div class="notice notice-warning">
+    <div style="display: flex; align-items: flex-start; gap: 12px;">
+        <span style="font-size: 24px;">🛡️</span>
+        <div>
+            <h3>Quarantine active ({{ quarantine_days }} days)</h3>
+            <p>All actions require human consent (Tier-2 Passport) during quarantine.
+               This protects users while your service builds trust on the platform.</p>
+            <p class="meta" style="margin-bottom: 0;">Quarantine lifts automatically. No action needed from you.</p>
+        </div>
+    </div>
+</div>
+
+<div style="display: flex; gap: 12px; justify-content: center; margin-top: 24px;">
+    <a href="/services" class="btn btn-outline" style="width: auto; padding: 12px 24px;">View your services</a>
+    <a href="/services/onboard" class="btn btn-primary" style="width: auto; padding: 12px 24px;">Onboard another service</a>
+</div>
+{% endblock %}

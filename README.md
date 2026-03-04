@@ -56,18 +56,19 @@ curl -X POST http://localhost:8000/cafe/order \
   -H "Content-Type: application/json" \
   -d '{"service_id":"stayright-hotels","action_id":"search-availability","passport":"demo-passport","inputs":{"city":"Austin","check_in":"2026-03-15","check_out":"2026-03-18","guests":2}}'
 
-# Run tests (253 passing)
+# Run tests (271 passing)
 pytest tests/ -v
 ```
 
-### Company Dashboard (Next.js)
+### Company Dashboard
 
-```bash
-cd dashboard && npm install && npm run dev
-# http://localhost:3000 (proxies API to backend on :8000)
-```
+The company dashboard is built as server-rendered Jinja2 pages (no separate frontend build needed):
 
-Pages: `/login`, `/register`, `/onboard` (4-step wizard), `/services` (manage your services), `/admin` (platform admin, requires ISSUER_API_KEY).
+- `/services/login` — Company sign in
+- `/services/register` — Company registration
+- `/services/onboard` — 4-step onboarding wizard (spec input → review → policy → preview & publish)
+- `/services` — Service management (pause/resume/unpublish)
+- `/admin` — Platform admin dashboard (requires `ISSUER_API_KEY`)
 
 A sample spec is included at `dashboard/sample-spec.yaml` for testing the onboarding flow.
 
@@ -148,10 +149,9 @@ AgentCafe/
 │   ├── wizard/             # Company Onboarding Wizard (spec parser, AI enricher, review, publish)
 │   ├── db/                 # SQLite schema, engine, migrations, seed data
 │   └── demo_backends/      # 3 demo services (hotel, lunch, home)
-├── dashboard/             # Next.js 15 Company Dashboard (React 19, Tailwind 4)
-│   └── src/app/           # /login, /register, /onboard, /services, /admin
+├── dashboard/             # Next.js Company Dashboard (LEGACY — replaced by Jinja2 wizard_pages.py)
 ├── examples/              # Integration snippets (GPT function-calling, Claude tool_use)
-├── tests/                  # 253 tests (menu, order, passport, consent, webauthn, policy, wizard, crypto, keys, e2e)
+├── tests/                  # 271 tests (menu, order, passport, consent, webauthn, policy, wizard, wizard_pages, crypto, keys, e2e)
 ├── docs/
 │   ├── architecture/       # ADRs, Passport V2 specs
 │   ├── planning/           # Development plan
@@ -172,6 +172,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let's Encrypt TLS). CI/CD via GitHub Actions. WebAuthn passkeys complete (4 sprints). 253 tests passing, pylint 10.00/10.  
-**Next:** Production UX flows (company wizard, admin dashboard, consent polish), real external agent testing.  
+**Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let's Encrypt TLS). CI/CD via GitHub Actions. WebAuthn passkeys complete (4 sprints). Company wizard Jinja2 rebuild complete. 271 tests passing, pylint 10.00/10.  
+**Next:** Consent polish, real external agent testing.  
 **Built for:** The inevitable agent economy

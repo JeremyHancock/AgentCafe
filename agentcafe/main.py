@@ -26,6 +26,7 @@ from agentcafe.crypto import configure_crypto
 from agentcafe.db.engine import close_db, init_db
 from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_keys, get_key_manager
+from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
 from agentcafe.wizard.router import configure_wizard, wizard_router
 
 logger = logging.getLogger("agentcafe")
@@ -61,6 +62,11 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
+    configure_wizard_pages(
+        cfg.passport_signing_secret,
+        quarantine_days=cfg.quarantine_days,
+        issuer_api_key=cfg.issuer_api_key,
+    )
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
@@ -107,6 +113,7 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     app.include_router(consent_router)
     app.include_router(human_router)
     app.include_router(pages_router)
+    app.include_router(wizard_pages_router)
     app.include_router(wizard_router)
 
     @app.get("/health")
@@ -178,6 +185,11 @@ async def main() -> None:
     configure_consent(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
+    configure_wizard_pages(
+        cfg.passport_signing_secret,
+        quarantine_days=cfg.quarantine_days,
+        issuer_api_key=cfg.issuer_api_key,
+    )
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")

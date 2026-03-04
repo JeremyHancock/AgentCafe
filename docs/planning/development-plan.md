@@ -1,6 +1,6 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 253 tests, pylint 10.00/10.  
+**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 271 tests, pylint 10.00/10.  
 **Last Updated:** March 3, 2026
 
 **MVP Success Criteria**
@@ -149,10 +149,11 @@ We can run end-to-end locally:
 - 253 tests passing, pylint 10.00/10
 
 **⚠️ HIGH PRIORITY — Production UX Flows**
-- ⬜ **Company onboarding wizard UI** — The Next.js dashboard (`dashboard/`) exists but is not deployed. Companies cannot self-onboard on agentcafe.io. Either deploy the Next.js app (static export or separate process) or rebuild as server-rendered Jinja2 pages for consistency with the rest of the site. Covers: company registration, spec upload, AI review, policy config, preview, publish, post-publish management.
+- ✅ **Company onboarding wizard UI** — Rebuilt as server-rendered Jinja2 pages (`cafe/wizard_pages.py`). Covers: company registration, login, spec upload, AI review, policy config, preview, publish, post-publish service management. 18 tests.
 - ⬜ **Human consent flow polish** — Login/register/approve pages work but need visual polish, error states, mobile responsiveness audit, loading states.
 - ⬜ **Human policy dashboard improvements** — Token activity view, audit log per policy, bulk revocation, notification preferences.
-- ⬜ **Admin dashboard deployment** — `/admin` page exists in Next.js but not served in production. Needs either deployment or Jinja2 rebuild.
+- ✅ **Admin dashboard** — Rebuilt as Jinja2 page at `/admin` (API key gated, stats, services list, audit log).
+- ⬜ **Company wizard page documentation & helper content** — Add tooltips, field descriptions, contextual help text, and onboarding guidance across all wizard steps (spec input, review, policy, preview, services management).
 - ⬜ **Landing page → sign-up funnel** — Currently no CTA for humans or companies to sign up (intentional for beta). Before public launch, need clear paths for both audiences.
 
 **Observability (beta level)**
