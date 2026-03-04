@@ -109,7 +109,7 @@
     </div>
     <div class="stat-card">
         <div class="label">Total Actions</div>
-        <div class="value">{{ services | sum(attribute='actions') if services else 0 }}</div>
+        <div class="value">{{ services | map(attribute='actions') | map('length') | sum if services else 0 }}</div>
     </div>
     <div class="stat-card">
         <div class="label">Total Requests</div>
