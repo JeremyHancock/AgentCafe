@@ -91,6 +91,11 @@ async def e2e_db(monkeypatch):
     monkeypatch.setattr(consent_module._state, "signing_secret", _SECRET)
     monkeypatch.setattr(pages_module._state, "signing_secret", _SECRET)
     monkeypatch.setattr(router_module._state, "use_real_passport", True)
+
+    async def _mock_verify_passkey(challenge_id, credential):  # pylint: disable=unused-argument
+        return {"user_id": challenge_id, "email": "mock@example.com"}
+    monkeypatch.setattr(consent_module, "verify_passkey_assertion", _mock_verify_passkey)
+    monkeypatch.setattr(pages_module, "verify_passkey_assertion", _mock_verify_passkey)
     monkeypatch.setattr(router_module._state, "issuer_api_key", _API_KEY)
     # Clear IP rate limit state between tests
     passport_module._register_hits.clear()
@@ -270,8 +275,9 @@ async def _consent_flow(client, agent_token: str, service_id: str, action_id: st
     consent_id = resp.json()["consent_id"]
 
     # Human approves
-    _uid, human_token = await _register_human(client)
-    resp = await client.post(f"/consents/{consent_id}/approve", json={},
+    uid, human_token = await _register_human(client)
+    resp = await client.post(f"/consents/{consent_id}/approve",
+                             json={"passkey_challenge_id": uid, "passkey_credential": {}},
                              headers={"Authorization": f"Bearer {human_token}"})
     assert resp.status_code == 200, resp.text
 

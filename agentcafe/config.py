@@ -48,6 +48,12 @@ class CafeConfig:
     # Service quarantine (days after publish before Tier-1 access allowed)
     quarantine_days: int = 7
 
+    # WebAuthn passkeys
+    webauthn_rp_id: str = "localhost"
+    webauthn_rp_name: str = "AgentCafe"
+    webauthn_origin: str = "http://localhost:8000"
+    allow_password_auth: bool = True
+
     # CORS
     cors_allowed_origins: str = "*"
 
@@ -88,6 +94,10 @@ def load_config() -> CafeConfig:
         passport_rsa_key_file=os.getenv("PASSPORT_RSA_KEY_FILE", ""),
         encryption_key=os.getenv("CAFE_ENCRYPTION_KEY", ""),
         quarantine_days=int(os.getenv("QUARANTINE_DAYS", "7")),
+        webauthn_rp_id=os.getenv("WEBAUTHN_RP_ID", "localhost"),
+        webauthn_rp_name=os.getenv("WEBAUTHN_RP_NAME", "AgentCafe"),
+        webauthn_origin=os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000"),
+        allow_password_auth=os.getenv("ALLOW_PASSWORD_AUTH", "true").lower() == "true",
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),
     )

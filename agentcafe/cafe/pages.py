@@ -17,13 +17,14 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from agentcafe.cafe.consent import _fire_consent_callback
 from agentcafe.cafe.human import (
     _hash_password, _verify_password, _rehash_if_legacy,
     _create_human_session_token, validate_human_session,
+    verify_passkey_assertion, complete_passkey_registration,
 )
 from agentcafe.db.engine import get_db
 
@@ -44,13 +45,15 @@ _RISK_TIER_CEILINGS = {"low": 3600, "medium": 900, "high": 300, "critical": 0}
 class _State:
     """Module-level mutable state (avoids global statements)."""
     signing_secret: str = ""
+    allow_password_auth: bool = True
 
 _state = _State()
 
 
-def configure_pages(signing_secret: str) -> None:
-    """Set the signing secret. Called once at startup."""
+def configure_pages(signing_secret: str, *, allow_password_auth: bool = True) -> None:
+    """Set the signing secret and auth mode. Called once at startup."""
     _state.signing_secret = signing_secret
+    _state.allow_password_auth = allow_password_auth
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +353,26 @@ async def dashboard_revoke(
 
 
 # ---------------------------------------------------------------------------
+# POST /auth/session — set httponly cookie after JS-based passkey auth
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/auth/session")
+async def set_session(request: Request):
+    """Accept a session_token from JS passkey flow, set httponly cookie, return redirect."""
+    body = await request.json()
+    token = body.get("session_token", "")
+    next_url = body.get("next_url", "/")
+    # Validate the token before setting the cookie
+    try:
+        validate_human_session(token)
+    except HTTPException:
+        return JSONResponse({"error": "invalid_session"}, status_code=401)
+    response = JSONResponse({"redirect": next_url})
+    _set_session_cookie(response, token)
+    return response
+
+
+# ---------------------------------------------------------------------------
 # GET /login
 # ---------------------------------------------------------------------------
 
@@ -362,6 +385,7 @@ async def login_page(request: Request, next_url: str = ""):
         "error": None,
         "email": None,
         "csrf_token": _generate_csrf_token(request),
+        "allow_password_auth": _state.allow_password_auth,
     })
 
 
@@ -385,6 +409,7 @@ async def login_submit(
             "error": "Invalid or expired form submission. Please try again.",
             "email": email,
             "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
         }, status_code=403)
     db = await get_db()
     cursor = await db.execute(
@@ -398,6 +423,7 @@ async def login_submit(
             "error": "Invalid email or password.",
             "email": email,
             "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
         }, status_code=401)
 
     # Rehash legacy SHA-256 passwords to bcrypt on successful login
@@ -424,6 +450,7 @@ async def register_page(request: Request, next_url: str = ""):
         "email": None,
         "display_name": None,
         "csrf_token": _generate_csrf_token(request),
+        "allow_password_auth": _state.allow_password_auth,
     })
 
 
@@ -449,6 +476,7 @@ async def register_submit(
             "email": email,
             "display_name": display_name,
             "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
         }, status_code=403)
     if len(password) < 8:
         return templates.TemplateResponse("register.html", {
@@ -458,6 +486,7 @@ async def register_submit(
             "email": email,
             "display_name": display_name,
             "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
         }, status_code=422)
 
     db = await get_db()
@@ -472,6 +501,7 @@ async def register_submit(
             "email": email,
             "display_name": display_name,
             "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
         }, status_code=409)
 
     user_id = str(uuid.uuid4())
@@ -610,6 +640,8 @@ async def consent_approve_submit(
     consent_id: str,
     token_lifetime_seconds: int = Form(900),
     csrf_token: str = Form(""),
+    passkey_challenge_id: str = Form(""),
+    passkey_credential: str = Form(""),
 ):
     """Handle consent approval form submission."""
     session = _get_session(request)
@@ -618,9 +650,21 @@ async def consent_approve_submit(
     if not _validate_csrf_token(request, csrf_token):
         return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
 
+    # Verify passkey assertion — cryptographic human-presence proof
+    if not passkey_challenge_id or not passkey_credential:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
     try:
-        # We call the internal function by simulating the request
-        # Instead, let's do it directly via DB to avoid circular complexity
+        credential_dict = json.loads(passkey_credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+    try:
+        passkey_user = await verify_passkey_assertion(passkey_challenge_id, credential_dict)
+    except HTTPException:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+    if passkey_user["user_id"] != session["user_id"]:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+    try:
         db = await get_db()
 
         cursor = await db.execute("SELECT * FROM consents WHERE id = ?", (consent_id,))
@@ -744,4 +788,325 @@ async def consent_decline(
         "message": "",
         "service_name": "",
         "policy_id": "",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Activation code flow — cold-start UX (Sprint 3)
+# ---------------------------------------------------------------------------
+
+# Rate limit: max 10 activation code lookups per IP per 5 minutes
+_activate_hits: dict[str, list[float]] = {}
+_ACTIVATE_RATE_WINDOW = 300  # seconds
+_ACTIVATE_RATE_LIMIT = 10
+
+
+def _activate_rate_ok(ip: str) -> bool:
+    """Return True if this IP is within the activation code rate limit."""
+    now = __import__("time").time()
+    hits = _activate_hits.setdefault(ip, [])
+    # Prune old entries
+    _activate_hits[ip] = hits = [t for t in hits if now - t < _ACTIVATE_RATE_WINDOW]
+    if len(hits) >= _ACTIVATE_RATE_LIMIT:
+        return False
+    hits.append(now)
+    return True
+
+
+async def _lookup_consent_details(db, consent):
+    """Extract display info from a consent row. Returns (service_name, actions, risk_tier)."""
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+
+    svc_cursor = await db.execute(
+        "SELECT name, menu_entry_json FROM published_services WHERE service_id = ?",
+        (consent["service_id"],),
+    )
+    svc_row = await svc_cursor.fetchone()
+    service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+    actions = []
+    risk_tier = "medium"
+    if svc_row and svc_row["menu_entry_json"]:
+        menu = json.loads(svc_row["menu_entry_json"])
+        for action in menu.get("actions", []):
+            if action["action_id"] in action_ids:
+                actions.append(action)
+                risk_tier = action.get("risk_tier", risk_tier)
+    if not actions:
+        for aid in action_ids:
+            actions.append({"action_id": aid, "label": aid, "description": aid})
+
+    proxy_cursor = await db.execute(
+        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+        (consent["service_id"], action_ids[0] if action_ids else ""),
+    )
+    proxy_row = await proxy_cursor.fetchone()
+    if proxy_row:
+        risk_tier = proxy_row["risk_tier"]
+
+    return service_name, actions, risk_tier
+
+
+@pages_router.get("/activate", response_class=HTMLResponse)
+async def activate_page(request: Request, code: str = ""):
+    """GET /activate — show activation code entry form."""
+    return templates.TemplateResponse("activate.html", {
+        "request": request,
+        "step": "enter_code",
+        "code": code,
+        "error": None,
+        "csrf_token": _generate_csrf_token(request),
+    })
+
+
+@pages_router.post("/activate", response_class=HTMLResponse)
+async def activate_lookup(
+    request: Request,
+    code: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    """POST /activate — validate code and show consent + registration form."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    ip = request.client.host if request.client else "unknown"
+    if not _activate_rate_ok(ip):
+        return templates.TemplateResponse("activate.html", {
+            "request": request,
+            "step": "enter_code",
+            "code": code,
+            "error": "Too many attempts. Please wait a few minutes and try again.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=429)
+
+    code = code.strip().upper()
+    if not code or len(code) != 8:
+        return templates.TemplateResponse("activate.html", {
+            "request": request,
+            "step": "enter_code",
+            "code": code,
+            "error": "Please enter a valid 8-character activation code.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=400)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (code,),
+    )
+    consent = await cursor.fetchone()
+
+    if not consent:
+        return templates.TemplateResponse("activate.html", {
+            "request": request,
+            "step": "enter_code",
+            "code": code,
+            "error": "Code not found or already used. Check the code and try again.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=404)
+
+    # Check expiry
+    expires_at = datetime.fromisoformat(consent["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return templates.TemplateResponse("activate.html", {
+            "request": request,
+            "step": "enter_code",
+            "code": code,
+            "error": "This activation code has expired. Ask the agent for a new one.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=410)
+
+    # If user already logged in, redirect to normal consent page
+    session = _get_session(request)
+    if session:
+        return RedirectResponse(url=f"/authorize/{consent['id']}", status_code=303)
+
+    service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
+
+    return templates.TemplateResponse("activate.html", {
+        "request": request,
+        "step": "register_approve",
+        "code": code,
+        "service_name": service_name,
+        "consent_text": _consent_text(service_name, actions),
+        "task_summary": consent["task_summary"],
+        "actions": actions,
+        "risk_tier": risk_tier,
+        "lifetime_options": _lifetime_options(risk_tier),
+        "max_lifetime_label": _ceiling_label(risk_tier),
+        "error": None,
+        "csrf_token": _generate_csrf_token(request),
+    })
+
+
+@pages_router.post("/activate/complete", response_class=HTMLResponse)
+async def activate_complete(
+    request: Request,
+    activation_code: str = Form(""),
+    email: str = Form(""),
+    challenge_id: str = Form(""),
+    credential: str = Form(""),
+    token_lifetime_seconds: int = Form(900),
+    csrf_token: str = Form(""),
+):
+    """POST /activate/complete — register account + approve consent in one step."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    activation_code = activation_code.strip().upper()
+
+    # Validate inputs
+    if not activation_code or not email or not challenge_id or not credential:
+        return RedirectResponse(url=f"/activate?code={activation_code}", status_code=303)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (activation_code,),
+    )
+    consent = await cursor.fetchone()
+    if not consent:
+        return RedirectResponse(url="/activate", status_code=303)
+
+    # Check expiry (consent may be technically expired but status not yet updated)
+    expires_at = datetime.fromisoformat(consent["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return RedirectResponse(url="/activate", status_code=303)
+
+    # Parse credential JSON
+    try:
+        credential_dict = json.loads(credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/activate?code={activation_code}", status_code=303)
+
+    # Step 1: Complete passkey registration (creates account)
+    try:
+        reg_result = await complete_passkey_registration(challenge_id, credential_dict)
+    except HTTPException:
+        service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
+        return templates.TemplateResponse("activate.html", {
+            "request": request,
+            "step": "register_approve",
+            "code": activation_code,
+            "service_name": service_name,
+            "consent_text": _consent_text(service_name, actions),
+            "task_summary": consent["task_summary"],
+            "actions": actions,
+            "risk_tier": risk_tier,
+            "lifetime_options": _lifetime_options(risk_tier),
+            "max_lifetime_label": _ceiling_label(risk_tier),
+            "error": "Passkey registration failed. Please try again.",
+            "csrf_token": _generate_csrf_token(request),
+        })
+
+    user_id = reg_result["user_id"]
+    consent_id = consent["id"]
+
+    # Step 2: Approve the consent (same logic as consent_approve_submit)
+    now = datetime.now(timezone.utc)
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+
+    proxy_cursor = await db.execute(
+        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+        (consent["service_id"], action_ids[0] if action_ids else ""),
+    )
+    proxy_row = await proxy_cursor.fetchone()
+    risk_tier = proxy_row["risk_tier"] if proxy_row else "medium"
+
+    ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+    if ceiling > 0:
+        lifetime = min(token_lifetime_seconds, ceiling)
+    else:
+        lifetime = 0
+
+    policy_id = str(uuid.uuid4())
+    policy_expires = now + timedelta(days=90)
+
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            risk_tier, max_token_lifetime_seconds, expires_at,
+            revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+        (
+            policy_id, user_id, consent["service_id"],
+            consent["action_ids"], consent["requested_scopes"],
+            risk_tier, lifetime,
+            policy_expires.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+
+    await db.execute(
+        """UPDATE consents SET status = 'approved', cafe_user_id = ?,
+           policy_id = ?, updated_at = ? WHERE id = ?""",
+        (user_id, policy_id, now.isoformat(), consent_id),
+    )
+    await db.commit()
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(
+        consent["callback_url"], consent_id, "approved", policy_id,
+    )
+
+    # Set session cookie
+    svc_cursor = await db.execute(
+        "SELECT name FROM published_services WHERE service_id = ?",
+        (consent["service_id"],),
+    )
+    svc_row = await svc_cursor.fetchone()
+    service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+    response = templates.TemplateResponse("activate.html", {
+        "request": request,
+        "step": "success",
+        "service_name": service_name,
+    })
+    response.set_cookie(
+        key="cafe_session",
+        value=reg_result["session_token"],
+        httponly=True,
+        samesite="lax",
+        max_age=86400,
+    )
+    return response
+
+
+@pages_router.post("/activate/decline", response_class=HTMLResponse)
+async def activate_decline(
+    request: Request,
+    activation_code: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    """POST /activate/decline — decline the consent via activation code."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    ip = request.client.host if request.client else "unknown"
+    if not _activate_rate_ok(ip):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    activation_code = activation_code.strip().upper()
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor = await db.execute(
+        "SELECT id, callback_url FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (activation_code,),
+    )
+    consent = await cursor.fetchone()
+    if consent:
+        await db.execute(
+            "UPDATE consents SET status = 'declined', updated_at = ? WHERE id = ?",
+            (now, consent["id"]),
+        )
+        await db.commit()
+        await _fire_consent_callback(consent["callback_url"], consent["id"], "declined")
+
+    return templates.TemplateResponse("activate.html", {
+        "request": request,
+        "step": "declined",
     })
