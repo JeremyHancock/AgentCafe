@@ -7,6 +7,8 @@ Implements v2-spec.md §4 (Consent Flow), §5 (Consent Lifecycle),
 from __future__ import annotations
 
 import logging
+import secrets
+import string
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -15,7 +17,7 @@ import jwt
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel, Field
 
-from agentcafe.cafe.human import validate_human_session
+from agentcafe.cafe.human import validate_human_session, verify_passkey_assertion
 from agentcafe.db.engine import get_db
 from agentcafe.keys import sign_passport_token, decode_passport_token
 
@@ -112,6 +114,8 @@ class InitiateResponse(BaseModel):
     """Response body for POST /consents/initiate."""
     consent_id: str
     consent_url: str
+    activation_code: str
+    activation_url: str
     status: str = "pending"
     expires_at: str
 
@@ -127,6 +131,8 @@ class ConsentStatusResponse(BaseModel):
 class ApproveRequest(BaseModel):
     """Request body for POST /consents/{consent_id}/approve."""
     token_lifetime_seconds: int | None = None
+    passkey_challenge_id: str = Field(..., description="Challenge ID from /human/passkey/login/begin")
+    passkey_credential: dict = Field(..., description="WebAuthn assertion credential from navigator.credentials.get()")
 
 
 class ApproveResponse(BaseModel):
@@ -160,6 +166,14 @@ class TokenResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_ACTIVATION_CODE_CHARS = string.ascii_uppercase + string.digits
+
+
+def _generate_activation_code() -> str:
+    """Generate an 8-char alphanumeric activation code (e.g. 'ABCD1234')."""
+    return "".join(secrets.choice(_ACTIVATION_CODE_CHARS) for _ in range(8))
+
 
 def _validate_agent_passport(authorization: str) -> dict:
     """Extract and validate the agent's Passport from the Authorization header."""
@@ -284,15 +298,17 @@ async def initiate_consent(
     action_ids_csv = ",".join(actions)
     scopes = ",".join(f"{req.service_id}:{a}" for a in actions)
 
+    activation_code = _generate_activation_code()
+
     await db.execute(
         """INSERT INTO consents
            (id, service_id, action_ids, requested_scopes, requested_constraints_json,
-            task_summary, callback_url, status, expires_at, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+            task_summary, callback_url, activation_code, status, expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
         (
             consent_id, req.service_id, action_ids_csv, scopes,
             str(req.requested_constraints) if req.requested_constraints else None,
-            req.task_summary, req.callback_url,
+            req.task_summary, req.callback_url, activation_code,
             expires_at.isoformat(), now.isoformat(), now.isoformat(),
         ),
     )
@@ -303,6 +319,8 @@ async def initiate_consent(
     return InitiateResponse(
         consent_id=consent_id,
         consent_url=consent_url,
+        activation_code=activation_code,
+        activation_url=f"/activate?code={activation_code}",
         expires_at=expires_at.isoformat(),
     )
 
@@ -357,14 +375,25 @@ async def approve_consent(
 ):
     """Human approves a consent request, creating a policy.
 
-    Requires a valid human session token (aud: human-dashboard).
-    MVP: direct API call. Production: consent page UI with passkey.
+    Requires a valid human session token AND a fresh passkey assertion.
+    The passkey assertion cryptographically proves a human is present.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail={"error": "missing_session"})
     human_payload = validate_human_session(authorization[7:])
     user_id = human_payload["user_id"]
     email = human_payload["sub"].removeprefix("user:")
+
+    # Verify passkey assertion — this is the cryptographic human-presence proof
+    passkey_user = await verify_passkey_assertion(
+        req.passkey_challenge_id, req.passkey_credential,
+    )
+    if passkey_user["user_id"] != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "passkey_user_mismatch",
+                    "message": "Passkey does not belong to the session user."},
+        )
 
     db = await get_db()
 

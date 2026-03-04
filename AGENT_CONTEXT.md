@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 2, 2026 (Phase 7 in progress — deployed to agentcafe.io, 214 tests, pylint 10.00/10)
+Last Updated: March 3, 2026 (Phase 7 in progress — deployed to agentcafe.io, 253 tests, pylint 10.00/10)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -69,7 +69,7 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 **Phase 4 — COMPLETE.** Security & Guardrails (7 waves):
 - Schema migration system (numbered SQL in `db/migrations/`)
 - Passport V2: Tier-1 read tokens, Tier-2 write tokens via human consent
-- Human accounts (`cafe/human.py`): register/login, session JWT (passkeys planned, currently email+password)
+- Human accounts (`cafe/human.py`): register/login, session JWT, **WebAuthn passkey registration and login** (4 sprints complete)
 - Full consent flow (`cafe/consent.py`): initiate → approve → exchange → refresh
 - Risk-tier token ceilings, policy revocation, max 20 active tokens per policy
 - Identity verification (Gate 1b), ADR-023 Menu fields, implicit read
@@ -106,7 +106,8 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Demo agent tested against production (headless + interactive human consent approval)
 - Integration examples: `examples/openai_agent.py` (GPT function calling), `examples/claude_agent.py` (Claude tool_use)
 - Human-facing UX uses cafe metaphor ("Tab" not "Passport"), ☕ emoji branding
-- HIGH PRIORITY pending: WebAuthn passkeys, production UX flows (company wizard, admin dashboard)
+- WebAuthn passkeys complete (Sprints 1–4): passkey register/login, consent requires passkey assertion, activation code flow, grace period migration, enrollment prompt
+- Remaining: production UX flows (company wizard, admin dashboard)
 
 ## 6. Codebase Map
 
@@ -121,16 +122,16 @@ AgentCafe/
 │   │   ├── engine.py               # DB connection singleton (aiosqlite)
 │   │   ├── seed.py                 # Seeds demo data on startup
 │   │   ├── migrate.py              # Numbered SQL migration runner
-│   │   ├── migrations/             # 0001–0007 SQL migration files
+│   │   ├── migrations/             # 0001–0009 SQL migration files
 │   │   └── services/               # Demo service Menu JSONs + OpenAPI specs (loaded by seed.py)
 │   ├── cafe/
 │   │   ├── menu.py                 # Assembles locked Menu (incl. security_status)
 │   │   ├── passport.py             # Passport V2: Tier-1 register, JWT validation, revocation
 │   │   ├── policy.py               # Rate limiting + input type validation
 │   │   ├── router.py               # GET /cafe/menu, POST /cafe/order, GET /cafe/admin/overview
-│   │   ├── human.py                # Human accounts: register/login, session JWT
+│   │   ├── human.py                # Human accounts: register/login, session JWT, WebAuthn passkeys, enrollment
 │   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
-│   │   └── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/)
+│   │   └── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey)
 │   ├── wizard/                     # Company Onboarding Wizard
 │   │   ├── models.py               # Pydantic models for all wizard + service management data
 │   │   ├── spec_parser.py          # OpenAPI 3.x parsing + validation + operation extraction
@@ -144,7 +145,8 @@ AgentCafe/
 │   │   ├── hotel.py                # StayRight Hotels — 4 endpoints
 │   │   ├── lunch.py                # QuickBite Delivery — 4 endpoints
 │   │   └── home_service.py         # FixRight Home — 4 endpoints
-│   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard)
+│   ├── static/webauthn.js          # Zero-dependency WebAuthn JS helper (prepareRegistrationOptions, etc.)
+│   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard, activate, enroll_passkey)
 ├── dashboard/                      # Next.js 15 Company Dashboard
 │   ├── src/app/
 │   │   ├── login/page.tsx          # Company login
@@ -164,7 +166,8 @@ AgentCafe/
 │   ├── test_order.py               # Order proxy + input validation + audit tests
 │   ├── test_passport.py            # JWT issuance, scope validation, revocation, Tier-1/Tier-2 tests
 │   ├── test_policy.py              # Rate limiting + input type validation tests
-│   ├── test_consent.py             # Full consent flow + human account tests
+│   ├── test_consent.py             # Full consent flow + human account tests + activation code tests
+│   ├── test_webauthn.py            # WebAuthn passkey + grace period + enrollment tests
 │   ├── test_wizard.py              # Spec parsing, enrichment, full wizard flow tests
 │   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
 │   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
@@ -173,7 +176,8 @@ AgentCafe/
 │   │   ├── decisions.md            # ADR-001 through ADR-026
 │   │   └── passport/               # Passport V2: threat-model, v2-discussion, v2-spec
 │   ├── planning/
-│   │   └── development-plan.md     # Ordered phases with completion status
+│   │   ├── development-plan.md     # Ordered phases with completion status
+│   │   └── webauthn-passkeys-plan.md # WebAuthn implementation plan (Sprints 1–4 complete)
 │   └── reviews/                    # Project reviews (review-1, review-2, wizard-fix-progress)
 ├── Dockerfile, docker-compose.yml  # Container setup
 ├── pyproject.toml                  # Dependencies and build config
@@ -190,7 +194,7 @@ AgentCafe/
 | Demo backends (hotel, lunch, home) | **Real mock data** | In-memory, no persistence across restarts |
 | Passport V2 (Tier-1 + Tier-2) | **Real** | RS256 JWT signing + JWKS endpoint, scopes, expiry, risk-tier ceilings, revocation |
 | Human consent flow | **Real** | Initiate → approve → exchange → refresh. Full lifecycle. |
-| Human accounts | **Real** | Register/login with bcrypt, session JWT, passkey enforcement |
+| Human accounts | **Real** | Register/login with bcrypt, session JWT, WebAuthn passkeys, grace period migration, enrollment prompt |
 | Rate limiting | **Real** | Sliding-window per passport+action, V2 429 response with retry_after |
 | Company Onboarding Wizard | **Real** | Full API + Next.js dashboard. Spec parse/upload/fetch → review → policy → publish |
 | Audit log | **Real** | SHA-256 hash chain, tamper detection via `verify_audit_chain()` |
@@ -218,7 +222,7 @@ python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # API docs: http://127.0.0.1:8000/docs
-python -m pytest tests/ -v         # 214 tests passing
+python -m pytest tests/ -v         # 253 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 

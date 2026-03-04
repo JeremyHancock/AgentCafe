@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 214 tests, pylint 10.00/10.  
-**Last Updated:** March 2, 2026
+**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 253 tests, pylint 10.00/10.  
+**Last Updated:** March 3, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -140,9 +140,13 @@ We can run end-to-end locally:
 - ⬜ Immediate dogfooding: connect our own agents to the live instance
 - ⬜ Feedback capture: log what agents struggle with (Menu clarity, consent flow, error messages, rate limits) and feed into v2
 
-**⚠️ HIGH PRIORITY — Human Authentication Hardening**
-- ⬜ **WebAuthn passkeys for human registration and consent approval** — Currently email+password, which an agent can self-register and self-approve. Passkeys require physical device interaction (biometric/hardware key) that software agents cannot fake. This is the #1 security gap before real-world use. Locked design position in v2-design-discussion.md §13. Must be implemented before any real company onboards paying customers.
-- ⬜ Interim mitigations (if passkeys slip): email verification on registration, CAPTCHA, approval cooldown detection
+**✅ WebAuthn Passkeys — COMPLETE (Sprints 1–4)**
+- ✅ **Sprint 1: Server-side WebAuthn** — Migration 0008 (webauthn_credentials + webauthn_challenges tables), passkey register/login endpoints in human.py, ALLOW_PASSWORD_AUTH feature flag, 15 tests in test_webauthn.py
+- ✅ **Sprint 2: Browser-side integration** — webauthn.js helper, passkey-primary UI (register.html, login.html, consent.html), SEC-2/3/4 resolved (consent approval requires passkey assertion)
+- ✅ **Sprint 3: Activation code flow** — Migration 0009 (activation_code on consents), /activate routes (GET, POST, /complete, /decline), activate.html template, complete_passkey_registration() extracted as reusable helper, rate limiting
+- ✅ **Sprint 4: Migration & hardening** — _check_passkey_enrollment() helper, 7-day grace period (configurable), password login returns passkey_enrolled flag, page login redirects to /enroll-passkey, enroll/begin + enroll/complete endpoints, enroll_passkey.html template, activation code expiry tests
+- See `docs/planning/webauthn-passkeys-plan.md` and `docs/security/SECURITY-DEBT.md` for full details
+- 253 tests passing, pylint 10.00/10
 
 **⚠️ HIGH PRIORITY — Production UX Flows**
 - ⬜ **Company onboarding wizard UI** — The Next.js dashboard (`dashboard/`) exists but is not deployed. Companies cannot self-onboard on agentcafe.io. Either deploy the Next.js app (static export or separate process) or rebuild as server-rendered Jinja2 pages for consistency with the rest of the site. Covers: company registration, spec upload, AI review, policy config, preview, publish, post-publish management.

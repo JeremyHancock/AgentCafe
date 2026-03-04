@@ -51,9 +51,15 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         legacy_hs256_secret=cfg.passport_signing_secret,
     )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
-    configure_human(cfg.passport_signing_secret)
+    configure_human(
+        cfg.passport_signing_secret,
+        webauthn_rp_id=cfg.webauthn_rp_id,
+        webauthn_rp_name=cfg.webauthn_rp_name,
+        webauthn_origin=cfg.webauthn_origin,
+        allow_password_auth=cfg.allow_password_auth,
+    )
     configure_consent(cfg.passport_signing_secret)
-    configure_pages(cfg.passport_signing_secret)
+    configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
@@ -162,9 +168,15 @@ async def main() -> None:
         legacy_hs256_secret=cfg.passport_signing_secret,
     )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
-    configure_human(cfg.passport_signing_secret)
+    configure_human(
+        cfg.passport_signing_secret,
+        webauthn_rp_id=cfg.webauthn_rp_id,
+        webauthn_rp_name=cfg.webauthn_rp_name,
+        webauthn_origin=cfg.webauthn_origin,
+        allow_password_auth=cfg.allow_password_auth,
+    )
     configure_consent(cfg.passport_signing_secret)
-    configure_pages(cfg.passport_signing_secret)
+    configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
     if cfg.use_real_passport:
