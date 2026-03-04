@@ -131,7 +131,13 @@
     <div class="svc-card-header">
         <span style="font-weight: 600;">{{ svc.name }}</span>
         <code style="font-size: 12px; background: var(--bg); padding: 2px 8px; border-radius: 4px;">{{ svc.service_id }}</code>
-        <span class="badge badge-live">Live</span>
+        {% if svc._source == 'wizard' %}
+        <span class="badge badge-{{ svc._status or 'live' }}">{{ svc._status or 'live' }}</span>
+        <span style="font-size: 11px; color: var(--text-muted);">wizard</span>
+        {% else %}
+        <span class="badge badge-live">live</span>
+        <span style="font-size: 11px; color: var(--text-muted);">seeded</span>
+        {% endif %}
     </div>
     <p class="meta" style="margin-bottom: 6px;">{{ svc.description or '' }}</p>
     <span class="meta">{{ svc.actions | length }} actions</span>

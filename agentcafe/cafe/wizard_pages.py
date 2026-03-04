@@ -986,13 +986,24 @@ async def admin_page(request: Request):
 
     db = await get_db()
 
-    # Load all services from menu (table may not exist if no seed data)
+    # Load services from both menu_entries (demo/seeded) and published_services (wizard)
     services = []
     try:
         cursor = await db.execute("SELECT * FROM menu_entries")
-        menu_rows = await cursor.fetchall()
-        for row in menu_rows:
+        for row in await cursor.fetchall():
             menu_data = json.loads(row["menu_json"])
+            menu_data["_source"] = "seeded"
+            services.append(menu_data)
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM published_services ORDER BY published_at DESC",
+        )
+        for row in await cursor.fetchall():
+            menu_data = json.loads(row["menu_entry_json"])
+            menu_data["_source"] = "wizard"
+            menu_data["_status"] = row["status"]
             services.append(menu_data)
     except Exception:  # pylint: disable=broad-except
         pass
