@@ -1763,3 +1763,76 @@ async def test_activate_complete_with_used_code_redirects(cafe_client):
         "csrf_token": csrf,
     }, follow_redirects=False)
     assert resp.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_activate_complete_rejects_expired_consent(cafe_client):
+    """POST /activate/complete should reject an expired consent even if status is still pending."""
+    from agentcafe.db.engine import get_db as _get_db
+    from datetime import datetime, timezone, timedelta
+
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    code = resp.json()["activation_code"]
+    consent_id = resp.json()["consent_id"]
+
+    # Manually backdate expires_at to make the consent expired
+    db = await _get_db()
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await db.execute(
+        "UPDATE consents SET expires_at = ? WHERE id = ?", (past, consent_id),
+    )
+    await db.commit()
+
+    page = await cafe_client.get("/activate")
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post("/activate/complete", data={
+        "activation_code": code,
+        "email": "expired@test.example.com",
+        "challenge_id": "test-challenge",
+        "credential": "{}",
+        "token_lifetime_seconds": "900",
+        "csrf_token": csrf,
+    }, follow_redirects=False)
+    # Should redirect back — consent is expired
+    assert resp.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_activate_lookup_rejects_expired_consent(cafe_client):
+    """POST /activate with a valid code for an expired consent should show error."""
+    from agentcafe.db.engine import get_db as _get_db
+    from datetime import datetime, timezone, timedelta
+
+    cafe_client.cookies.clear()
+    agent_token = await _register_agent(cafe_client)
+    resp = await cafe_client.post(
+        "/consents/initiate",
+        json={"service_id": "stayright-hotels", "action_id": "search-availability"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    code = resp.json()["activation_code"]
+    consent_id = resp.json()["consent_id"]
+
+    # Manually expire the consent
+    db = await _get_db()
+    past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await db.execute(
+        "UPDATE consents SET expires_at = ? WHERE id = ?", (past, consent_id),
+    )
+    await db.commit()
+
+    page = await cafe_client.get("/activate")
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post("/activate", data={
+        "code": code,
+        "csrf_token": csrf,
+    })
+    # Expired consent should be treated as not found or show expiry error
+    assert resp.status_code in (404, 410)

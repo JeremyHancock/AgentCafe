@@ -43,11 +43,13 @@ human_router = APIRouter(prefix="/human", tags=["human"])
 
 _HUMAN_SESSION_HOURS = 24
 _CHALLENGE_TTL_SECONDS = 300  # 5 minutes
+_DEFAULT_GRACE_PERIOD_DAYS = 7
 
 
 class _State:
     """Module-level mutable state (avoids global statements)."""
     signing_secret: str = ""
+    passkey_grace_period_days: int = _DEFAULT_GRACE_PERIOD_DAYS
     webauthn_rp_id: str = "localhost"
     webauthn_rp_name: str = "AgentCafe"
     webauthn_origin: str = "http://localhost:8000"
@@ -63,6 +65,7 @@ def configure_human(
     webauthn_rp_name: str = "AgentCafe",
     webauthn_origin: str = "http://localhost:8000",
     allow_password_auth: bool = True,
+    passkey_grace_period_days: int = _DEFAULT_GRACE_PERIOD_DAYS,
 ) -> None:
     """Set secrets and WebAuthn config for human accounts. Called once at startup."""
     _state.signing_secret = signing_secret
@@ -70,6 +73,7 @@ def configure_human(
     _state.webauthn_rp_name = webauthn_rp_name
     _state.webauthn_origin = webauthn_origin
     _state.allow_password_auth = allow_password_auth
+    _state.passkey_grace_period_days = passkey_grace_period_days
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +104,7 @@ class LoginResponse(BaseModel):
     """Response body for POST /human/login (password auth)."""
     user_id: str
     session_token: str
+    passkey_enrolled: bool = True
 
 
 class PasskeyRegisterBeginRequest(BaseModel):
@@ -281,6 +286,28 @@ def _require_password_auth() -> None:
         )
 
 
+async def _check_passkey_enrollment(db, user_id: str) -> dict:
+    """Check if a user has enrolled a passkey and whether the grace period has elapsed.
+
+    Returns {"enrolled": bool, "grace_expired": bool, "enrolled_at": str|None}.
+    """
+    cursor = await db.execute(
+        "SELECT created_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC LIMIT 1",
+        (user_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return {"enrolled": False, "grace_expired": False, "enrolled_at": None}
+
+    enrolled_at = datetime.fromisoformat(row["created_at"])
+    if enrolled_at.tzinfo is None:
+        enrolled_at = enrolled_at.replace(tzinfo=timezone.utc)
+    grace_deadline = enrolled_at + timedelta(days=_state.passkey_grace_period_days)
+    grace_expired = datetime.now(timezone.utc) > grace_deadline
+
+    return {"enrolled": True, "grace_expired": grace_expired, "enrolled_at": row["created_at"]}
+
+
 @human_router.post("/register", response_model=RegisterResponse)
 async def register_human(req: RegisterRequest):
     """Register a new human Cafe account with email + password.
@@ -324,6 +351,7 @@ async def login_human(req: LoginRequest):
     """Log in to an existing human Cafe account with email + password.
 
     Legacy auth mode — gated behind ALLOW_PASSWORD_AUTH. Use passkey endpoints for production.
+    After grace period, users with enrolled passkeys must use passkey login.
     """
     _require_password_auth()
     db = await get_db()
@@ -338,6 +366,18 @@ async def login_human(req: LoginRequest):
             detail={"error": "invalid_credentials", "message": "Invalid email or password."},
         )
 
+    # Grace period: reject password login if user has passkey enrolled > N days ago
+    pk_status = await _check_passkey_enrollment(db, row["id"])
+    if pk_status["grace_expired"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "password_login_disabled",
+                "message": "Your account has a passkey enrolled. "
+                           "Password login is no longer available. Please sign in with your passkey.",
+            },
+        )
+
     # Rehash legacy SHA-256 passwords to bcrypt on successful login
     await _rehash_if_legacy(db, row["id"], req.password, row["password_hash"])
 
@@ -346,6 +386,7 @@ async def login_human(req: LoginRequest):
     return LoginResponse(
         user_id=row["id"],
         session_token=session_token,
+        passkey_enrolled=pk_status["enrolled"],
     )
 
 
@@ -485,6 +526,123 @@ async def passkey_register_complete(req: PasskeyRegisterCompleteRequest):
     """Complete passkey registration. Verifies attestation, creates account, returns session."""
     result = await complete_passkey_registration(req.challenge_id, req.credential)
     return JSONResponse(content=result)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints — WebAuthn passkey enrollment (existing password users)
+# ---------------------------------------------------------------------------
+
+class PasskeyEnrollBeginRequest(BaseModel):
+    """Request body for POST /human/passkey/enroll/begin."""
+    session_token: str
+
+
+@human_router.post("/passkey/enroll/begin")
+async def passkey_enroll_begin(req: PasskeyEnrollBeginRequest):
+    """Begin passkey enrollment for an existing password user.
+
+    Requires a valid session token. Returns WebAuthn creation options
+    so the user can add a passkey to their existing account.
+    """
+    session = validate_human_session(req.session_token)
+    user_id = session["user_id"]
+
+    db = await get_db()
+
+    # Verify user exists and get email
+    cursor = await db.execute("SELECT id, email FROM cafe_users WHERE id = ?", (user_id,))
+    user_row = await cursor.fetchone()
+    if not user_row:
+        raise HTTPException(status_code=404, detail={"error": "user_not_found"})
+    email = user_row["email"]
+
+    user_id_bytes = uuid.UUID(user_id).bytes
+
+    options = generate_registration_options(
+        rp_id=_state.webauthn_rp_id,
+        rp_name=_state.webauthn_rp_name,
+        user_id=user_id_bytes,
+        user_name=email,
+        user_display_name=email,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            resident_key=ResidentKeyRequirement.PREFERRED,
+            user_verification=UserVerificationRequirement.PREFERRED,
+        ),
+    )
+
+    challenge_id = await _store_challenge(
+        challenge=options.challenge,
+        challenge_type="register",
+        user_id=user_id,
+        email=email,
+    )
+
+    options_json = json.loads(options_to_json(options))
+    options_json["challenge_id"] = challenge_id
+
+    return JSONResponse(content=options_json)
+
+
+class PasskeyEnrollCompleteRequest(BaseModel):
+    """Request body for POST /human/passkey/enroll/complete."""
+    session_token: str
+    challenge_id: str
+    credential: dict
+
+
+@human_router.post("/passkey/enroll/complete")
+async def passkey_enroll_complete(req: PasskeyEnrollCompleteRequest):
+    """Complete passkey enrollment for an existing user. Stores credential, no new account."""
+    session = validate_human_session(req.session_token)
+    user_id = session["user_id"]
+
+    challenge_row = await _load_and_consume_challenge(req.challenge_id, "register")
+
+    # Ensure the challenge belongs to this user
+    if challenge_row.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail={"error": "user_mismatch"})
+
+    expected_challenge = base64url_to_bytes(challenge_row["challenge"])
+
+    try:
+        verification = verify_registration_response(
+            credential=req.credential,
+            expected_challenge=expected_challenge,
+            expected_rp_id=_state.webauthn_rp_id,
+            expected_origin=_state.webauthn_origin,
+        )
+    except Exception as exc:
+        logger.warning("Passkey enrollment verification failed: %s", exc)
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "verification_failed", "message": str(exc)},
+        ) from exc
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    credential_id_b64 = bytes_to_base64url(verification.credential_id)
+    public_key_b64 = bytes_to_base64url(verification.credential_public_key)
+
+    await db.execute(
+        """INSERT INTO webauthn_credentials
+           (id, user_id, credential_id, public_key, sign_count, device_name, created_at, last_used_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            str(uuid.uuid4()), user_id, credential_id_b64,
+            public_key_b64, verification.sign_count,
+            "Enrolled passkey", now, now,
+        ),
+    )
+    await db.commit()
+
+    logger.info("Passkey enrolled for existing user %s", user_id)
+
+    return JSONResponse(content={
+        "user_id": user_id,
+        "credential_id": credential_id_b64,
+        "enrolled": True,
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@
 
 **Invariant:** *No agent may obtain write-scope access to a real service endpoint without a cryptographically verified human approval (passkey).*
 
-**Last audited:** March 3, 2026 (Sprint 2 complete, SEC-2/3/4 resolved)
+**Last audited:** March 3, 2026 (Sprint 4 complete, SEC-2/3/4 resolved, SEC-1 mitigated by grace period)
 
 ---
 
@@ -16,7 +16,8 @@
 - **Risk:** When `ALLOW_PASSWORD_AUTH=true` (current default), an agent can register a human account and obtain a session token via HTTP alone — no passkey, no human.
 - **Impact:** Agent creates account → obtains session → approves its own consent → gets write-scope Passport.
 - **Fix:** Set `ALLOW_PASSWORD_AUTH=false` in production. The flag and gating code already exist. **Do not enable real company endpoints until this is false.**
-- **Status:** ⚠️ OPEN (beta default is `true`)
+- **Mitigation (Sprint 4):** Grace period logic now auto-disables password login per-user 7 days after passkey enrollment. Password login prompts enrollment on every login. Even with `ALLOW_PASSWORD_AUTH=true`, the attack requires: (1) agent registers account, (2) agent somehow completes a passkey enrollment (impossible without physical authenticator), (3) consent approval requires passkey assertion. The remaining gap is that an agent can create a password account and use it during the 7-day grace window — but consent approval independently requires passkey assertion (SEC-2), so the agent still cannot approve its own consent.
+- **Status:** ⚠️ OPEN but **effectively mitigated** by SEC-2 (consent approval requires passkey). Set `ALLOW_PASSWORD_AUTH=false` for defense-in-depth.
 
 ### ~~SEC-2: Consent API endpoint has no passkey requirement~~ → RESOLVED
 - **Resolved:** March 3, 2026. Implemented option (a): `ApproveRequest` now requires `passkey_challenge_id` + `passkey_credential`. Server calls `verify_passkey_assertion()` and confirms passkey user matches session user. Both API and page-flow consent approval use the same `verify_passkey_assertion()` code path.
@@ -69,11 +70,13 @@
 
 Before any real company's endpoints are proxied through AgentCafe:
 
-- [ ] `ALLOW_PASSWORD_AUTH=false` (SEC-1)
+- [ ] `ALLOW_PASSWORD_AUTH=false` (SEC-1) — defense-in-depth; consent approval already requires passkey
 - [ ] `USE_REAL_PASSPORT=true` (SEC-5)
 - [x] Consent API endpoint requires passkey proof (SEC-2) — March 3, 2026
 - [x] Consent page blocks approval when passkey not supported (SEC-3) — March 3, 2026
 - [x] Consent page `<noscript>` fallback removed (SEC-4) — March 3, 2026
+- [x] Grace period auto-disables password login after passkey enrollment — March 3, 2026
+- [x] Password login prompts passkey enrollment — March 3, 2026
 - [ ] `WEBAUTHN_RP_ID=agentcafe.io`, `WEBAUTHN_ORIGIN=https://agentcafe.io`
 - [ ] At least one human account registered via passkey and tested end-to-end
 - [ ] Session tokens include `auth_method` claim (SEC-6) — nice-to-have if SEC-1 is resolved

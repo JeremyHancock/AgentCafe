@@ -56,7 +56,7 @@ curl -X POST http://localhost:8000/cafe/order \
   -H "Content-Type: application/json" \
   -d '{"service_id":"stayright-hotels","action_id":"search-availability","passport":"demo-passport","inputs":{"city":"Austin","check_in":"2026-03-15","check_out":"2026-03-18","guests":2}}'
 
-# Run tests (214 passing)
+# Run tests (253 passing)
 pytest tests/ -v
 ```
 
@@ -103,6 +103,8 @@ echo "Approve at: http://localhost:8000/authorize/$CONSENT_ID"
 
 You'll be prompted to create an account (or log in), then you'll see the consent approval page with the service details, risk tier, and duration selector.
 
+**Activation codes (cold-start UX):** The `initiate` response also includes an `activation_code` and `activation_url`. New users can visit `/activate`, enter the code, register with a passkey, and approve the consent in one step — no separate login required.
+
 ### Wizard API (for companies)
 
 ```bash
@@ -128,7 +130,8 @@ curl -X POST http://localhost:8000/wizard/specs/parse \
 - **Full proxy**: agents never see backend URLs or tokens
 - **Double validation**: Human Passport + Company Policy on every order
 - **Passport V2**: Two-tier JWT system with RS256 asymmetric signing, JWKS endpoint (`/.well-known/jwks.json`), human consent flow, risk-tier ceilings, identity verification, and instant policy revocation
-- **Consent UI**: Server-rendered pages for human authorization (login, review, approve/decline)
+- **WebAuthn passkeys**: Phishing-resistant authentication for human accounts. Passkey required for consent approval. Password users prompted to enroll; grace period auto-disables password login after 7 days.
+- **Consent UI**: Server-rendered pages for human authorization (login, review, approve/decline, activation code entry)
 - **Company Onboarding Wizard**: OpenAPI spec → guided review → one-click publish → edit & re-publish
 - **Tech**: Python 3.12 + FastAPI + SQLite (MVP) + Jinja2 + LiteLLM (wizard AI enrichment)
 - **License**: MIT
@@ -148,7 +151,7 @@ AgentCafe/
 ├── dashboard/             # Next.js 15 Company Dashboard (React 19, Tailwind 4)
 │   └── src/app/           # /login, /register, /onboard, /services, /admin
 ├── examples/              # Integration snippets (GPT function-calling, Claude tool_use)
-├── tests/                  # 214 tests (menu, order, passport, consent, policy, wizard, crypto, keys, e2e)
+├── tests/                  # 253 tests (menu, order, passport, consent, webauthn, policy, wizard, crypto, keys, e2e)
 ├── docs/
 │   ├── architecture/       # ADRs, Passport V2 specs
 │   ├── planning/           # Development plan
@@ -169,6 +172,6 @@ AgentCafe/
 
 ---
 
-**Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let’s Encrypt TLS). CI/CD via GitHub Actions. Landing page, demo agent verified against production, GPT + Claude integration examples. 214 tests passing, pylint 10.00/10.  
-**Next:** WebAuthn passkeys, production UX flows (company wizard, admin dashboard, consent polish), real external agent testing.  
+**Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let's Encrypt TLS). CI/CD via GitHub Actions. WebAuthn passkeys complete (4 sprints). 253 tests passing, pylint 10.00/10.  
+**Next:** Production UX flows (company wizard, admin dashboard, consent polish), real external agent testing.  
 **Built for:** The inevitable agent economy

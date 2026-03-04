@@ -25,6 +25,7 @@ from agentcafe.cafe.human import (
     _hash_password, _verify_password, _rehash_if_legacy,
     _create_human_session_token, validate_human_session,
     verify_passkey_assertion, complete_passkey_registration,
+    _check_passkey_enrollment,
 )
 from agentcafe.db.engine import get_db
 
@@ -426,14 +427,61 @@ async def login_submit(
             "allow_password_auth": _state.allow_password_auth,
         }, status_code=401)
 
+    # Grace period: reject password login if user has passkey enrolled > N days ago
+    pk_status = await _check_passkey_enrollment(db, row["id"])
+    if pk_status["grace_expired"]:
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "next_url": next_url,
+            "error": "Your account has a passkey enrolled. "
+                     "Password login is no longer available. Please sign in with your passkey.",
+            "email": email,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=403)
+
     # Rehash legacy SHA-256 passwords to bcrypt on successful login
     await _rehash_if_legacy(db, row["id"], password, row["password_hash"])
 
     session_token = _create_human_session_token(row["id"], email.lower())
-    redirect_url = next_url if next_url else "/"
+
+    # If user has no passkey, redirect to enrollment prompt instead of final destination
+    if not pk_status["enrolled"]:
+        enroll_next = next_url if next_url else "/"
+        redirect_url = f"/enroll-passkey?next={enroll_next}"
+    else:
+        redirect_url = next_url if next_url else "/"
+
     response = RedirectResponse(url=redirect_url, status_code=303)
     _set_session_cookie(response, session_token)
     return response
+
+
+# ---------------------------------------------------------------------------
+# GET /enroll-passkey — prompt password users to add a passkey
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/enroll-passkey", response_class=HTMLResponse)
+async def enroll_passkey_page(request: Request, next_url: str = "/"):
+    """Render the passkey enrollment prompt for existing password users."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(
+            url=f"/login?next=/enroll-passkey%3Fnext_url%3D{next_url}", status_code=303,
+        )
+
+    # Pass the raw session cookie so JS can call enroll endpoints
+    session_token = request.cookies.get(_COOKIE_NAME, "")
+
+    from agentcafe.cafe.human import _state as human_state
+    grace_days = human_state.passkey_grace_period_days
+
+    return templates.TemplateResponse("enroll_passkey.html", {
+        "request": request,
+        "next_url": next_url,
+        "session_token": session_token,
+        "grace_days": grace_days,
+    })
 
 
 # ---------------------------------------------------------------------------

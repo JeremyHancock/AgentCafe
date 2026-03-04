@@ -10,6 +10,7 @@ these tests verify:
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 
@@ -341,3 +342,251 @@ async def test_challenge_consumed_on_use(cafe_client):
     })
     assert resp2.status_code == 400
     assert resp2.json()["detail"]["error"] == "challenge_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4 — Grace period + enrollment tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_login_returns_passkey_enrolled_false(cafe_client):
+    """Password login for a user with no passkey returns passkey_enrolled=False."""
+    email = f"nopk-{uuid.uuid4().hex[:6]}@test.com"
+    await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    resp = await cafe_client.post("/human/login", json={
+        "email": email, "password": "secure-password-123",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["passkey_enrolled"] is False
+
+
+@pytest.mark.asyncio
+async def test_login_returns_passkey_enrolled_true_within_grace(cafe_client):
+    """Password login for a user with a recent passkey returns passkey_enrolled=True."""
+    email = f"haspk-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    user_id = reg.json()["user_id"]
+
+    # Manually insert a passkey credential (recent, within grace period)
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        """INSERT INTO webauthn_credentials
+           (id, user_id, credential_id, public_key, sign_count, device_name, created_at, last_used_at)
+           VALUES (?, ?, ?, ?, 0, 'Test', ?, ?)""",
+        (str(uuid.uuid4()), user_id, "cred-test-1", "pk-test-1", now, now),
+    )
+    await db.commit()
+
+    resp = await cafe_client.post("/human/login", json={
+        "email": email, "password": "secure-password-123",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["passkey_enrolled"] is True
+
+
+@pytest.mark.asyncio
+async def test_grace_period_blocks_password_login(cafe_client):
+    """After grace period, password login is rejected for users with a passkey."""
+    email = f"grace-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    user_id = reg.json()["user_id"]
+
+    # Insert a passkey credential dated 8 days ago
+    db = await get_db()
+    old_date = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    await db.execute(
+        """INSERT INTO webauthn_credentials
+           (id, user_id, credential_id, public_key, sign_count, device_name, created_at, last_used_at)
+           VALUES (?, ?, ?, ?, 0, 'Test', ?, ?)""",
+        (str(uuid.uuid4()), user_id, "cred-old-1", "pk-old-1", old_date, old_date),
+    )
+    await db.commit()
+
+    # Grace period is 7 days (default), passkey is 8 days old → should block
+    resp = await cafe_client.post("/human/login", json={
+        "email": email, "password": "secure-password-123",
+    })
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "password_login_disabled"
+
+
+@pytest.mark.asyncio
+async def test_grace_period_allows_login_within_window(cafe_client):
+    """Within grace period, password login still works even with a passkey enrolled."""
+    email = f"grace-ok-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    user_id = reg.json()["user_id"]
+
+    # Insert a passkey credential dated 3 days ago (within 7-day grace)
+    db = await get_db()
+    recent_date = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    await db.execute(
+        """INSERT INTO webauthn_credentials
+           (id, user_id, credential_id, public_key, sign_count, device_name, created_at, last_used_at)
+           VALUES (?, ?, ?, ?, 0, 'Test', ?, ?)""",
+        (str(uuid.uuid4()), user_id, "cred-recent-1", "pk-recent-1", recent_date, recent_date),
+    )
+    await db.commit()
+
+    resp = await cafe_client.post("/human/login", json={
+        "email": email, "password": "secure-password-123",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["passkey_enrolled"] is True
+
+
+@pytest.mark.asyncio
+async def test_enroll_begin_requires_session(cafe_client):
+    """POST /human/passkey/enroll/begin rejects invalid session tokens."""
+    resp = await cafe_client.post("/human/passkey/enroll/begin", json={
+        "session_token": "invalid-token",
+    })
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_enroll_begin_returns_options(cafe_client):
+    """POST /human/passkey/enroll/begin returns WebAuthn options for existing user."""
+    email = f"enroll-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    session_token = reg.json()["session_token"]
+
+    resp = await cafe_client.post("/human/passkey/enroll/begin", json={
+        "session_token": session_token,
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "challenge" in data
+    assert "challenge_id" in data
+    assert "rp" in data
+    assert data["rp"]["id"] == "localhost"
+
+
+@pytest.mark.asyncio
+async def test_enroll_complete_requires_matching_user(cafe_client):
+    """POST /human/passkey/enroll/complete rejects if challenge user doesn't match session."""
+    email = f"enroll-mismatch-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    session_token = reg.json()["session_token"]
+
+    # Create a challenge with a different user_id
+    db = await get_db()
+    challenge_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    future = (now + timedelta(minutes=5)).isoformat()
+    await db.execute(
+        """INSERT INTO webauthn_challenges
+           (id, challenge, user_id, email, display_name, type, created_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (challenge_id, "dGVzdA", "wrong-user-id", email, None, "register",
+         now.isoformat(), future),
+    )
+    await db.commit()
+
+    resp = await cafe_client.post("/human/passkey/enroll/complete", json={
+        "session_token": session_token,
+        "challenge_id": challenge_id,
+        "credential": {},
+    })
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "user_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_enroll_passkey_page_requires_login(cafe_client):
+    """GET /enroll-passkey redirects to login if no session."""
+    cafe_client.cookies.clear()
+    resp = await cafe_client.get("/enroll-passkey", follow_redirects=False)
+    assert resp.status_code == 303
+    assert "/login" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_enroll_passkey_page_renders_for_logged_in_user(cafe_client):
+    """GET /enroll-passkey renders enrollment prompt for logged-in user."""
+    email = f"enroll-page-{uuid.uuid4().hex[:6]}@test.com"
+    await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    login_resp = await cafe_client.post("/human/login", json={
+        "email": email, "password": "secure-password-123",
+    })
+    session_token = login_resp.json()["session_token"]
+
+    resp = await cafe_client.get(
+        "/enroll-passkey",
+        cookies={"cafe_session": session_token},
+    )
+    assert resp.status_code == 200
+    assert "passkey" in resp.text.lower()
+    assert "Set Up Passkey" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_page_login_redirects_to_enroll_when_no_passkey(cafe_client):
+    """Page login for user without passkey redirects to /enroll-passkey."""
+    email = f"page-enroll-{uuid.uuid4().hex[:6]}@test.com"
+    await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+
+    # Get CSRF from login page
+    login_page = await cafe_client.get("/login")
+    csrf_match = re.search(r'name="csrf_token"\s+value="([^"]+)"', login_page.text)
+    csrf = csrf_match.group(1) if csrf_match else ""
+
+    resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+        "csrf_token": csrf,
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+    assert "/enroll-passkey" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_page_login_grace_period_blocks(cafe_client):
+    """Page login rejects password after grace period for users with passkey."""
+    email = f"page-grace-{uuid.uuid4().hex[:6]}@test.com"
+    reg = await cafe_client.post("/human/register", json={
+        "email": email, "password": "secure-password-123",
+    })
+    user_id = reg.json()["user_id"]
+
+    # Insert old passkey (8 days ago)
+    db = await get_db()
+    old_date = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    await db.execute(
+        """INSERT INTO webauthn_credentials
+           (id, user_id, credential_id, public_key, sign_count, device_name, created_at, last_used_at)
+           VALUES (?, ?, ?, ?, 0, 'Test', ?, ?)""",
+        (str(uuid.uuid4()), user_id, "cred-page-old", "pk-page-old", old_date, old_date),
+    )
+    await db.commit()
+
+    login_page = await cafe_client.get("/login")
+    csrf_match = re.search(r'name="csrf_token"\s+value="([^"]+)"', login_page.text)
+    csrf = csrf_match.group(1) if csrf_match else ""
+
+    resp = await cafe_client.post("/login", data={
+        "email": email,
+        "password": "secure-password-123",
+        "csrf_token": csrf,
+    })
+    assert resp.status_code == 403
+    assert "passkey" in resp.text.lower()
+    assert "no longer available" in resp.text.lower()
