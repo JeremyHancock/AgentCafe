@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 3, 2026 (Phase 7 in progress — deployed to agentcafe.io, 271 tests, pylint 10.00/10)
+Last Updated: March 8, 2026 (Phase 7 in progress — deployed to agentcafe.io, 271 tests, pylint 10.00/10. Strategic review complete — see `docs/strategy/strategic-review-briefing.md`)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -10,11 +10,14 @@ Agents browse freely.
 When they want to act, they present a valid Passport. The Cafe enforces safety as a mandatory proxy and forwards the request.
 
 Key principles (locked):
+- The consent/authorization layer is the core product — human-authorized delegation to software agents
+- Services on the Cafe are a bootstrap strategy, not the product. The Cafe itself (proxy + safety + audit + human authorization) is the product.
 - Zero mandatory pre-onboarding for humans (agent handles consent/pre-approvals)
-- Company onboarding is the main product: ridiculously easy + completely free + insanely safe
+- Company onboarding: ridiculously easy + completely free + insanely safe
 - We are a full proxy — agents never touch backend URLs or long-lived tokens
 - Double validation on every order: Human Passport + Company Policy
 - The Menu is semantic, lightweight, and future-proof for 2026–2027 agents
+- Build for autonomous agents. Non-autonomous agents served incidentally (via MCP adapter) but are not the target.
 
 ## 2. Locked Menu Format (Feb 22 2026, extended ADR-023)
 Agents receive a clean semantic menu (no HTTP methods, no paths, no full schemas).  
@@ -45,11 +48,11 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - See `docs/architecture/passport/v2-discussion.md` §13 for full convergence summary
 
 ## 3. Core Metaphor & Rules
-- Central Cafe/Menu discovery is the core bet — inevitable and agent-first.
+- The Cafe metaphor remains the brand and UX framing. The authorization/consent layer is the core moat.
 - Agents browse freely, order or leave.
 - Company Onboarding Wizard is the product we polish until it feels magical.
 - Human consent handling is explicitly an agent-side concern.
-- Three mocked services for MVP to make the Cafe feel alive immediately.
+- Three mocked services for MVP; first real service (Agent Memory) is a separate project that onboards through the wizard.
 - Security and company trust first.
 
 ## 4. Tech Stack (Locked)
@@ -182,6 +185,7 @@ AgentCafe/
 │   ├── planning/
 │   │   ├── development-plan.md     # Ordered phases with completion status
 │   │   └── webauthn-passkeys-plan.md # WebAuthn implementation plan (Sprints 1–4 complete)
+│   ├── strategy/                   # Strategic review briefing and adversarial review convergence
 │   └── reviews/                    # Project reviews (review-1, review-2, wizard-fix-progress)
 ├── Dockerfile, docker-compose.yml  # Container setup
 ├── pyproject.toml                  # Dependencies and build config
@@ -200,11 +204,11 @@ AgentCafe/
 | Human consent flow | **Real** | Initiate → approve → exchange → refresh. Full lifecycle. |
 | Human accounts | **Real** | Register/login with bcrypt, session JWT, WebAuthn passkeys, grace period migration, enrollment prompt |
 | Rate limiting | **Real** | Sliding-window per passport+action, V2 429 response with retry_after |
-| Company Onboarding Wizard | **Real** | Full API + Next.js dashboard. Spec parse/upload/fetch → review → policy → publish |
+| Company Onboarding Wizard | **Real** | Full API + Jinja2 server-rendered pages. Spec parse/upload/fetch → review → policy → publish |
 | Audit log | **Real** | SHA-256 hash chain, tamper detection via `verify_audit_chain()` |
 | Backend credential encryption | **Real** | AES-256-GCM at rest (`crypto.py`), `CAFE_ENCRYPTION_KEY` env var |
 | Quarantine / suspension | **Real** | 7-day quarantine on new services (configurable via `QUARANTINE_DAYS`), instant suspension via admin endpoint |
-| Dashboard (Next.js) | **Real** | Login, register, 4-step wizard, service management, platform admin |
+| Dashboard (Next.js) | **LEGACY** | Replaced by Jinja2 wizard_pages.py. Code remains in `dashboard/` but is not used. |
 | Passport signing keys | **Real** | RS256 asymmetric signing, JWKS endpoint, dual-key rotation, HS256 legacy fallback |
 
 ## 8. How to Run
@@ -226,11 +230,11 @@ python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # API docs: http://127.0.0.1:8000/docs
-python -m pytest tests/ -v         # 253 tests passing
+python -m pytest tests/ -v         # 271 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 
-**Dashboard (Next.js):**
+**Dashboard (Next.js) — LEGACY, replaced by Jinja2 wizard_pages.py:**
 ```bash
 cd dashboard && npm run dev        # http://localhost:3000
 # Proxies /api/* to localhost:8000 (backend must be running)
@@ -276,6 +280,7 @@ python -m agentcafe.demo_agent --base-url https://agentcafe.io  # Against live s
 - **Menu entries in `agentcafe/db/services/*-menu.json` are the single source of truth.** Edit those files to change what agents see; `seed.py` loads them at startup.
 - Read the codebase map (Section 6) before making changes — know what exists.
 - Check Section 7 to understand what's real vs. placeholder before building on top of it.
+- **Read `docs/strategy/strategic-review-briefing.md` before making architectural or product decisions.**
 - Produce clean, readable, well-commented code.
 - Include tests with meaningful changes.
 - Security first — every call must go through double validation.

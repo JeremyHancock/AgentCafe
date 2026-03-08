@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** March 2, 2026
+**Last Updated:** March 8, 2026
 
 ---
 
@@ -311,3 +311,61 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 
 **Rationale:** The audit identified real attack surfaces (unauthenticated revoke, CSRF-less state changes, weak hashing) and structural gaps (timestamp-only audit ordering, hardcoded quarantine). Each fix was minimal and targeted — no over-engineering. All changes are backward compatible. See `docs/reviews/review-2.md` §12 for the full sprint log.
 **Status:** Complete. 214 tests passing (up from 194 pre-review).
+
+---
+
+### ADR-027: Strategic positioning — authorization as core product
+
+**Date:** March 6, 2026
+**Context:** A strategic review involving two independent adversarial AI reviews (Grok, ChatGPT) examined AgentCafe's market positioning, assumptions, and architectural direction. Both reviewers independently converged on the same conclusion: the consent/authorization layer is the defensible moat, not the Menu or marketplace discovery. ChatGPT framed the core primitive as "human-authorized delegation to software agents" — comparable to OAuth or Stripe, not to MCP registries or API marketplaces. See `docs/strategy/strategic-review-briefing.md` §9 for the full convergence analysis.
+**Decision:**
+1. **The consent/authorization layer is the core product.** The Menu, proxy, discovery, and services all serve the authorization primitive. Architectural decisions should prioritize the delegation model's robustness and extensibility over marketplace features.
+2. **Services on the Cafe are a bootstrap strategy, not the product.** Real services (starting with Agent Memory — a separate project/repo) attract agent traffic and prove demand. But the product companies are paying for is the safety infrastructure: consent flows, human authorization, audit trails, credential isolation, rate limiting.
+3. **Build for autonomous agents.** Non-autonomous agents (developer-configured toolboxes) are served incidentally via MCP adapter (ADR-029) but are not the target audience. The architecture assumes agents that discover and choose tools at runtime.
+4. **The browser is the real competitor for commodity actions.** Computer-use agents can navigate websites directly. AgentCafe wins only where the browser fails: authorization, payments, persistent state, cross-service coordination. Future service onboarding and Cafe-built services should focus on these defensible zones.
+**Rationale:** Two independent reviewers arrived at this framing separately, which is strong signal. The existing architecture already reflects this positioning (bearer model, sole issuer, consent broker) — this ADR makes the positioning explicit so future decisions align. The marketplace metaphor (Cafe, Menu) remains as brand and UX framing, but the architectural center of gravity is the delegation primitive.
+**Status:** Approved. Informs all Phase 8+ decisions.
+
+---
+
+### ADR-028: Company Cards — company-scoped consent policies
+
+**Date:** March 6, 2026
+**Context:** Both adversarial reviewers identified per-action consent fatigue as the #1 existential risk to AgentCafe. With 5–15 minute token lifetimes and per-action approval ceremonies, a human using multiple services would face dozens of consent requests per day — leading to either rubber-stamping (destroying safety) or platform abandonment. Grok rated this "existential." ChatGPT said "without this the system dies instantly."
+**Decision:**
+1. **Company Cards** replace per-action consent with **company-level relationships.** The human establishes a "card on the tab" with a specific company, setting constraints: budget cap, scope (included/excluded actions), duration, and first-use confirmation preference.
+2. **Card ceremony:** One consent ceremony per company (passkey required). The human reviews the company, sets constraints, approves. This creates a multi-action policy with company-scoped constraints.
+3. **Agent interaction:** Agent calls `POST /cafe/order` as usual. The Cafe checks for an applicable card policy. If the action is within the card's scope and budget → token issued automatically, no human ceremony. If the action is excluded or over budget → falls back to per-action consent.
+4. **Risk-tier override:** Companies retain control. Low/medium actions are covered by cards automatically. High-risk actions can require per-action consent even if a card exists. Critical actions always require per-action, single-use tokens. No card bypass for critical.
+5. **First-use confirmation:** When a card is first added, the very first real action triggers a lightweight confirmation to catch misaligned intent. The human can toggle this per card.
+6. **Constraint enforcement:** The Cafe enforces budget caps, spending limits, excluded actions, and duration at order time. Violations are rejected — the agent must request a per-action approval or ask the human to raise the limit.
+7. **Revocation:** Pulling a card is one click — instant, kills all active tokens issued under that card's policy.
+**Implementation notes:**
+- A Company Card is technically a multi-action policy with company-scoped constraints. The existing `policies` table, token exchange, and validation chain work with minimal changes.
+- The consent ceremony scope changes: currently per-task, now also per-company.
+- Token issuance changes: with a valid card, the agent can request tokens directly without a per-use consent ceremony.
+- New dashboard view: the human's "Tab" — a list of company cards with activity summaries, constraint editing, and one-click revocation.
+- Budget tracking requires a price field or company-tagged price field (consistent with `human_identifier_field` pattern from ADR-023).
+**Rationale:** The card abstraction maps to how humans already think about service relationships (credit cards, Uber accounts, Amazon purchases). It preserves explicit human authorization (the card ceremony is still a deliberate act with passkey) while eliminating per-transaction friction for trusted, constrained relationships. The risk-tier override ensures companies retain control over dangerous actions. This directly addresses the existential risk identified by both reviewers without weakening the security model.
+**Status:** Approved (design stage). See `docs/strategy/strategic-review-briefing.md` §8.1 for the full design, open questions, and UX mockup.
+
+---
+
+### ADR-029: MCP Server Adapter — 4-tool LLM-native discovery pattern via remote Streamable HTTP
+
+**Date:** March 6, 2026 (original). **Updated:** March 8, 2026 (four-review convergence: Grok, ChatGPT, cross-validated by Claude, filtered by Jeremy).
+**Context:** The MCP ecosystem is the de-facto tool discovery standard for both autonomous and non-autonomous agents (March 2026). Three public registries exist (official MCP Registry, GitHub mirror, Microsoft Azure MCP Hub). Autonomous agents use `registry.discover` at runtime for tool discovery without developer pre-configuration. AgentCafe needs to be discoverable in these registries. However, naively exposing the entire Menu as MCP tools creates three problems: (1) transport ambiguity (stdio vs remote), (2) no MCP standard for human-in-the-loop consent, (3) tool lists degrade agent accuracy past ~30-50 tools. A fourth strategic question — who is the first real traffic source — was identified by ChatGPT as the most important blindspot in the original design.
+**Decision:**
+1. **Transport: Remote Streamable HTTP only** at `https://agentcafe.io/mcp`. This is the recommended remote transport in the current MCP spec (replaced HTTP+SSE in June 2025). Implementation: one FastAPI endpoint using Starlette `StreamingResponse` + JSON-RPC 2.0 routing (~200 LOC). Stdio deferred — we do not own or maintain a local package.
+2. **4-tool LLM-native discovery pattern.** MCP `tools/list` returns exactly 4 permanent tools (~1000 tokens, never grows). Tool names are verb-first and LLM-aligned (`search`/`get`/`invoke` match model priors) rather than leaking internal Cafe metaphors (`menu`/`order`/`company_card`). Internal code keeps the original metaphors; the MCP layer translates at the boundary only.
+   - `cafe.search` (Tier-1 read) — semantic search across the entire Menu. Accepts `query`, `category`, `capability_tags`, `max_results`. Returns **summaries only** (`service_id`, `action_id`, `name`, `short_description`, `risk_tier`, `relevance`). No inline schemas — keeps context stable across repeated searches. Implementation: structured filter via `menu.py` + keyword boost + LiteLLM rerank. No vector DB for MVP.
+   - `cafe.get_details` (Tier-1 read) — returns the full semantic Menu entry for a specific `service_id` on demand (`required_inputs`, `constraints_schema`, `risk_tier`, `human_identifier_field`, etc.). One service at a time = no context explosion. Agent calls this after `cafe.search`.
+   - `cafe.request_card` (Tier-1) — initiates the Company Card flow (ADR-028). Non-blocking: returns `card_request_id`, `consent_url`, `activation_code`, `status: "pending"`. Human approves asynchronously. This tool teaches agents the Cafe's core authorization pattern.
+   - `cafe.invoke` (universal execution) — generic `service_id` + `action_id` + `inputs`. Routes to existing `POST /cafe/order`. All consent/card/policy logic stays in the proxy.
+3. **Tier-2 actions fail fast.** All writes go through `cafe.invoke`. If a Tier-2 action is attempted without authorization, the adapter returns a structured JSON-RPC error: `{ "error": "HUMAN_AUTH_REQUIRED", "consent_id": "...", "consent_url": "...", "activation_code": "...", "card_suggestion": true }`. The adapter does NOT orchestrate consent — no polling, no URL surfacing, no workflow engine. Post-Company Cards, most writes auto-approve under card policy.
+4. **Architectural guardrail: MCP adapts to the Cafe — not the other way around.** If the adapter ever begins dictating consent flow, tool structure, discovery mechanism, or token behavior, it has become the product and must be killed or rolled back. The Cafe's own protocol (`GET /cafe/menu`, `POST /cafe/order`) remains primary.
+5. **Sequencing: ships after Company Cards and Agent Memory (Phase 8.3).** The `cafe.request_card` tool and `HUMAN_AUTH_REQUIRED` error both require the card policy engine. Agent Memory auto-appears in `cafe.search` once published to the Menu.
+6. **Registry listing is self-service:** `npx @modelcontextprotocol/registry publish --url https://agentcafe.io/mcp --name AgentCafe`. No approval gate, no paid tier. Indexed instantly.
+7. **Traffic source hierarchy:** (a) Short-term: framework/IDE developers adding the MCP server. (b) Medium-term: Agent Memory creating stickiness. (c) Long-term: autonomous registry discovery. We do NOT rely on autonomous discovery as the first source.
+**Rationale:** MCP is non-negotiable distribution infrastructure. Autonomous agents discover tools via MCP registries at runtime — if the Cafe isn't registered, it doesn't exist for those agents. The 4-tool LLM-native pattern solves the context window problem (summaries from search + schema on demand; scales to 10,000+ services), the consent gap (fail-fast error + card flow), the transport question (remote Streamable HTTP, no shipped artifacts), and tool-selection accuracy (verb-aligned names match model priors). MCP has no authorization standard — that gap is the Cafe's product. For companies: "don't build an MCP server — publish through the Cafe wizard and you're available to every MCP-compatible agent, with safety included."
+**Status:** Approved (implementation-ready). Ships as Phase 8.3, after Company Cards (8.1) and Agent Memory (8.2). See `docs/strategy/strategic-review-briefing.md` §8.2 + §8.2.2 for the full design and four-review convergence spec.

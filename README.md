@@ -155,6 +155,7 @@ AgentCafe/
 ├── docs/
 │   ├── architecture/       # ADRs, Passport V2 specs
 │   ├── planning/           # Development plan
+│   ├── strategy/           # Strategic review briefing and adversarial review convergence
 │   └── reviews/            # Project reviews and audit trails
 ├── Dockerfile              # Multi-stage build, hardened slim image, non-root user
 ├── docker-compose.yml      # 4 containers: Cafe + 3 demo backends
@@ -173,5 +174,5 @@ AgentCafe/
 ---
 
 **Status:** Phase 7 in progress. Live at [agentcafe.io](https://agentcafe.io) (Fly.io, Cloudflare DNS, Let's Encrypt TLS). CI/CD via GitHub Actions. WebAuthn passkeys complete (4 sprints). Company wizard Jinja2 rebuild complete. 271 tests passing, pylint 10.00/10.  
-**Next:** Consent polish, real external agent testing.  
-**Built for:** The inevitable agent economy
+**Next:** Phase 8 — Company Cards (consent fatigue), MCP server adapter, first real service onboarding. See `docs/strategy/strategic-review-briefing.md`.  
+**Built for:** Human-authorized delegation to autonomous agents
