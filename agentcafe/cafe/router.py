@@ -28,6 +28,24 @@ logger = logging.getLogger("agentcafe.cafe.router")
 
 router = APIRouter(prefix="/cafe", tags=["cafe"])
 
+
+def _card_suggestion(service_id: str) -> dict:
+    """Build a card_suggestion object for auth-related 403 errors.
+
+    Tells the agent they can request a Company Card to get standing
+    authorization for this service.
+    """
+    return {
+        "action": "request_card",
+        "endpoint": "POST /cards/request",
+        "body": {"service_id": service_id},
+        "message": (
+            f"You can request a Company Card for '{service_id}' to get "
+            f"standing authorization. The human will review and approve "
+            f"the card, then you can obtain tokens without per-action consent."
+        ),
+    }
+
 # Safe characters for path parameter values: alphanumeric, underscore, dot, @, ~, hyphen.
 # Blocks: /, \, ?, #, newlines, null bytes, spaces, and other injection vectors.
 _SAFE_PATH_VALUE = re.compile(r'^[\w.@~-]+$')
@@ -180,10 +198,10 @@ async def place_order(req: OrderRequest):
                 "human_auth_required": "This action requires explicit human authorization in your Passport.",
             }
             await _audit_log(db, req, error_code, status_code)
-            raise HTTPException(
-                status_code=status_code,
-                detail={"error": error_code, "message": message_map.get(error_code, "Passport validation failed.")},
-            )
+            detail = {"error": error_code, "message": message_map.get(error_code, "Passport validation failed.")}
+            if error_code in ("tier_insufficient", "scope_missing", "human_auth_required"):
+                detail["card_suggestion"] = _card_suggestion(req.service_id)
+            raise HTTPException(status_code=status_code, detail=detail)
     else:
         # MVP: Accept "demo-passport" as a valid passport with all scopes.
         passport_valid, passport_scopes = _validate_passport_mvp(req.passport)
@@ -202,6 +220,7 @@ async def place_order(req: OrderRequest):
                 detail={
                     "error": "scope_missing",
                     "message": f"Your Passport is missing the required scope: '{scope}'.",
+                    "card_suggestion": _card_suggestion(req.service_id),
                 },
             )
 
@@ -215,6 +234,7 @@ async def place_order(req: OrderRequest):
                     detail={
                         "error": "human_auth_required",
                         "message": "This action requires explicit human authorization in your Passport.",
+                        "card_suggestion": _card_suggestion(req.service_id),
                     },
                 )
 

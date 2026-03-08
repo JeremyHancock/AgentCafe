@@ -347,7 +347,7 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 - New dashboard view: the human's "Tab" — a list of company cards with activity summaries, constraint editing, and one-click revocation.
 - Budget tracking requires a price field or company-tagged price field (consistent with `human_identifier_field` pattern from ADR-023).
 **Rationale:** The card abstraction maps to how humans already think about service relationships (credit cards, Uber accounts, Amazon purchases). It preserves explicit human authorization (the card ceremony is still a deliberate act with passkey) while eliminating per-transaction friction for trusted, constrained relationships. The risk-tier override ensures companies retain control over dangerous actions. This directly addresses the existential risk identified by both reviewers without weakening the security model.
-**Status:** Approved (design stage). See `docs/strategy/strategic-review-briefing.md` §8.1 for the full design, open questions, and UX mockup.
+**Status:** Implemented (Phase 8.1). Migration 0010, `cafe/cards.py`, Tab dashboard (`/tab`), card approval page, 403 `card_suggestion` in order responses, budget tracking via `report-spend`. 40 tests. See `docs/planning/company-cards-plan.md` for implementation details.
 
 ---
 

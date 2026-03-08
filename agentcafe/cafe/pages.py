@@ -1,4 +1,4 @@
-"""Server-rendered pages — login, register, consent approval.
+"""Server-rendered pages — login, register, consent approval, Tab (Company Cards).
 
 Human-facing Jinja2 pages. These wrap the existing API logic and use
 session cookies (httponly) for authentication. Separate from the JSON
@@ -1158,3 +1158,366 @@ async def activate_decline(
         "request": request,
         "step": "declined",
     })
+
+
+# ---------------------------------------------------------------------------
+# GET /tab — Company Cards dashboard ("Your Tab")
+# ---------------------------------------------------------------------------
+
+async def _lookup_service_name(db, service_id: str) -> str:
+    """Look up service name from published_services or menu_entries."""
+    cursor = await db.execute(
+        "SELECT name FROM published_services WHERE service_id = ?", (service_id,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return row["name"]
+    cursor = await db.execute(
+        "SELECT menu_entry_json FROM menu_entries WHERE id = ?", (service_id,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        entry = json.loads(row["menu_entry_json"])
+        return entry.get("name", service_id)
+    return service_id
+
+
+@pages_router.get("/tab", response_class=HTMLResponse)
+async def tab_page(request: Request, action: str = ""):
+    """Render the Company Cards tab dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        """SELECT * FROM company_cards
+           WHERE cafe_user_id = ? OR (cafe_user_id IS NULL AND status = 'pending')
+           ORDER BY created_at DESC""",
+        (user_id,),
+    )
+    rows = await cursor.fetchall()
+
+    # Count active tokens per card's policy
+    token_counts: dict[str, int] = {}
+    policy_ids = [r["policy_id"] for r in rows if r["policy_id"]]
+    if policy_ids:
+        placeholders = ",".join("?" * len(policy_ids))
+        tc_cursor = await db.execute(
+            f"SELECT policy_id, COUNT(*) AS cnt FROM active_tokens "
+            f"WHERE policy_id IN ({placeholders}) AND expires_at > ? "
+            f"GROUP BY policy_id",
+            (*policy_ids, datetime.now(timezone.utc).isoformat()),
+        )
+        for tc in await tc_cursor.fetchall():
+            token_counts[tc["policy_id"]] = tc["cnt"]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    pending_cards = []
+    active_cards = []
+    revoked_cards = []
+
+    for row in rows:
+        svc_name = await _lookup_service_name(db, row["service_id"])
+        entry = {
+            "card_id": row["id"],
+            "service_name": svc_name,
+            "status": row["status"],
+            "activation_code": row["activation_code"],
+            "excluded_action_ids": row["excluded_action_ids"] or "",
+            "budget_limit_cents": row["budget_limit_cents"] or 0,
+            "budget_spent_cents": row["budget_spent_cents"] or 0,
+            "budget_period": row["budget_period"] or "",
+            "first_use_confirmation": row["first_use_confirmation"],
+            "first_use_confirmed_at": row["first_use_confirmed_at"],
+            "active_token_count": token_counts.get(row["policy_id"], 0) if row["policy_id"] else 0,
+            "created_at_human": _human_date(row["created_at"]),
+            "expires_at_human": _human_date(row["expires_at"]),
+            "revoked_at_human": _human_date(row["revoked_at"]),
+        }
+
+        if row["status"] == "pending":
+            pending_cards.append(entry)
+        elif row["status"] == "active" and row["expires_at"] > now_iso:
+            active_cards.append(entry)
+        else:
+            revoked_cards.append(entry)
+
+    success_message = ""
+    error_message = ""
+    if action == "revoked":
+        success_message = "Card revoked. The agent will lose access to this service."
+    elif action == "confirmed":
+        success_message = "First use confirmed. The agent can now use this card."
+    elif action == "approved":
+        success_message = "Card approved. The agent can now request tokens."
+
+    return templates.TemplateResponse("tab.html", {
+        "request": request,
+        "pending_cards": pending_cards,
+        "active_cards": active_cards,
+        "revoked_cards": revoked_cards,
+        "csrf_token": _generate_csrf_token(request),
+        "success_message": success_message,
+        "error_message": error_message,
+    })
+
+
+# ---------------------------------------------------------------------------
+# GET /tab/approve/{card_id} — Card approval review page
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/tab/approve/{card_id}", response_class=HTMLResponse)
+async def tab_approve_page(request: Request, card_id: str):
+    """Render the card approval page with action list and constraint controls."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url=f"/login?next=/tab/approve/{card_id}", status_code=303)
+
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM company_cards WHERE id = ?", (card_id,))
+    card = await cursor.fetchone()
+    if not card or card["status"] != "pending":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    service_name = await _lookup_service_name(db, card["service_id"])
+
+    # Get all actions for this service
+    cursor = await db.execute(
+        "SELECT action_id, risk_tier FROM proxy_configs WHERE service_id = ?",
+        (card["service_id"],),
+    )
+    action_rows = await cursor.fetchall()
+    actions = [{"action_id": r["action_id"], "risk_tier": r["risk_tier"] or "medium"} for r in action_rows]
+
+    return templates.TemplateResponse("card_approve.html", {
+        "request": request,
+        "card_id": card_id,
+        "service_name": service_name,
+        "actions": actions,
+        "excluded_actions": [],
+        "csrf_token": _generate_csrf_token(request),
+        "error": None,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/approve/{card_id}/submit — Submit card approval
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/approve/{card_id}/submit", response_class=HTMLResponse)
+async def tab_approve_submit(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+    duration_days: int = Form(30),
+    budget_limit: str = Form(""),
+    budget_period: str = Form(""),
+    first_use_confirmation: str = Form(""),
+):
+    """Process card approval from the page form."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute("SELECT * FROM company_cards WHERE id = ?", (card_id,))
+    card = await cursor.fetchone()
+    if not card or card["status"] != "pending":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    # Parse form data
+    form_data = await request.form()
+    included_actions = form_data.getlist("include_action")
+
+    # Get all actions for the service
+    cursor = await db.execute(
+        "SELECT action_id, risk_tier FROM proxy_configs WHERE service_id = ?",
+        (card["service_id"],),
+    )
+    action_rows = await cursor.fetchall()
+    all_action_ids = [r["action_id"] for r in action_rows]
+
+    # Excluded = all actions minus included (only low/medium)
+    excluded_action_ids = [
+        a for a in all_action_ids
+        if a not in included_actions
+        and any(r["action_id"] == a and (r["risk_tier"] or "medium") in ("low", "medium") for r in action_rows)
+    ]
+
+    # Build policy scopes from included actions
+    action_ids_for_policy = [a for a in all_action_ids if a not in excluded_action_ids]
+    # Filter to only low/medium risk for the card
+    action_ids_for_policy = [
+        a for a in action_ids_for_policy
+        if any(
+            r["action_id"] == a and (r["risk_tier"] or "medium") in ("low", "medium")
+            for r in action_rows
+        )
+    ]
+
+    scopes_csv = ",".join(f"{card['service_id']}:{a}" for a in action_ids_for_policy)
+    action_ids_csv = ",".join(action_ids_for_policy)
+
+    # Determine risk tier
+    risk_tier = "low"
+    risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    for a in action_ids_for_policy:
+        for r in action_rows:
+            if r["action_id"] == a:
+                rt = r["risk_tier"] or "medium"
+                if risk_order.get(rt, 1) > risk_order.get(risk_tier, 0):
+                    risk_tier = rt
+
+    # Create policy
+    now = datetime.now(timezone.utc)
+    card_expires = now + timedelta(days=duration_days)
+    policy_id = str(uuid.uuid4())
+
+    default_lifetimes = {"low": 3600, "medium": 600, "high": 300, "critical": 0}
+    default_lifetime = default_lifetimes.get(risk_tier, 600)
+
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            constraints_json, risk_tier, max_token_lifetime_seconds,
+            expires_at, revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?)""",
+        (
+            policy_id, user_id, card["service_id"],
+            action_ids_csv, scopes_csv,
+            risk_tier, default_lifetime,
+            card_expires.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+
+    # Parse budget
+    budget_limit_cents = None
+    if budget_limit and budget_period:
+        try:
+            budget_limit_cents = round(float(budget_limit) * 100)
+        except ValueError:
+            budget_limit_cents = None
+
+    # Activate card
+    await db.execute(
+        """UPDATE company_cards
+           SET cafe_user_id = ?, status = 'active',
+               allowed_action_ids = ?, excluded_action_ids = ?,
+               budget_limit_cents = ?, budget_period = ?,
+               budget_period_start = ?,
+               first_use_confirmation = ?,
+               policy_id = ?,
+               expires_at = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            user_id,
+            action_ids_csv if action_ids_for_policy else None,
+            ",".join(excluded_action_ids) if excluded_action_ids else None,
+            budget_limit_cents, budget_period if budget_limit_cents else None,
+            now.isoformat() if budget_limit_cents else None,
+            1 if first_use_confirmation == "1" else 0,
+            policy_id,
+            card_expires.isoformat(), now.isoformat(),
+            card_id,
+        ),
+    )
+    await db.commit()
+
+    logger.info("Card %s approved via page by user %s", card_id, user_id)
+    return RedirectResponse(url="/tab?action=approved", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/revoke — Revoke a card from the Tab
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/revoke", response_class=HTMLResponse)
+async def tab_revoke(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Revoke a Company Card from the Tab page."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND cafe_user_id = ?",
+        (card_id, user_id),
+    )
+    card = await cursor.fetchone()
+    if not card or card["status"] != "active":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+
+    # Also revoke the underlying policy
+    if card["policy_id"]:
+        await db.execute(
+            "UPDATE policies SET revoked_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, card["policy_id"]),
+        )
+        await db.execute(
+            "DELETE FROM active_tokens WHERE policy_id = ?", (card["policy_id"],),
+        )
+
+    await db.commit()
+    return RedirectResponse(url="/tab?action=revoked", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/confirm — Confirm first use
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/confirm", response_class=HTMLResponse)
+async def tab_confirm_first_use(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Confirm first use of a Company Card from the Tab page."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND cafe_user_id = ?",
+        (card_id, user_id),
+    )
+    card = await cursor.fetchone()
+    if not card or card["status"] != "active":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    if card["first_use_confirmed_at"]:
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET first_use_confirmed_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+    await db.commit()
+
+    return RedirectResponse(url="/tab?action=confirmed", status_code=303)

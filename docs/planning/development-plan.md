@@ -1,6 +1,6 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 7 in progress — deployed to Fly.io, live at agentcafe.io, CI/CD green, interactive consent demo passed. 271 tests, pylint 10.00/10. Strategic review complete (see `docs/strategy/strategic-review-briefing.md`).  
+**Current Status:** Phase 8.1 complete (Company Cards) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 311 tests, pylint 10.00/10. Strategic review complete (see `docs/strategy/strategic-review-briefing.md`).  
 **Last Updated:** March 8, 2026
 
 **MVP Success Criteria**
@@ -150,16 +150,16 @@ We can run end-to-end locally:
 
 **⚠️ HIGH PRIORITY — Production UX Flows**
 - ✅ **Company onboarding wizard UI** — Rebuilt as server-rendered Jinja2 pages (`cafe/wizard_pages.py`). Covers: company registration, login, spec upload, AI review, policy config, preview, publish, post-publish service management. 18 tests.
-- ⬜ **Human consent flow polish** — Login/register/approve pages work but need visual polish, error states, mobile responsiveness audit, loading states.
-- ⬜ **Human policy dashboard improvements** — Token activity view, audit log per policy, bulk revocation, notification preferences.
+- 🔜 **Human consent flow polish** — Deferred to pre-launch. Company Cards (Phase 8.1) will change consent UI; polishing now means rework.
+- 🔜 **Human policy dashboard improvements** — Deferred to pre-launch. The "Tab" view from Company Cards replaces the current dashboard concept.
 - ✅ **Admin dashboard** — Rebuilt as Jinja2 page at `/admin` (API key gated, stats, services list, audit log).
-- ⬜ **Company wizard page documentation & helper content** — Add tooltips, field descriptions, contextual help text, and onboarding guidance across all wizard steps (spec input, review, policy, preview, services management).
-- ⬜ **Landing page → sign-up funnel** — Currently no CTA for humans or companies to sign up (intentional for beta). Before public launch, need clear paths for both audiences.
+- 🔜 **Company wizard page documentation & helper content** — Deferred to pre-launch. Wizard works; help content is polish.
+- 🔜 **Landing page → sign-up funnel** — Deferred to pre-launch (intentionally absent during beta).
 
-**Observability (beta level)**
-- ⬜ Structured JSON logs with request IDs
-- ⬜ Platform-provided health, latency, and error-rate dashboard
-- ⬜ Alerting on 5xx spikes or service suspensions (email/Slack)
+**Observability (beta level)** — Deferred to pre-launch. Structured logs, dashboards, and alerting become important when real traffic arrives post-MCP adapter.
+- 🔜 Structured JSON logs with request IDs
+- 🔜 Platform-provided health, latency, and error-rate dashboard
+- 🔜 Alerting on 5xx spikes or service suspensions (email/Slack)
 
 **Beta Success Criteria**
 - At least 1 real service onboarded through the wizard (Agent Memory — see Phase 8)
@@ -174,9 +174,17 @@ We can run end-to-end locally:
 
 The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identified three high-priority items that precede infrastructure scaling. These address the existential risks flagged by both reviewers: consent fatigue, distribution, and bootstrapping real traffic.
 
-- ⬜ **8.1 Company Cards on the Tab** — Multi-action, company-scoped policies with human-set constraints (budget, duration, scope, excluded actions). Solves consent fatigue (ranked existential by both reviewers). Cards replace per-action consent for low/medium-risk actions; high/critical actions still require per-action approval. First-use confirmation for new cards. See §8.1 of strategic briefing for full design.
-- ⬜ **8.2 MCP Server Adapter** — Thin translation layer exposing the entire Cafe Menu as a single MCP server. Any MCP-compatible agent framework (Claude Desktop, LangChain, CrewAI) discovers all Cafe services through standard MCP tool discovery. Routes invocations to `POST /cafe/order`. Low implementation cost, high distribution value. "MCP is the on-ramp, not the product." See §8.2 of strategic briefing.
-- ⬜ **8.3 First Real Service: Agent Memory** — The Cafe's first real onboarded service. Human-owned persistent state for agents (key-value + document storage). Developed as a **separate project/repo** with its own API and deployment. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. See §8.3 of strategic briefing for service design and candidate evaluation.
+- ✅ **8.1 Company Cards on the Tab** — Multi-action, company-scoped policies with human-set constraints (budget, duration, scope, excluded actions). Solves consent fatigue (ranked existential by both reviewers). Cards replace per-action consent for low/medium-risk actions; high/critical actions still require per-action approval. First-use confirmation for new cards.
+  - Migration 0010: `company_cards` table with budget, scope, status, activation code, policy_id FK
+  - `cafe/cards.py`: POST /cards/request, GET /cards/{id}/status, POST /cards/{id}/approve, POST /cards/{id}/token, GET /cards, POST /cards/{id}/revoke, POST /cards/{id}/confirm-first-use, PATCH /cards/{id}, POST /cards/{id}/report-spend
+  - Tab dashboard: `/tab` page (view/manage cards), `/tab/approve/{id}` (approval page), `/tab/{id}/revoke`, `/tab/{id}/confirm`
+  - Templates: `tab.html`, `card_approve.html`
+  - Order integration: 403 responses include `card_suggestion` field guiding agents to request cards
+  - Budget tracking: `report-spend` endpoint, budget enforcement on token issuance, period reset
+  - 40 tests covering card lifecycle, edit constraints, Tab pages, card suggestions, budget tracking
+  - See `docs/planning/company-cards-plan.md` for full design
+- ⬜ **8.2 First Real Service: Agent Memory** — The Cafe's first real onboarded service. Human-owned persistent state for agents (key-value + document storage). Developed as a **separate project/repo** with its own API and deployment. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. Creates the bootstrap traffic wedge. See §8.3 of strategic briefing.
+- ⬜ **8.3 MCP Server Adapter** — 4-tool LLM-native discovery pattern (`cafe.search`, `cafe.get_details`, `cafe.request_card`, `cafe.invoke`) via remote Streamable HTTP at `/mcp`. Ships last — rides on Company Cards + Agent Memory primitives. See §8.2 + §8.2.2 of strategic briefing and ADR-029.
 - ⬜ **8.4 Open Source Prep** — Repo is MIT-licensed but still private. Public launch requires: README polish, contributor guide, removal of any hardcoded secrets/paths, documentation audit. Addresses the trust bootstrapping gap identified by both reviewers.
 
 **Phase 9: Scale & Harden** (deferred — post-beta, when real traffic justifies it)

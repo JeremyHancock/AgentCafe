@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 8, 2026 (Phase 7 in progress — deployed to agentcafe.io, 271 tests, pylint 10.00/10. Strategic review complete — see `docs/strategy/strategic-review-briefing.md`)
+Last Updated: March 8, 2026 (Phase 8.1 complete — Company Cards deployed, 311 tests, pylint 10.00/10. See `docs/strategy/strategic-review-briefing.md`)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -113,6 +113,16 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Company wizard Jinja2 rebuild complete: login, register, 4-step onboard wizard, services management, admin dashboard — all server-rendered
 - 18 wizard page tests
 
+**Phase 8.1 — COMPLETE.** Company Cards on the Tab:
+- `cafe/cards.py`: Full card lifecycle — request, approve, token issuance, revoke, edit constraints, report-spend
+- Migration 0010: `company_cards` table with budget, scope, status, activation code, policy_id FK
+- Tab dashboard (`/tab`): view/manage pending, active, revoked cards
+- Card approval page (`/tab/approve/{id}`): action selection, duration, budget, first-use confirmation
+- Templates: `tab.html`, `card_approve.html`
+- Order integration: 403 responses include `card_suggestion` guiding agents to request cards
+- Budget tracking: `report-spend` endpoint, enforcement on token issuance, period auto-reset
+- 40 tests in `test_cards.py`
+
 ## 6. Codebase Map
 
 ```
@@ -126,7 +136,7 @@ AgentCafe/
 │   │   ├── engine.py               # DB connection singleton (aiosqlite)
 │   │   ├── seed.py                 # Seeds demo data on startup
 │   │   ├── migrate.py              # Numbered SQL migration runner
-│   │   ├── migrations/             # 0001–0009 SQL migration files
+│   │   ├── migrations/             # 0001–0010 SQL migration files
 │   │   └── services/               # Demo service Menu JSONs + OpenAPI specs (loaded by seed.py)
 │   ├── cafe/
 │   │   ├── menu.py                 # Assembles locked Menu (incl. security_status)
@@ -135,7 +145,8 @@ AgentCafe/
 │   │   ├── router.py               # GET /cafe/menu, POST /cafe/order, GET /cafe/admin/overview
 │   │   ├── human.py                # Human accounts: register/login, session JWT, WebAuthn passkeys, enrollment
 │   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
-│   │   ├── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey)
+│   │   ├── cards.py                # Company Cards: request, approve, token, revoke, edit, report-spend
+│   │   ├── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey, /tab)
 │   │   └── wizard_pages.py         # Company wizard Jinja2 pages (login, register, onboard, services, admin)
 │   ├── wizard/                     # Company Onboarding Wizard
 │   │   ├── models.py               # Pydantic models for all wizard + service management data
@@ -151,7 +162,7 @@ AgentCafe/
 │   │   ├── lunch.py                # QuickBite Delivery — 4 endpoints
 │   │   └── home_service.py         # FixRight Home — 4 endpoints
 │   ├── static/webauthn.js          # Zero-dependency WebAuthn JS helper (prepareRegistrationOptions, etc.)
-│   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard, activate, enroll_passkey)
+│   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard, activate, enroll_passkey, tab, card_approve)
 │       └── wizard/                # Company wizard templates (login, register, onboard_spec/review/policy/preview/success, services, admin)
 ├── dashboard/                      # Next.js 15 Company Dashboard (LEGACY — replaced by Jinja2 wizard_pages.py)
 │   ├── src/app/
@@ -177,6 +188,7 @@ AgentCafe/
 │   ├── test_wizard.py              # Spec parsing, enrichment, full wizard flow tests
 │   ├── test_wizard_pages.py        # Company wizard Jinja2 page tests (login, register, onboard, services, admin)
 │   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
+│   ├── test_cards.py              # Company Cards lifecycle, edit, Tab pages, budget, card suggestion tests
 │   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
 ├── docs/
 │   ├── architecture/
@@ -200,6 +212,7 @@ AgentCafe/
 | Menu discovery (`GET /cafe/menu`) | **Real** | Includes quarantine_until, suspended_at per action |
 | Proxy (`POST /cafe/order`) | **Real** | Full Passport V2 validation, scope check, rate limit, audit |
 | Demo backends (hotel, lunch, home) | **Real mock data** | In-memory, no persistence across restarts |
+| Company Cards | **Real** | Multi-action standing policies with budget/duration/scope constraints, first-use confirmation |
 | Passport V2 (Tier-1 + Tier-2) | **Real** | RS256 JWT signing + JWKS endpoint, scopes, expiry, risk-tier ceilings, revocation |
 | Human consent flow | **Real** | Initiate → approve → exchange → refresh. Full lifecycle. |
 | Human accounts | **Real** | Register/login with bcrypt, session JWT, WebAuthn passkeys, grace period migration, enrollment prompt |
@@ -230,7 +243,7 @@ python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # API docs: http://127.0.0.1:8000/docs
-python -m pytest tests/ -v         # 271 tests passing
+python -m pytest tests/ -v         # 311 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 

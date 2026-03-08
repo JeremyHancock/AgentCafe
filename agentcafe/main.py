@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from agentcafe.cafe.cards import configure_cards, cards_router
 from agentcafe.cafe.consent import configure_consent, consent_router
 from agentcafe.cafe.human import configure_human, human_router
 from agentcafe.cafe.pages import configure_pages, pages_router
@@ -60,6 +61,7 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         allow_password_auth=cfg.allow_password_auth,
     )
     configure_consent(cfg.passport_signing_secret)
+    configure_cards(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_wizard_pages(
@@ -111,6 +113,7 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     app.include_router(cafe_router)
     app.include_router(passport_router)
     app.include_router(consent_router)
+    app.include_router(cards_router)
     app.include_router(human_router)
     app.include_router(pages_router)
     app.include_router(wizard_pages_router)
@@ -183,6 +186,7 @@ async def main() -> None:
         allow_password_auth=cfg.allow_password_auth,
     )
     configure_consent(cfg.passport_signing_secret)
+    configure_cards(cfg.passport_signing_secret)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_wizard_pages(

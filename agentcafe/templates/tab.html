@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Your Tab — AgentCafe{% endblock %}
+
+{% block extra_head %}
+<style>
+    .tab-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 24px;
+    }
+    .tab-header .meta { font-size: 14px; }
+    .tab-nav {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 24px;
+    }
+    .tab-nav a {
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        text-decoration: none;
+        color: var(--text-muted);
+        border: 1px solid var(--border);
+        transition: all 0.15s;
+    }
+    .tab-nav a:hover { background: var(--surface-hover); }
+    .tab-nav a.active {
+        background: var(--accent);
+        color: white;
+        border-color: var(--accent);
+    }
+    .card-item {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 20px 24px;
+        margin-bottom: 12px;
+    }
+    .card-item.revoked { opacity: 0.5; }
+    .card-item.expired { opacity: 0.5; }
+    .card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+    }
+    .card-service {
+        font-size: 16px;
+        font-weight: 600;
+    }
+    .card-status {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .status-active { background: #064e3b; color: #6ee7b7; }
+    .status-pending { background: #78350f; color: #fcd34d; }
+    .status-revoked { background: #7f1d1d; color: #fca5a5; }
+    .status-expired { background: #374151; color: #9ca3af; }
+    .card-details {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-bottom: 8px;
+    }
+    .card-details span {
+        display: inline-block;
+        margin-right: 16px;
+        margin-bottom: 4px;
+    }
+    .card-constraints {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+    }
+    .constraint-tag {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text-muted);
+    }
+    .card-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+    }
+    .btn-sm {
+        padding: 6px 14px;
+        font-size: 12px;
+        border-radius: 6px;
+    }
+    .empty-state {
+        text-align: center;
+        padding: 48px 24px;
+        color: var(--text-muted);
+    }
+    .empty-state h2 {
+        color: var(--text);
+        margin-bottom: 8px;
+    }
+    .section-label {
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+        margin-bottom: 12px;
+        margin-top: 28px;
+    }
+    .section-label:first-of-type { margin-top: 0; }
+    .logout-link {
+        font-size: 13px;
+        color: var(--text-muted);
+        text-decoration: none;
+    }
+    .logout-link:hover { color: var(--danger); }
+    .first-use-badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        background: #78350f;
+        color: #fcd34d;
+        margin-left: 8px;
+    }
+
+    @media (prefers-color-scheme: light) {
+        .status-active { background: #d1fae5; color: #065f46; }
+        .status-pending { background: #fef3c7; color: #92400e; }
+        .status-revoked { background: #fee2e2; color: #991b1b; }
+        .status-expired { background: #f3f4f6; color: #6b7280; }
+        .first-use-badge { background: #fef3c7; color: #92400e; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tab-header">
+    <div>
+        <h1>Your Tab</h1>
+        <p class="meta">Company Cards — standing policies for your agent.</p>
+    </div>
+    <a href="/logout" class="logout-link">Sign out</a>
+</div>
+
+<div class="tab-nav">
+    <a href="/tab" class="active">Cards</a>
+    <a href="/dashboard">Policies</a>
+</div>
+
+{% if success_message %}
+<div class="alert alert-success">{{ success_message }}</div>
+{% endif %}
+
+{% if error_message %}
+<div class="alert alert-error">{{ error_message }}</div>
+{% endif %}
+
+{% if pending_cards %}
+<div class="section-label">Pending Approval ({{ pending_cards|length }})</div>
+{% for c in pending_cards %}
+<div class="card-item">
+    <div class="card-top">
+        <span class="card-service">{{ c.service_name }}</span>
+        <span class="card-status status-pending">Pending</span>
+    </div>
+    <div class="card-details">
+        <span>Requested {{ c.created_at_human }}</span>
+        <span>Code: <code>{{ c.activation_code }}</code></span>
+    </div>
+    <div class="card-actions">
+        <a href="/tab/approve/{{ c.card_id }}" class="btn btn-primary btn-sm">Review &amp; Approve</a>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if active_cards %}
+<div class="section-label">Active ({{ active_cards|length }})</div>
+{% for c in active_cards %}
+<div class="card-item">
+    <div class="card-top">
+        <span class="card-service">
+            {{ c.service_name }}
+            {% if c.first_use_confirmation and not c.first_use_confirmed_at %}
+            <span class="first-use-badge">Awaiting first use</span>
+            {% endif %}
+        </span>
+        <span class="card-status status-active">Active</span>
+    </div>
+    <div class="card-details">
+        <span>Expires {{ c.expires_at_human }}</span>
+        <span>{{ c.active_token_count }} active token{{ "s" if c.active_token_count != 1 else "" }}</span>
+    </div>
+    <div class="card-constraints">
+        {% if c.excluded_action_ids %}
+        <span class="constraint-tag">Excluded: {{ c.excluded_action_ids }}</span>
+        {% endif %}
+        {% if c.budget_limit_cents %}
+        <span class="constraint-tag">Budget: ${{ "%.2f"|format(c.budget_limit_cents / 100) }}/{{ c.budget_period }}</span>
+        <span class="constraint-tag">Spent: ${{ "%.2f"|format(c.budget_spent_cents / 100) }}</span>
+        {% endif %}
+    </div>
+    <div class="card-actions">
+        {% if c.first_use_confirmation and not c.first_use_confirmed_at %}
+        <form method="post" action="/tab/{{ c.card_id }}/confirm" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-primary btn-sm">Confirm First Use</button>
+        </form>
+        {% endif %}
+        <form method="post" action="/tab/{{ c.card_id }}/revoke" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm"
+                    onclick="return confirm('Revoke this card? The agent will lose access to this service.');">
+                Revoke
+            </button>
+        </form>
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if revoked_cards %}
+<div class="section-label">Revoked / Expired ({{ revoked_cards|length }})</div>
+{% for c in revoked_cards %}
+<div class="card-item {{ c.status }}">
+    <div class="card-top">
+        <span class="card-service">{{ c.service_name }}</span>
+        <span class="card-status status-{{ c.status }}">{{ c.status|capitalize }}</span>
+    </div>
+    <div class="card-details">
+        <span>Created {{ c.created_at_human }}</span>
+        {% if c.revoked_at_human %}
+        <span>Revoked {{ c.revoked_at_human }}</span>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if not pending_cards and not active_cards and not revoked_cards %}
+<div class="card empty-state">
+    <h2>No cards yet</h2>
+    <p>When an agent requests a Company Card, it will appear here for your approval.</p>
+</div>
+{% endif %}
+{% endblock %}

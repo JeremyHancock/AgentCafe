@@ -64,6 +64,20 @@
 - **Fix:** Add IP-based rate limiting (similar to `_register_hits` in `passport.py`).
 - **Status:** 🔵 DEFERRED
 
+### SEC-9: Company Card page approval skips passkey assertion
+- **File:** `agentcafe/cafe/pages.py` — `POST /tab/approve/{card_id}/submit`
+- **Risk:** ADR-028 requires passkey for card approval ceremony. The API endpoint (`POST /cards/{card_id}/approve`) enforces `passkey_challenge_id` + `passkey_credential` via `verify_passkey_assertion()`. The page-based approval only requires session cookie + CSRF token — no passkey re-auth.
+- **Impact:** If an attacker has a valid session cookie (e.g., from an XSS or session theft), they can approve Company Cards without proving physical presence via passkey. Company Cards grant standing authorization for multiple actions, making this a higher-value target than single-action consents.
+- **Fix:** Add WebAuthn assertion to the card approval page flow, matching the consent approval page pattern (SEC-2 resolution). The `card_approve.html` template needs a JS-driven passkey assertion step before form submission.
+- **Status:** ⚠️ OPEN
+
+### SEC-10: `report-spend` endpoint has no card-agent relationship check
+- **File:** `agentcafe/cafe/cards.py` — `POST /cards/{card_id}/report-spend`
+- **Risk:** Any agent with a valid Tier-1 passport can report arbitrary spend against any Company Card by knowing the card_id (a UUID). This could drain a card's budget and block token issuance for the legitimate agent.
+- **Impact:** Low-medium. Card IDs are UUIDs (not guessable), and in practice this endpoint is called by the Cafe system after proxied orders, not directly by agents. But the API surface is unprotected.
+- **Fix:** Verify the calling agent's passport was issued under this card (check `card_id` claim in JWT), or restrict to human session auth (card owner) / system API key.
+- **Status:** 🔵 DEFERRED (low practical risk due to UUID card IDs; no test-breaking change needed)
+
 ---
 
 ## Production Go-Live Checklist
@@ -77,6 +91,7 @@ Before any real company's endpoints are proxied through AgentCafe:
 - [x] Consent page `<noscript>` fallback removed (SEC-4) — March 3, 2026
 - [x] Grace period auto-disables password login after passkey enrollment — March 3, 2026
 - [x] Password login prompts passkey enrollment — March 3, 2026
+- [ ] Company Card page approval requires passkey assertion (SEC-9)
 - [ ] `WEBAUTHN_RP_ID=agentcafe.io`, `WEBAUTHN_ORIGIN=https://agentcafe.io`
 - [ ] At least one human account registered via passkey and tested end-to-end
 - [ ] Session tokens include `auth_method` claim (SEC-6) — nice-to-have if SEC-1 is resolved
