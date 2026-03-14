@@ -483,6 +483,112 @@ async def admin_overview(x_api_key: str | None = Header(default=None, alias="X-A
 
 
 # ---------------------------------------------------------------------------
+# GET /cafe/admin/mcp-analytics — MCP traffic analytics (requires ISSUER_API_KEY)
+# ---------------------------------------------------------------------------
+
+@router.get("/admin/mcp-analytics")
+async def mcp_analytics(
+    x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
+    hours: int = 24,
+):
+    """MCP adapter analytics: tool usage, popular queries, error rates, top services.
+
+    Args:
+        hours: Look-back window in hours (default 24, max 720 = 30 days).
+    """
+    if not x_api_key or x_api_key != _state.issuer_api_key:
+        raise HTTPException(status_code=403, detail={"error": "forbidden", "message": "Invalid admin key."})
+
+    hours = max(1, min(720, hours))
+    db = await get_db()
+    since = f"datetime('now', '-{hours} hours')"
+
+    # Total MCP requests in window
+    cursor = await db.execute(
+        f"SELECT COUNT(*) FROM mcp_request_log WHERE timestamp > {since}"
+    )
+    total = (await cursor.fetchone())[0]
+
+    # Per-tool breakdown
+    cursor = await db.execute(
+        f"""SELECT tool_name, COUNT(*) as cnt,
+                   SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) as ok,
+                   SUM(CASE WHEN outcome = 'error' THEN 1 ELSE 0 END) as errors,
+                   SUM(CASE WHEN outcome = 'auth_required' THEN 1 ELSE 0 END) as auth_required,
+                   ROUND(AVG(latency_ms), 1) as avg_latency_ms
+            FROM mcp_request_log WHERE timestamp > {since}
+            GROUP BY tool_name ORDER BY cnt DESC"""
+    )
+    per_tool = {row["tool_name"]: {
+        "total": row["cnt"], "ok": row["ok"], "errors": row["errors"],
+        "auth_required": row["auth_required"], "avg_latency_ms": row["avg_latency_ms"],
+    } for row in await cursor.fetchall()}
+
+    # Top search queries (cafe.search only)
+    cursor = await db.execute(
+        f"""SELECT query, COUNT(*) as cnt
+            FROM mcp_request_log
+            WHERE tool_name = 'cafe.search' AND query IS NOT NULL AND timestamp > {since}
+            GROUP BY query ORDER BY cnt DESC LIMIT 20"""
+    )
+    top_queries = [{"query": row["query"], "count": row["cnt"]} for row in await cursor.fetchall()]
+
+    # Top explored services (cafe.get_details + cafe.invoke + cafe.request_card)
+    cursor = await db.execute(
+        f"""SELECT service_id, COUNT(*) as cnt, tool_name
+            FROM mcp_request_log
+            WHERE service_id IS NOT NULL AND timestamp > {since}
+            GROUP BY service_id, tool_name ORDER BY cnt DESC LIMIT 30"""
+    )
+    service_rows = await cursor.fetchall()
+    top_services: dict[str, dict] = {}
+    for row in service_rows:
+        sid = row["service_id"]
+        if sid not in top_services:
+            top_services[sid] = {"total": 0, "by_tool": {}}
+        top_services[sid]["total"] += row["cnt"]
+        top_services[sid]["by_tool"][row["tool_name"]] = row["cnt"]
+
+    # Error breakdown
+    cursor = await db.execute(
+        f"""SELECT error_code, COUNT(*) as cnt
+            FROM mcp_request_log
+            WHERE error_code IS NOT NULL AND timestamp > {since}
+            GROUP BY error_code ORDER BY cnt DESC LIMIT 20"""
+    )
+    error_breakdown = [{"error_code": row["error_code"], "count": row["cnt"]} for row in await cursor.fetchall()]
+
+    # Unique passport hashes (proxy for unique agents)
+    cursor = await db.execute(
+        f"""SELECT COUNT(DISTINCT passport_hash) FROM mcp_request_log
+            WHERE passport_hash IS NOT NULL AND timestamp > {since}"""
+    )
+    unique_agents = (await cursor.fetchone())[0]
+
+    # Recent entries (last 50)
+    cursor = await db.execute(
+        f"""SELECT timestamp, tool_name, query, service_id, action_id,
+                   result_count, outcome, error_code, latency_ms
+            FROM mcp_request_log WHERE timestamp > {since}
+            ORDER BY timestamp DESC LIMIT 50"""
+    )
+    recent = [dict(row) for row in await cursor.fetchall()]
+
+    return {
+        "window_hours": hours,
+        "summary": {
+            "total_requests": total,
+            "unique_agents": unique_agents,
+        },
+        "per_tool": per_tool,
+        "top_queries": top_queries,
+        "top_services": dict(sorted(top_services.items(), key=lambda x: -x[1]["total"])),
+        "error_breakdown": error_breakdown,
+        "recent": recent,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /cafe/services/{service_id}/suspend — Admin suspends a service (ADR-025)
 # ---------------------------------------------------------------------------
 

@@ -14,7 +14,11 @@ See docs/strategy/strategic-review-briefing.md §8.2 and ADR-029.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -43,6 +47,54 @@ mcp_server = FastMCP(
 
 
 # ---------------------------------------------------------------------------
+# Request logging — writes to mcp_request_log (migration 0011)
+# ---------------------------------------------------------------------------
+
+async def _log_mcp_request(
+    tool_name: str,
+    *,
+    query: str | None = None,
+    service_id: str | None = None,
+    action_id: str | None = None,
+    category: str | None = None,
+    result_count: int | None = None,
+    outcome: str = "ok",
+    error_code: str | None = None,
+    passport: str | None = None,
+    latency_ms: int = 0,
+) -> None:
+    """Write an entry to the mcp_request_log table. Fire-and-forget — never raises."""
+    try:
+        db = await get_db()
+        passport_hash = None
+        if passport:
+            passport_hash = hashlib.sha256(passport.encode()).hexdigest()[:16]
+        await db.execute(
+            """INSERT INTO mcp_request_log
+               (id, timestamp, tool_name, query, service_id, action_id, category,
+                result_count, outcome, error_code, passport_hash, latency_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                datetime.now(timezone.utc).isoformat(),
+                tool_name,
+                query,
+                service_id,
+                action_id,
+                category,
+                result_count,
+                outcome,
+                error_code,
+                passport_hash,
+                latency_ms,
+            ),
+        )
+        await db.commit()
+    except Exception:  # pylint: disable=broad-except
+        logger.debug("Failed to log MCP request for %s", tool_name, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
 # Tool 1: cafe.search — Semantic search across the Menu
 # ---------------------------------------------------------------------------
 
@@ -59,6 +111,7 @@ async def cafe_search(
         category: Optional category filter.
         max_results: Max results to return (1-20, default 10).
     """
+    t0 = time.monotonic()
     max_results = max(1, min(20, max_results))
     db = await get_db()
     menu = await get_full_menu(db)
@@ -107,11 +160,19 @@ async def cafe_search(
     results.sort(key=lambda r: (-r["relevance"], r["service_id"], r["action_id"]))
     results = results[:max_results]
 
-    return {
+    response = {
         "results": results,
         "total_matched": len(results),
         "hint": "Use cafe.get_details with a service_id to see full input schemas before invoking.",
     }
+    await _log_mcp_request(
+        "cafe.search",
+        query=query or None,
+        category=category or None,
+        result_count=len(results),
+        latency_ms=int((time.monotonic() - t0) * 1000),
+    )
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +190,7 @@ async def cafe_get_details(
         service_id: The service to look up (from cafe.search results).
         action_id: Optional — filter to a single action within the service.
     """
+    t0 = time.monotonic()
     db = await get_db()
     menu = await get_full_menu(db)
 
@@ -137,6 +199,10 @@ async def cafe_get_details(
         None,
     )
     if service is None:
+        await _log_mcp_request(
+            "cafe.get_details", service_id=service_id, outcome="error",
+            error_code="service_not_found", latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return {"error": "service_not_found", "message": f"No service '{service_id}' found on the Menu."}
 
     if action_id:
@@ -145,17 +211,31 @@ async def cafe_get_details(
             None,
         )
         if action is None:
+            await _log_mcp_request(
+                "cafe.get_details", service_id=service_id, action_id=action_id,
+                outcome="error", error_code="action_not_found",
+                latency_ms=int((time.monotonic() - t0) * 1000),
+            )
             return {
                 "error": "action_not_found",
                 "message": f"No action '{action_id}' found in service '{service_id}'.",
                 "available_actions": [a.get("action_id") for a in service.get("actions", [])],
             }
+        await _log_mcp_request(
+            "cafe.get_details", service_id=service_id, action_id=action_id,
+            result_count=1, latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return {
             "service_id": service_id,
             "service_name": service.get("name", ""),
             "action": action,
         }
 
+    action_count = len(service.get("actions", []))
+    await _log_mcp_request(
+        "cafe.get_details", service_id=service_id, result_count=action_count,
+        latency_ms=int((time.monotonic() - t0) * 1000),
+    )
     return {
         "service_id": service_id,
         "service": service,
@@ -183,9 +263,15 @@ async def cafe_request_card(
         suggested_budget_cents: Optional suggested budget in cents.
         suggested_duration_days: Optional suggested duration in days (1-365).
     """
+    t0 = time.monotonic()
     try:
         _validate_agent_passport(f"Bearer {passport}")
     except HTTPException as exc:
+        await _log_mcp_request(
+            "cafe.request_card", service_id=service_id, passport=passport,
+            outcome="error", error_code=exc.detail.get("error", "auth_failed"),
+            latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return {"error": exc.detail.get("error", "auth_failed"), "message": "Invalid or expired Passport."}
 
     req = CardRequestBody(
@@ -197,9 +283,18 @@ async def cafe_request_card(
 
     try:
         response = await _cards_request_card(req, authorization=f"Bearer {passport}")
+        await _log_mcp_request(
+            "cafe.request_card", service_id=service_id, passport=passport,
+            latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return response.model_dump()
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+        await _log_mcp_request(
+            "cafe.request_card", service_id=service_id, passport=passport,
+            outcome="error", error_code=detail.get("error", "request_failed"),
+            latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return {"error": detail.get("error", "request_failed"), **detail}
 
 
@@ -222,6 +317,7 @@ async def cafe_invoke(
         passport: Your valid AgentCafe Passport token.
         inputs: The action inputs (required fields depend on the action — use cafe.get_details to check).
     """
+    t0 = time.monotonic()
     req = OrderRequest(
         service_id=service_id,
         action_id=action_id,
@@ -231,13 +327,23 @@ async def cafe_invoke(
 
     try:
         result = await place_order(req)
+        await _log_mcp_request(
+            "cafe.invoke", service_id=service_id, action_id=action_id,
+            passport=passport, latency_ms=int((time.monotonic() - t0) * 1000),
+        )
         return result if isinstance(result, dict) else {"result": result}
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         error_code = detail.get("error", "invocation_failed")
+        ms = int((time.monotonic() - t0) * 1000)
 
         # Structured HUMAN_AUTH_REQUIRED error per ADR-029
         if error_code in ("human_auth_required", "tier_insufficient", "scope_missing"):
+            await _log_mcp_request(
+                "cafe.invoke", service_id=service_id, action_id=action_id,
+                passport=passport, outcome="auth_required", error_code=error_code,
+                latency_ms=ms,
+            )
             return {
                 "error": "HUMAN_AUTH_REQUIRED",
                 "detail": detail.get("message", ""),
@@ -245,4 +351,9 @@ async def cafe_invoke(
                 "hint": "Use cafe.request_card to get standing authorization for this service.",
             }
 
+        await _log_mcp_request(
+            "cafe.invoke", service_id=service_id, action_id=action_id,
+            passport=passport, outcome="error", error_code=error_code,
+            latency_ms=ms,
+        )
         return {"error": error_code, **detail}

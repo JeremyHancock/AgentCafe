@@ -72,6 +72,7 @@ class _MultiBackendTransport:
 async def _configure_modules(monkeypatch):
     """Configure all modules with test secrets and seed demo data."""
     monkeypatch.setattr(router_module._state, "use_real_passport", True)
+    monkeypatch.setattr(router_module._state, "issuer_api_key", TEST_API_KEY)
     monkeypatch.setattr(passport_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(passport_module._state, "issuer_api_key", TEST_API_KEY)
     monkeypatch.setattr(human_module._state, "signing_secret", TEST_SECRET)
@@ -85,7 +86,7 @@ async def _configure_modules(monkeypatch):
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _mock_http_client(monkeypatch, seeded_db):
+async def _mock_http_client(monkeypatch, seeded_db):  # pylint: disable=unused-argument
     mock_client = AsyncClient(transport=_MultiBackendTransport())
     monkeypatch.setattr(router_module._state, "http_client", mock_client)
     yield
@@ -296,3 +297,102 @@ def test_mcp_server_has_four_tools():
 def test_mcp_server_name():
     """MCP server is named AgentCafe."""
     assert mcp_server.name == "AgentCafe"
+
+
+# ---------------------------------------------------------------------------
+# MCP request logging tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_search_logs_request():
+    """cafe.search writes to mcp_request_log."""
+    from agentcafe.db.engine import get_db
+    await cafe_search(query="hotel logging test")
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM mcp_request_log WHERE tool_name = 'cafe.search' AND query = 'hotel logging test'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["outcome"] == "ok"
+    assert row["result_count"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_details_logs_request():
+    """cafe.get_details writes to mcp_request_log."""
+    from agentcafe.db.engine import get_db
+    await cafe_get_details(service_id="stayright-hotels")
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM mcp_request_log WHERE tool_name = 'cafe.get_details' AND service_id = 'stayright-hotels'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["outcome"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_get_details_logs_error():
+    """cafe.get_details logs errors for unknown services."""
+    from agentcafe.db.engine import get_db
+    await cafe_get_details(service_id="nonexistent-logged")
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM mcp_request_log WHERE service_id = 'nonexistent-logged'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["outcome"] == "error"
+    assert row["error_code"] == "service_not_found"
+
+
+@pytest.mark.asyncio
+async def test_invoke_logs_auth_required(cafe_http):
+    """cafe.invoke logs auth_required outcome for unauthorized writes."""
+    from agentcafe.db.engine import get_db
+    passport = await _register_agent(cafe_http)
+    await cafe_invoke(
+        service_id="stayright-hotels", action_id="book-room",
+        passport=passport, inputs={"room_id": "r1", "guest_name": "Test", "nights": 1},
+    )
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM mcp_request_log WHERE tool_name = 'cafe.invoke' AND action_id = 'book-room' AND outcome = 'auth_required'"
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["passport_hash"] is not None
+
+
+# ---------------------------------------------------------------------------
+# MCP analytics endpoint tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mcp_analytics_requires_api_key(cafe_http):
+    """GET /cafe/admin/mcp-analytics rejects without API key."""
+    resp = await cafe_http.get("/cafe/admin/mcp-analytics")
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_mcp_analytics_returns_summary(cafe_http):
+    """GET /cafe/admin/mcp-analytics returns structured analytics."""
+    # Generate some log data first
+    await cafe_search(query="analytics test")
+    await cafe_get_details(service_id="stayright-hotels")
+
+    resp = await cafe_http.get(
+        "/cafe/admin/mcp-analytics",
+        headers={"X-Api-Key": TEST_API_KEY},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "summary" in data
+    assert "per_tool" in data
+    assert "top_queries" in data
+    assert "top_services" in data
+    assert "error_breakdown" in data
+    assert "recent" in data
+    assert data["summary"]["total_requests"] >= 2
