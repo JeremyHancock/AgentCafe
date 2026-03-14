@@ -123,6 +123,17 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Budget tracking: `report-spend` endpoint, enforcement on token issuance, period auto-reset
 - 40 tests in `test_cards.py`
 
+**Phase 8.3 — COMPLETE.** MCP Server Adapter:
+- `cafe/mcp_adapter.py`: 4-tool LLM-native discovery pattern via Streamable HTTP at `/mcp`
+  - `cafe.search` — semantic search across Menu (summaries only, keyword matching)
+  - `cafe.get_details` — full Menu entry for a specific service/action
+  - `cafe.request_card` — initiate Company Card flow (needs Passport)
+  - `cafe.invoke` — execute action via Cafe proxy (needs Passport, returns `HUMAN_AUTH_REQUIRED` for unauthorized writes)
+- Stateless HTTP transport via official `mcp` SDK (v1.26.0)
+- Mounted in `main.py` at `/mcp`, session manager integrated into app lifespan
+- MCP adapts to the Cafe — not the other way around (ADR-029)
+- 18 tests in `test_mcp_adapter.py`
+
 ## 6. Codebase Map
 
 ```
@@ -146,6 +157,7 @@ AgentCafe/
 │   │   ├── human.py                # Human accounts: register/login, session JWT, WebAuthn passkeys, enrollment
 │   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
 │   │   ├── cards.py                # Company Cards: request, approve, token, revoke, edit, report-spend
+│   │   ├── mcp_adapter.py          # MCP Server Adapter: 4 tools (search, get_details, request_card, invoke) at /mcp
 │   │   ├── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey, /tab)
 │   │   └── wizard_pages.py         # Company wizard Jinja2 pages (login, register, onboard, services, admin)
 │   ├── wizard/                     # Company Onboarding Wizard

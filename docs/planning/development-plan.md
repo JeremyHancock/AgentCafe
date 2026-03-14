@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 8.1 complete (Company Cards) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 311 tests, pylint 10.00/10. Strategic review complete (see `docs/strategy/strategic-review-briefing.md`).  
-**Last Updated:** March 8, 2026
+**Current Status:** Phase 8.3 complete (MCP Server Adapter) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 329 tests, pylint 10.00/10. Service Integration Standard specs locked (ADR-031). Human Memory strategic direction issued.
+**Last Updated:** March 14, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -184,7 +184,14 @@ The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identifi
   - 40 tests covering card lifecycle, edit constraints, Tab pages, card suggestions, budget tracking
   - See `docs/planning/company-cards-plan.md` for full design
 - ⬜ **8.2 First Real Service: Agent Memory** — The Cafe's first real onboarded service. Human-owned persistent state for agents (key-value + document storage). Developed as a **separate project/repo** with its own API and deployment. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. Creates the bootstrap traffic wedge. See §8.3 of strategic briefing.
-- ⬜ **8.3 MCP Server Adapter** — 4-tool LLM-native discovery pattern (`cafe.search`, `cafe.get_details`, `cafe.request_card`, `cafe.invoke`) via remote Streamable HTTP at `/mcp`. Ships last — rides on Company Cards + Agent Memory primitives. See §8.2 + §8.2.2 of strategic briefing and ADR-029.
+- ✅ **8.3 MCP Server Adapter** — 4-tool LLM-native discovery pattern (`cafe.search`, `cafe.get_details`, `cafe.request_card`, `cafe.invoke`) via remote Streamable HTTP at `/mcp`. Stateless transport via official `mcp` SDK. MCP adapts to the Cafe — not the other way around (ADR-029).
+  - `cafe/mcp_adapter.py`: FastMCP server with 4 tools, mounted at `/mcp` in main.py
+  - `cafe.search`: keyword search across Menu, returns summaries only (service_id, action_id, name, short_description, risk_tier, relevance)
+  - `cafe.get_details`: full Menu entry for a service, optionally filtered to single action
+  - `cafe.request_card`: initiates Company Card flow (validates Passport, returns card_id + consent_url)
+  - `cafe.invoke`: routes to POST /cafe/order, returns structured `HUMAN_AUTH_REQUIRED` error for unauthorized writes
+  - 18 tests in `test_mcp_adapter.py`
+  - See `docs/strategy/strategic-review-briefing.md` §8.2 + ADR-029
 - ⬜ **8.4 Open Source Prep** — Repo is MIT-licensed but still private. Public launch requires: README polish, contributor guide, removal of any hardcoded secrets/paths, documentation audit. Addresses the trust bootstrapping gap identified by both reviewers.
 
 **Phase 9: Scale & Harden** (deferred — post-beta, when real traffic justifies it)

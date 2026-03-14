@@ -29,6 +29,7 @@ from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_keys, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
 from agentcafe.wizard.router import configure_wizard, wizard_router
+from agentcafe.cafe.mcp_adapter import mcp_server
 
 logger = logging.getLogger("agentcafe")
 
@@ -74,7 +75,9 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         logger.info("Passport mode: REAL JWT validation")
     else:
         logger.info("Passport mode: MVP (demo-passport only)")
-    yield
+    logger.info("MCP adapter available at /mcp")
+    async with mcp_server.session_manager.run():
+        yield
     await close_http_client()
     await close_db()
 
@@ -118,6 +121,10 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     app.include_router(pages_router)
     app.include_router(wizard_pages_router)
     app.include_router(wizard_router)
+
+    # Mount MCP Streamable HTTP server at /mcp (ADR-029)
+    mcp_server.settings.streamable_http_path = "/"
+    app.mount("/mcp", mcp_server.streamable_http_app())
 
     @app.get("/health")
     async def health():
