@@ -1,7 +1,7 @@
 # AgentCafe — Architectural Decisions Log
 
 **Purpose:** Captures key decisions with rationale so future contributors (human or AI) understand *why*, not just *what*.  
-**Last Updated:** March 8, 2026
+**Last Updated:** March 14, 2026
 
 ---
 
@@ -369,3 +369,85 @@ Access via `_state.attribute` instead of bare module-level variables. Tests monk
 7. **Traffic source hierarchy:** (a) Short-term: framework/IDE developers adding the MCP server. (b) Medium-term: Agent Memory creating stickiness. (c) Long-term: autonomous registry discovery. We do NOT rely on autonomous discovery as the first source.
 **Rationale:** MCP is non-negotiable distribution infrastructure. Autonomous agents discover tools via MCP registries at runtime — if the Cafe isn't registered, it doesn't exist for those agents. The 4-tool LLM-native pattern solves the context window problem (summaries from search + schema on demand; scales to 10,000+ services), the consent gap (fail-fast error + card flow), the transport question (remote Streamable HTTP, no shipped artifacts), and tool-selection accuracy (verb-aligned names match model priors). MCP has no authorization standard — that gap is the Cafe's product. For companies: "don't build an MCP server — publish through the Cafe wizard and you're available to every MCP-compatible agent, with safety included."
 **Status:** Approved (implementation-ready). Ships as Phase 8.3, after Company Cards (8.1) and Agent Memory (8.2). See `docs/strategy/strategic-review-briefing.md` §8.2 + §8.2.2 for the full design and four-review convergence spec.
+
+---
+
+### ADR-030: Consent ceremony, human notification, and implementation scoping decisions for Service Integration Standard
+
+**Date:** March 14, 2026
+**Context:** During Jeremy's review of the three Service Integration Standard specs (Artifact 0: Proxy Behavior, Artifact 1: Per-Request Artifact, Artifact 2: Service Contract & Identity Binding), a red-team analysis of rogue agent attack vectors surfaced design decisions about consent ceremony security, human notification channels, and implementation sequencing. The specs themselves (protocol between AC and services) are unchanged — these decisions govern how AC communicates with humans and how implementation is phased.
+
+**Decisions:**
+
+1. **Email-primary consent channel with risk-tier degradation.** AC sends a consent notification email directly to the human for ALL risk tiers — email is the ground truth channel that agents cannot intercept or frame. The agent's access to consent details degrades by risk tier:
+   - **Low** (read-only): AC sends email + agent receives consent URL + `human_message`.
+   - **Medium**: AC sends email + agent receives activation code (no URL) + `human_message`.
+   - **High / Critical**: AC sends email only. Agent receives a poll endpoint (`/consents/{id}/status`) + `human_message`.
+   All tiers include a `human_message` field in the consent initiation response — an AC-authored plain-language string the agent can relay to the human (e.g., `"Please check your email from AgentCafe to approve this request."`). This ensures the agent always knows what to tell the human regardless of modality, and AC controls the framing. The agent can relay it verbatim or rephrase, but the ground truth comes from AC, not the agent's own description of what's being requested.
+   This solves the multi-modality problem (text chat, voice, background agents) and limits the agent's ability to misrepresent the consent scope to the human. The email is always primary; the agent relay is a convenience shortcut.
+
+2. **PWA (Progressive Web App) for consent ceremonies.** AC needs a PWA to provide push notifications as a direct, unforgeable channel to the human. Ceremony flow: push notification → tap → AC consent page → passkey (biometric) → approved (~3 seconds). Email serves as universal fallback for humans who haven't installed the PWA. The PWA also provides persistent presence on the human's device for: consent notifications, revocation confirmations, human dashboard, and post-approval alerts. Built on the existing stack (Jinja2, FastAPI, same domain). Main addition: service worker for push notifications. No native app required.
+
+3. **Plain-language scope descriptions in the OS-level passkey prompt.** The WebAuthn authenticator dialog is the last line of defense — it's the one piece of UI that no agent, no script, and no DOM injection can touch. AC must show plain-language scope descriptions (e.g., "Grant payments:charge to Helpful Assistant") in the OS-level prompt, not just the web UI. Short-term: maximize clarity in the web UI with risk-tier visual differentiation. Medium-term: use WebAuthn `extensions` or platform-specific APIs as they become available. Long-term: advocate for richer relying-party-supplied context in authenticator dialogs.
+
+4. **Service Integration Developer Guide.** The three Service Integration Standard specs are internal architecture documents — they are the source of truth but are not suitable as service-facing documentation. Before third-party onboarding, AC must produce a separate developer-facing guide: step-by-step onboarding, what the SDK handles vs. what the service implements, code samples, and endpoint stubs. The SDK (Artifact 5) is the primary integration path — most protocol details (JWKS caching, `jti` tracking, fetch cooldowns, `kid` matching) should never require manual implementation.
+
+5. **Two-phase audit log deferred for HM MVS.** The specs document the two-phase audit pattern (placeholder before proxy, finalize after) as the destination state. For HM MVS, a single-phase write after the proxy call is sufficient. HM is AC-owned and co-located — crashes are rare, and AC owns both sides of any dispute. The two-phase pattern becomes necessary when third-party services are onboarded and disputes have legal or financial consequences. The spec remains unchanged (it documents the correct end state); this is an implementation sequencing decision only.
+
+6. **Eager binding resolution for Company Cards.** When a Company Card is issued, AC SHOULD resolve all service bindings within the card approval ceremony — not lazily at first proxy request. This prevents agents from hitting `ACCOUNT_LINK_REQUIRED` mid-task and eliminates the need for agents to have a synchronous human channel at proxy time. The human completes one session: approve card (passkey) + link service (if needed). For services using `broker_delegated` (like HM), linking is automatic and adds zero human touches. For services requiring OAuth linking, the redirect is chained into the card approval flow. Already-linked services reuse existing bindings. This is a UX design principle for the Company Cards phase (Phase 8.1); the protocol already supports both eager and lazy resolution.
+
+**Rationale:** The red-team analysis identified that the hardest attacks to defend against are not protocol-level (the crypto is solid) but social engineering: consent farming, misleading agent framing, and the irreducible "human approves without reading" problem. Decisions 1–3 address this by moving consent communication to channels the agent cannot control (email, push notifications, OS-level authenticator prompts). Decision 4 ensures third-party developers can integrate without reading 2,400 lines of architecture specs. Decisions 5–6 are implementation sequencing that keeps HM MVS lean while preserving the correct destination-state design in the specs.
+**Status:** Approved. Decisions 1–4 are pre-third-party-onboarding deliverables. Decision 5 applies to HM MVS implementation (Phase 8.2). Decision 6 applies to Company Cards phase (Phase 8.1).
+
+---
+
+### ADR-031: Service Integration Standard — ratification of jointly-verified mode
+
+**Date:** March 14, 2026 (specs locked). Design work: March 8–14, 2026.
+**Context:** AgentCafe's proxy (`router.py`) previously operated in a single mode: AC holds the backend credential, the service trusts AC implicitly, and the human's identity is invisible to the service. This works for simple APIs but fails for account-bearing services (banking, memory, payments) where the service needs to know *which human* is acting and must independently verify authorization. The Service Integration Standard introduces "jointly-verified mode" — a second integration path where AC and the service share responsibility for authorization, identity, and revocation.
+
+**What it introduces:**
+
+1. **Jointly-verified integration mode.** A new `integration_mode = 'jointly_verified'` flag on `proxy_configs` that activates an extended proxy path. Standard-mode services are completely unaffected — the flag defaults to `NULL` (standard).
+2. **Per-request authorization artifact.** A signed JWT (RS256, 30s TTL) attached to every proxied request via `X-AgentCafe-Authorization` header. Contains: `sub` (service-side account ID), `action`, `scopes`, `consent_ref`, `ac_human_id_hash` (identity correlator), `request_hash` (integrity binding), `jti` (replay nonce + audit ID), `standard_version`. The artifact is not a session token — one artifact per request, non-reusable.
+3. **Identity binding protocol.** A 6-endpoint contract (`account-check`, `account-create`, `link-complete`, `unlink`, `revoke`, `grant-status`) that services implement for AC to call during consent and revocation flows. Capability negotiation allows services to declare which endpoints they support.
+4. **Binding vs. grant separation.** Two tables: `human_service_accounts` tracks identity ("who is this human on the service?"), `authorization_grants` tracks authorization ("what are they allowed to do?"). Bindings outlive grants — a human can revoke a policy without losing their service account link.
+5. **State machine.** A 6-gate proxy path: Passport validation → scope check → binding + grant resolution → artifact signing → proxy call → audit finalization. Fail-closed at every gate.
+6. **Revocation with defense in depth.** Four layers: AC stops issuing artifacts immediately, pushes revocation to service, 30s artifact TTL as backstop, periodic reconciliation for third-party services. Service stores revoked `consent_ref` values to close the in-flight artifact window.
+7. **Separate artifact key infrastructure.** Artifact signing uses a dedicated key pair (`art_` prefix), independent from Passport keys (`psp_` prefix). Both served via JWKS with `kid`-based selection.
+8. **`request_hash` integrity binding.** SHA-256 of HTTP method + normalized path + raw body bytes. Binds the artifact to the specific request, preventing endpoint-swapping and body-tampering attacks. Raw bytes (not JSON canonicalization) avoids cross-library serialization mismatches.
+
+**Key architectural decisions (detail in the specs):**
+
+- **Bearer artifact, not session token.** 30s TTL, one per request. No token refresh, no session management.
+- **Binding outlives grants.** Revocation removes authorization, not identity. Re-consent creates a new grant without re-linking.
+- **`ac_human_id_hash` full 64-char hex.** Defense-in-depth identity correlator. Full hash avoids v1→v2 truncation compatibility issues.
+- **No path lowercasing in `request_hash`.** Third-party services may have case-sensitive paths. The path in `proxy_configs` is authoritative.
+- **`UNIQUE(consent_ref, service_id)` on grants.** Supports Company Card fan-out (one card creates grants on multiple services).
+- **Fail-closed deferred state.** If a service is unreachable during consent, the binding is `deferred` and proxy requests return `SERVICE_SETUP_PENDING` (503) until resolved.
+- **Service-side revocation storage.** Services must store and check revoked `consent_ref` values — AC's "stop issuing" is necessary but not sufficient due to the 30s artifact TTL window.
+- **Capability negotiation.** Services declare which endpoints they implement. AC adapts consent flows accordingly. Services that declare none of `account_check`, `account_create`, or `link_complete` are rejected at onboarding — there would be no way to establish a genuine `sub` claim.
+
+**Review process:** 10 rounds across 4 reviewers. 65 findings total: 55 fixed, 5 already addressed, 5 rebutted (stale context).
+
+| Reviewer | Rounds | Role |
+|----------|--------|------|
+| Self (Claude) | 2 | Initial consistency + cross-reference checks |
+| ChatGPT | 3 | Adversarial architectural review |
+| Grok | 3 | Adversarial security + codebase alignment review |
+| Cascade (Claude) | 2 | Adversarial consistency + logic review |
+
+Key findings fixed: missing grant-not-found check in Gate 3, `UNIQUE` constraint too narrow for card fan-out, grant query missing `service_id` filter, path lowercasing causing replay mismatches, `GRANT_REVOKED` missing from error code table, stale cross-references after section renumbering, duplicate code block with stale `.lower()`.
+
+**Canonical files (locked):**
+
+- `docs/architecture/service-integration/proxy-behavior-state-machine-spec.md` — Artifact 0. How `router.py` orchestrates the jointly-verified proxy path.
+- `docs/architecture/service-integration/per-request-artifact-spec.md` — Artifact 1. The authorization artifact format, signing, validation, and key infrastructure.
+- `docs/architecture/service-integration/service-contract-identity-binding-protocol.md` — Artifact 2. The service contract: identity binding, revocation, and capability negotiation.
+
+**Supersedes:** `docs/strategy/service-integration-standard-briefing.md` — the original briefing document that preceded these specs. The briefing remains for historical context but diverges from the canonical specs on: `correlation_id` (removed), grant state storage (moved to `authorization_grants`), `request_hash` algorithm (method + path added), and path normalization (lowercasing removed).
+
+**MVS scope (Human Memory):** HM is the first jointly-verified service. The MVS implements the full artifact (no claim subsetting) with a reduced surface: `account-check` + `account-create` + `revoke` only. Deferred past HM: linking flow, unlinking, reconciliation, capability wizard, `service_integration_configs` table, deferred binding background resolver, Company Card fan-out. See §12 in Artifact 0, §12 in Artifact 1, §7 in Artifact 2 for detailed MVS scoping.
+
+**Rationale:** Standard-mode proxying works for stateless APIs but creates an untenable trust model for account-bearing services: the service has no idea who is acting, no independent way to verify authorization, and no mechanism to deny a revoked grant. Jointly-verified mode closes these gaps while preserving standard-mode for services that don't need it. The protocol is validated against both HM (simplest case: AC-owned, `broker_delegated`, no existing users) and Stripe (complex case: third-party, OAuth linking, existing users) with no modifications needed. Related decisions: ADR-024 (bearer model), ADR-027 (service-integration definition), ADR-028 (Company Cards), ADR-030 (consent ceremony and implementation scoping).
+**Status:** Locked. Specs are the canonical definition of jointly-verified mode. Implementation begins with HM onboarding in Phase 8.2.
