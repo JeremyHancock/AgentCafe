@@ -105,16 +105,23 @@ async def seed_demo_data(db: aiosqlite.Connection, config) -> None:
     Menu entries are loaded from the Phase 0.2 design JSON files (single source of truth).
     Skips if data already exists (idempotent).
     """
+    # Load menu entries from design files
+    menu_entries = _load_menu_entries(config.design_dir)
+
     # Check if already seeded
     cursor = await db.execute(
         "SELECT COUNT(*) FROM published_services WHERE status = 'live'"
     )
     row = await cursor.fetchone()
     if row[0] >= 3:
+        # Already seeded — refresh menu_entry_json from source files to stay in sync
+        for menu in menu_entries:
+            await db.execute(
+                "UPDATE published_services SET menu_entry_json = ?, updated_at = ? WHERE service_id = ?",
+                (json.dumps(menu), datetime.now(timezone.utc).isoformat(), menu["service_id"]),
+            )
+        await db.commit()
         return
-
-    # Load menu entries from design files
-    menu_entries = _load_menu_entries(config.design_dir)
 
     now = datetime.now(timezone.utc).isoformat()
 

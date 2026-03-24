@@ -62,7 +62,7 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         allow_password_auth=cfg.allow_password_auth,
     )
     configure_consent(cfg.passport_signing_secret)
-    configure_cards(cfg.passport_signing_secret)
+    configure_cards(cfg.passport_signing_secret, public_url=cfg.public_url)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_wizard_pages(
@@ -193,7 +193,7 @@ async def main() -> None:
         allow_password_auth=cfg.allow_password_auth,
     )
     configure_consent(cfg.passport_signing_secret)
-    configure_cards(cfg.passport_signing_secret)
+    configure_cards(cfg.passport_signing_secret, public_url=cfg.public_url)
     configure_pages(cfg.passport_signing_secret, allow_password_auth=cfg.allow_password_auth)
     configure_wizard(cfg.passport_signing_secret, quarantine_days=cfg.quarantine_days)
     configure_wizard_pages(

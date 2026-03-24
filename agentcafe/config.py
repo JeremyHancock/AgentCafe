@@ -54,6 +54,9 @@ class CafeConfig:
     webauthn_origin: str = "http://localhost:8000"
     allow_password_auth: bool = True
 
+    # Public URL (for absolute URLs in agent-facing responses)
+    public_url: str = ""
+
     # CORS
     cors_allowed_origins: str = "*"
 
@@ -98,6 +101,7 @@ def load_config() -> CafeConfig:
         webauthn_rp_name=os.getenv("WEBAUTHN_RP_NAME", "AgentCafe"),
         webauthn_origin=os.getenv("WEBAUTHN_ORIGIN", "http://localhost:8000"),
         allow_password_auth=os.getenv("ALLOW_PASSWORD_AUTH", "true").lower() == "true",
+        public_url=os.getenv("CAFE_PUBLIC_URL", ""),
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),
     )

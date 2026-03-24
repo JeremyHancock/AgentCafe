@@ -160,10 +160,13 @@ async def cafe_search(
     results.sort(key=lambda r: (-r["relevance"], r["service_id"], r["action_id"]))
     results = results[:max_results]
 
+    hint = "Use cafe.get_details with a service_id to see full input schemas before invoking."
+    if not results and query:
+        hint = "No services matched your query. Try different keywords or use an empty query to browse all available services."
     response = {
         "results": results,
         "total_matched": len(results),
-        "hint": "Use cafe.get_details with a service_id to see full input schemas before invoking.",
+        "hint": hint,
     }
     await _log_mcp_request(
         "cafe.search",

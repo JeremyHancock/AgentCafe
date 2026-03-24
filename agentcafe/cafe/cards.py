@@ -56,13 +56,15 @@ _ACTIVATION_CODE_CHARS = string.ascii_uppercase + string.digits
 class _State:
     """Module-level mutable state (avoids global statements)."""
     signing_secret: str = ""
+    public_url: str = ""
 
 _state = _State()
 
 
-def configure_cards(signing_secret: str) -> None:
+def configure_cards(signing_secret: str, public_url: str = "") -> None:
     """Set the signing secret for card-based token issuance. Called once at startup."""
     _state.signing_secret = signing_secret
+    _state.public_url = public_url.rstrip("/")
 
 
 def _generate_activation_code() -> str:
@@ -270,13 +272,15 @@ async def request_card(
     )
     await db.commit()
 
-    consent_url = f"/authorize/card/{card_id}"
+    base = _state.public_url
+    consent_url = f"{base}/authorize/card/{card_id}"
+    activation_url = f"{base}/activate?code={activation_code}"
 
     return CardRequestResponse(
         card_id=card_id,
         consent_url=consent_url,
         activation_code=activation_code,
-        activation_url=f"/activate?code={activation_code}",
+        activation_url=activation_url,
         expires_at=expires_at.isoformat(),
     )
 

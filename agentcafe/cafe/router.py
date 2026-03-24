@@ -193,7 +193,7 @@ async def place_order(req: OrderRequest):
                 "passport_expired": "Passport has expired.",
                 "passport_revoked": "Passport has been revoked.",
                 "policy_revoked": "The policy backing this Passport has been revoked by the human.",
-                "tier_insufficient": "This action requires a Tier-2 (write) Passport. Your Tier-1 (read) Passport cannot perform write actions.",
+                "tier_insufficient": "This action requires a Tier-2 (write) Passport. Your Tier-1 (read) Passport cannot perform write actions. Do not re-register — use cafe.request_card or POST /cards/request to get standing authorization.",
                 "scope_missing": f"Your Passport is missing the required scope: '{scope}'.",
                 "human_auth_required": "This action requires explicit human authorization in your Passport.",
             }
