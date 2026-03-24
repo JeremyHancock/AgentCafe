@@ -5,6 +5,7 @@ description = "The Cafe for Agents — services register on the Menu, agents bro
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    "starlette>=0.36.0,<1.0.0",
     "uvicorn[standard]>=0.34.0",
     "pydantic>=2.10.0",
     "aiosqlite>=0.20.0",
