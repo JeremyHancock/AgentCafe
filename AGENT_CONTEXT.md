@@ -176,19 +176,10 @@ AgentCafe/
 │   ├── static/webauthn.js          # Zero-dependency WebAuthn JS helper (prepareRegistrationOptions, etc.)
 │   └── templates/                  # Jinja2 HTML templates (landing, login, register, consent, dashboard, activate, enroll_passkey, tab, card_approve)
 │       └── wizard/                # Company wizard templates (login, register, onboard_spec/review/policy/preview/success, services, admin)
-├── dashboard/                      # Next.js 15 Company Dashboard (LEGACY — replaced by Jinja2 wizard_pages.py)
-│   ├── src/app/
-│   │   ├── login/page.tsx          # Company login
-│   │   ├── register/page.tsx       # Company registration
-│   │   ├── onboard/page.tsx        # 4-step onboarding wizard
-│   │   ├── services/page.tsx       # Service management (pause/resume/unpublish/logs)
-│   │   └── admin/page.tsx          # Platform admin dashboard (ISSUER_API_KEY gated)
-│   ├── src/components/             # Wizard step components (spec-input, review, policy, preview)
-│   ├── src/lib/                    # API client (api.ts) + auth helpers (auth.ts)
-│   └── next.config.ts              # API proxy to FastAPI backend
 ├── examples/                      # Integration snippets
 │   ├── openai_agent.py            # GPT function-calling agent for AgentCafe
-│   └── claude_agent.py            # Claude tool_use agent for AgentCafe
+│   ├── claude_agent.py            # Claude tool_use agent for AgentCafe
+│   └── sample-spec.yaml           # Sample OpenAPI spec for testing onboarding
 ├── tests/
 │   ├── conftest.py                 # Shared fixtures: in-memory DB, ASGI test client
 │   ├── test_menu.py                # Menu format compliance tests
@@ -201,10 +192,11 @@ AgentCafe/
 │   ├── test_wizard_pages.py        # Company wizard Jinja2 page tests (login, register, onboard, services, admin)
 │   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
 │   ├── test_cards.py              # Company Cards lifecycle, edit, Tab pages, budget, card suggestion tests
+│   ├── test_mcp_adapter.py        # MCP Server Adapter: 4 tools, request logging, analytics endpoint
 │   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
 ├── docs/
 │   ├── architecture/
-│   │   ├── decisions.md            # ADR-001 through ADR-026
+│   │   ├── decisions.md            # ADR-001 through ADR-031
 │   │   └── passport/               # Passport V2: threat-model, v2-discussion, v2-spec
 │   ├── planning/
 │   │   ├── development-plan.md     # Ordered phases with completion status
@@ -233,7 +225,7 @@ AgentCafe/
 | Audit log | **Real** | SHA-256 hash chain, tamper detection via `verify_audit_chain()` |
 | Backend credential encryption | **Real** | AES-256-GCM at rest (`crypto.py`), `CAFE_ENCRYPTION_KEY` env var |
 | Quarantine / suspension | **Real** | 7-day quarantine on new services (configurable via `QUARANTINE_DAYS`), instant suspension via admin endpoint |
-| Dashboard (Next.js) | **LEGACY** | Replaced by Jinja2 wizard_pages.py. Code remains in `dashboard/` but is not used. |
+| MCP Server Adapter | **Real** | 4-tool LLM-native discovery at `/mcp`, request logging, admin analytics |
 | Passport signing keys | **Real** | RS256 asymmetric signing, JWKS endpoint, dual-key rotation, HS256 legacy fallback |
 
 ## 8. How to Run
@@ -255,16 +247,10 @@ python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # API docs: http://127.0.0.1:8000/docs
-python -m pytest tests/ -v         # 311 tests passing
+python -m pytest tests/ -v         # 335 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 
-**Dashboard (Next.js) — LEGACY, replaced by Jinja2 wizard_pages.py:**
-```bash
-cd dashboard && npm run dev        # http://localhost:3000
-# Proxies /api/* to localhost:8000 (backend must be running)
-# Pages: /login, /register, /onboard, /services, /admin
-```
 
 **Demo agent:**
 ```bash
@@ -295,7 +281,7 @@ python -m agentcafe.demo_agent --base-url https://agentcafe.io  # Against live s
 
 ## 9.1 Known Limitations
 
-- **Review replaces, doesn't merge**: `PUT /wizard/drafts/{id}/review` stores company edits as a complete replacement. The dashboard pre-populates forms with AI values, but the API itself does full replacement.
+- **Review replaces, doesn't merge**: `PUT /wizard/drafts/{id}/review` stores company edits as a complete replacement. The wizard pre-populates forms with AI values, but the API itself does full replacement.
 - **In-memory DB by default**: SQLite on disk (`agentcafe.db`) or `:memory:` for tests. No replication or backup.
 - **Rule-based enricher confidence is static**: Hardcoded at 60%/80%/40% (description/inputs/example_response). LLM path returns genuinely calibrated scores.
 - **Read-keyword regex in spec parser**: `_classify_write()` uses substring matching for read keywords (`search`, `list`, `get`, etc.). This can misclassify operations whose IDs contain these as substrings (e.g., `widget` contains `get`). Use operationIds that avoid these substrings, or override `is_write` in the review step.

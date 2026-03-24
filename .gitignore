@@ -32,5 +32,8 @@ agentcafe.db
 htmlcov/
 .coverage
 
+# Legacy dashboard (removed — replaced by Jinja2 wizard_pages.py)
+dashboard/
+
 # Docker
 # (keep .dockerignore tracked — it's part of the build config)

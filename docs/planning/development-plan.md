@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 8.3 complete (MCP Server Adapter) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 329 tests, pylint 10.00/10. Service Integration Standard specs locked (ADR-031). Human Memory strategic direction issued.
-**Last Updated:** March 14, 2026
+**Current Status:** Phase 8.4 complete (Open Source Prep) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 335 tests, pylint 10.00/10. Legacy Next.js dashboard removed. README rewritten, CONTRIBUTING.md added, documentation audit complete.
+**Last Updated:** March 24, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -192,7 +192,7 @@ The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identifi
   - `cafe.invoke`: routes to POST /cafe/order, returns structured `HUMAN_AUTH_REQUIRED` error for unauthorized writes
   - 18 tests in `test_mcp_adapter.py`
   - See `docs/strategy/strategic-review-briefing.md` §8.2 + ADR-029
-- ⬜ **8.4 Open Source Prep** — Repo is MIT-licensed but still private. Public launch requires: README polish, contributor guide, removal of any hardcoded secrets/paths, documentation audit. Addresses the trust bootstrapping gap identified by both reviewers.
+- ✅ **8.4 Open Source Prep** — README rewritten for public launch (MCP endpoint, Company Cards, env vars table, updated project layout). CONTRIBUTING.md added. Legacy Next.js `dashboard/` removed from repo (sample-spec.yaml preserved in `examples/`). AGENT_CONTEXT.md updated (removed dashboard, added MCP, fixed test counts). No hardcoded secrets or local paths found. Documentation audit complete.
 
 **Phase 9: Scale & Harden** (deferred — post-beta, when real traffic justifies it)
 - ⬜ SQLite → PostgreSQL migration (Alembic, connection string swap, test all migrations)
