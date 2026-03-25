@@ -323,6 +323,38 @@ async def get_card_status(card_id: str):
     )
 
 
+async def _create_jv_grant_if_needed(
+    db,
+    user_id: str,
+    service_id: str,
+    card_id: str,
+) -> None:
+    """Create an authorization grant if the card covers jointly-verified actions.
+
+    Called during card approval. For standard-mode services, this is a no-op.
+    The identity binding should already exist from prior consent approval.
+    """
+    cursor = await db.execute(
+        "SELECT integration_mode FROM proxy_configs "
+        "WHERE service_id = ? AND integration_mode = 'jointly_verified' LIMIT 1",
+        (service_id,),
+    )
+    if not await cursor.fetchone():
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+    grant_id = str(uuid.uuid4())
+    await db.execute(
+        """INSERT OR IGNORE INTO authorization_grants
+           (id, ac_human_id, service_id, consent_ref, grant_status,
+            granted_at, updated_at)
+           VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+        (grant_id, user_id, service_id, card_id, now, now),
+    )
+    logger.info("Created card authorization grant: user=%s service=%s card=%s",
+                 user_id, service_id, card_id)
+
+
 # ---------------------------------------------------------------------------
 # POST /cards/{card_id}/approve — Human approves a Company Card
 # ---------------------------------------------------------------------------
@@ -476,6 +508,10 @@ async def approve_card(
             card_id,
         ),
     )
+
+    # Create authorization grant for jointly-verified services (ADR-031)
+    await _create_jv_grant_if_needed(db, user_id, card["service_id"], card_id)
+
     await db.commit()
 
     logger.info("Card %s approved by user %s for service %s", card_id, user_id, card["service_id"])

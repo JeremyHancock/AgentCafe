@@ -42,6 +42,10 @@ class CafeConfig:
     passport_rsa_private_key: str = ""  # PEM string (e.g. from env var)
     passport_rsa_key_file: str = ""     # path to PEM file (alternative)
 
+    # RS256 artifact signing — separate key pair for per-request artifacts (ADR-031)
+    artifact_rsa_private_key: str = ""  # PEM string (ARTIFACT_RSA_PRIVATE_KEY)
+    artifact_rsa_key_file: str = ""     # path to PEM file (ARTIFACT_RSA_KEY_FILE)
+
     # Backend credential encryption
     encryption_key: str = ""
 
@@ -95,6 +99,8 @@ def load_config() -> CafeConfig:
         use_real_passport=os.getenv("USE_REAL_PASSPORT", "false").lower() == "true",
         passport_rsa_private_key=os.getenv("PASSPORT_RSA_PRIVATE_KEY", ""),
         passport_rsa_key_file=os.getenv("PASSPORT_RSA_KEY_FILE", ""),
+        artifact_rsa_private_key=os.getenv("ARTIFACT_RSA_PRIVATE_KEY", ""),
+        artifact_rsa_key_file=os.getenv("ARTIFACT_RSA_KEY_FILE", ""),
         encryption_key=os.getenv("CAFE_ENCRYPTION_KEY", ""),
         quarantine_days=int(os.getenv("QUARANTINE_DAYS", "7")),
         webauthn_rp_id=os.getenv("WEBAUTHN_RP_ID", "localhost"),

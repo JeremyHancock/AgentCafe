@@ -367,6 +367,83 @@ async def get_consent_status(consent_id: str):
 # POST /consents/{consent_id}/approve — Human approves consent
 # ---------------------------------------------------------------------------
 
+async def _handle_jointly_verified_consent(
+    db,
+    user_id: str,
+    email: str,
+    service_id: str,
+    consent_ref: str,
+    action_ids: list[str],
+) -> None:
+    """Create identity binding and authorization grant for jointly-verified services.
+
+    Called during consent approval. For standard-mode services, this is a no-op.
+    For jointly-verified services, establishes the human→service account binding
+    and creates an authorization_grants row.
+    """
+    # Check if any of the consented actions are jointly-verified
+    is_jointly_verified = False
+    for aid in action_ids:
+        cursor = await db.execute(
+            "SELECT integration_mode FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (service_id, aid),
+        )
+        pc_row = await cursor.fetchone()
+        if pc_row and pc_row["integration_mode"] == "jointly_verified":
+            is_jointly_verified = True
+            break
+
+    if not is_jointly_verified:
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Check if binding already exists
+    cursor = await db.execute(
+        "SELECT id, binding_status FROM human_service_accounts "
+        "WHERE ac_human_id = ? AND service_id = ?",
+        (user_id, service_id),
+    )
+    binding_row = await cursor.fetchone()
+
+    if not binding_row:
+        # Create new binding — for MVS, AC creates the service-side account
+        # using the human's AC user ID as the service account ID.
+        # A real implementation would call POST /integration/account-check
+        # and POST /integration/account-create on the service.
+        binding_id = str(uuid.uuid4())
+        service_account_id = user_id  # MVS: AC user ID as service account ID
+        await db.execute(
+            """INSERT INTO human_service_accounts
+               (id, ac_human_id, service_id, service_account_id,
+                binding_method, binding_status, identity_binding,
+                linked_at, updated_at)
+               VALUES (?, ?, ?, ?, 'broker_delegated', 'active', 'broker_delegated', ?, ?)""",
+            (binding_id, user_id, service_id, service_account_id, now, now),
+        )
+        logger.info("Created service binding: user=%s service=%s account=%s",
+                     email, service_id, service_account_id)
+    elif binding_row["binding_status"] != "active":
+        # Reactivate an existing but inactive binding
+        await db.execute(
+            "UPDATE human_service_accounts SET binding_status = 'active', updated_at = ? "
+            "WHERE id = ?",
+            (now, binding_row["id"]),
+        )
+
+    # Create authorization grant
+    grant_id = str(uuid.uuid4())
+    await db.execute(
+        """INSERT OR IGNORE INTO authorization_grants
+           (id, ac_human_id, service_id, consent_ref, grant_status,
+            granted_at, updated_at)
+           VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+        (grant_id, user_id, service_id, consent_ref, now, now),
+    )
+    logger.info("Created authorization grant: user=%s service=%s consent_ref=%s",
+                 email, service_id, consent_ref)
+
+
 @consent_router.post("/consents/{consent_id}/approve", response_model=ApproveResponse)
 async def approve_consent(
     consent_id: str,
@@ -461,6 +538,11 @@ async def approve_consent(
             risk_tier, lifetime,
             policy_expires.isoformat(), now.isoformat(), now.isoformat(),
         ),
+    )
+
+    # Handle jointly-verified service binding (ADR-031)
+    await _handle_jointly_verified_consent(
+        db, user_id, email, consent["service_id"], policy_id, action_ids,
     )
 
     # Update consent with approval
