@@ -23,7 +23,7 @@ _DELIVERY_TIMEOUT = 10  # seconds
 _MAX_ATTEMPTS = 10
 _STANDARD_VERSION = "1.0"
 
-# Exponential backoff schedule (seconds): 5, 15, 45, 135, 300, 300, ...
+# Exponential backoff schedule (seconds): 5, 15, 45, 135, 300 (clamped)
 _BACKOFF_SCHEDULE = [5, 15, 45, 135, 300]
 
 
@@ -34,6 +34,7 @@ _BACKOFF_SCHEDULE = [5, 15, 45, 135, 300]
 _HM_CONFIG = {
     "service_id": "human-memory",
     "integration_base_url": "http://localhost:8001",
+    "integration_auth_header": "",  # set during onboarding credential exchange
     "capabilities": {
         "revoke": True,
         "grant_status": False,
@@ -61,12 +62,22 @@ async def queue_revocation(
     consent_ref: str,
     service_id: str,
     reason: str,
-) -> str:
+) -> str | None:
     """Queue a revocation for delivery to a service.
 
     Transitions the authorization grant to ``revoke_queued`` and inserts
-    a ``revocation_deliveries`` row. Returns the correlation_id.
+    a ``revocation_deliveries`` row. Returns the correlation_id,
+    or None if a delivery for this consent_ref+service_id already exists.
     """
+    # Guard: don't create duplicate deliveries (I2/I3 fix)
+    cursor = await db.execute(
+        "SELECT id FROM revocation_deliveries "
+        "WHERE consent_ref = ? AND service_id = ? AND status IN ('queued', 'delivered')",
+        (consent_ref, service_id),
+    )
+    if await cursor.fetchone():
+        return None
+
     now = datetime.now(timezone.utc).isoformat()
     correlation_id = f"rev_{uuid.uuid4()}"
 
@@ -78,7 +89,7 @@ async def queue_revocation(
         (now, now, consent_ref, service_id),
     )
 
-    # Insert delivery record
+    # Insert delivery record (store revoked_at for stable retries — C3 fix)
     delivery_id = str(uuid.uuid4())
     await db.execute(
         """INSERT INTO revocation_deliveries
@@ -96,7 +107,6 @@ async def queue_revocation(
 async def deliver_revocation(
     db: aiosqlite.Connection,
     delivery_id: str,
-    revoked_at: str | None = None,
     reason: str = "human_revoked",
 ) -> bool:
     """Attempt to deliver a single queued revocation to the service.
@@ -104,8 +114,12 @@ async def deliver_revocation(
     Returns True if delivery succeeded, False otherwise.
     """
     cursor = await db.execute(
-        "SELECT id, consent_ref, service_id, correlation_id, attempts "
-        "FROM revocation_deliveries WHERE id = ?",
+        "SELECT rd.id, rd.consent_ref, rd.service_id, rd.correlation_id, "
+        "       rd.attempts, rd.created_at, ag.revoked_at "
+        "FROM revocation_deliveries rd "
+        "LEFT JOIN authorization_grants ag "
+        "  ON ag.consent_ref = rd.consent_ref AND ag.service_id = rd.service_id "
+        "WHERE rd.id = ?",
         (delivery_id,),
     )
     row = await cursor.fetchone()
@@ -123,20 +137,34 @@ async def deliver_revocation(
     base_url = config["integration_base_url"].rstrip("/")
     url = f"{base_url}/integration/revoke"
 
+    # Use the original revocation timestamp, not current time (C3 fix)
+    revoked_at = row["revoked_at"] or row["created_at"]
+
     payload = {
         "standard_version": _STANDARD_VERSION,
         "consent_ref": row["consent_ref"],
-        "revoked_at": revoked_at or now,
+        "revoked_at": revoked_at,
         "reason": reason,
         "correlation_id": row["correlation_id"],
     }
 
+    # Build headers with integration credential (C1 fix)
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    auth_header = config.get("integration_auth_header", "")
+    if auth_header:
+        headers["Authorization"] = auth_header
+
     try:
         async with httpx.AsyncClient(timeout=_DELIVERY_TIMEOUT) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(url, json=payload, headers=headers)
 
         if resp.status_code < 300:
-            body = resp.json()
+            # Guard against non-JSON 2xx responses (C2 fix)
+            try:
+                body = resp.json()
+            except (ValueError, KeyError):
+                body = {}
+
             if body.get("acknowledged"):
                 # Success — mark delivered
                 await db.execute(
@@ -241,10 +269,8 @@ async def queue_jv_revocation(
     4. If delivery fails, the background retry loop picks it up
     """
     cursor = await db.execute(
-        "SELECT ag.service_id, rd.id as existing_delivery "
+        "SELECT ag.service_id "
         "FROM authorization_grants ag "
-        "LEFT JOIN revocation_deliveries rd "
-        "  ON rd.consent_ref = ag.consent_ref AND rd.service_id = ag.service_id "
         "WHERE ag.consent_ref = ? AND ag.grant_status = 'active'",
         (consent_ref,),
     )
@@ -259,6 +285,9 @@ async def queue_jv_revocation(
             db, consent_ref, grant["service_id"], reason,
         )
         await db.commit()
+
+        if not correlation_id:
+            continue  # already queued
 
         # Attempt immediate delivery
         delivery_cursor = await db.execute(
