@@ -24,7 +24,7 @@ from agentcafe.cafe.passport import configure_passport, passport_router
 from agentcafe.cafe.router import close_http_client, configure_router, router as cafe_router
 from agentcafe.config import load_config
 from agentcafe.crypto import configure_crypto
-from agentcafe.db.engine import close_db, init_db
+from agentcafe.db.engine import close_db, get_db, init_db
 from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_artifact_keys, configure_keys, get_artifact_key_manager, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
@@ -32,6 +32,20 @@ from agentcafe.wizard.router import configure_wizard, wizard_router
 from agentcafe.cafe.mcp_adapter import mcp_server
 
 logger = logging.getLogger("agentcafe")
+
+
+async def _revocation_retry_loop() -> None:
+    """Background loop: retry queued revocation deliveries with exponential backoff."""
+    from agentcafe.cafe.integration import attempt_pending_deliveries
+    while True:
+        await asyncio.sleep(30)
+        try:
+            db = await get_db()
+            count = await attempt_pending_deliveries(db)
+            if count:
+                logger.info("Revocation retry: delivered %d queued revocations", count)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Revocation retry loop error")
 
 
 @asynccontextmanager
@@ -80,8 +94,19 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     else:
         logger.info("Passport mode: MVP (demo-passport only)")
     logger.info("MCP adapter available at /mcp")
+
+    # Start background revocation retry loop (ADR-031)
+    revocation_task = asyncio.create_task(_revocation_retry_loop())
+
     async with mcp_server.session_manager.run():
         yield
+
+    revocation_task.cancel()
+    try:
+        await revocation_task
+    except asyncio.CancelledError:
+        pass
+
     await close_http_client()
     await close_db()
 
