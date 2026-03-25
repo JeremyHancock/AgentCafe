@@ -350,6 +350,10 @@ async def dashboard_revoke(
     )
     await db.commit()
 
+    # Push revocation to jointly-verified services (ADR-031)
+    from agentcafe.cafe.integration import queue_jv_revocation
+    await queue_jv_revocation(db, policy_id, "human_revoked")
+
     return RedirectResponse(url="/dashboard?revoked=1", status_code=303)
 
 
@@ -1479,6 +1483,11 @@ async def tab_revoke(
         )
 
     await db.commit()
+
+    # Push revocation to jointly-verified services (ADR-031)
+    from agentcafe.cafe.integration import queue_jv_revocation
+    await queue_jv_revocation(db, card_id, "human_revoked")
+
     return RedirectResponse(url="/tab?action=revoked", status_code=303)
 
 

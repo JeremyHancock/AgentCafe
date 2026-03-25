@@ -34,6 +34,30 @@ from agentcafe.cafe.mcp_adapter import mcp_server
 logger = logging.getLogger("agentcafe")
 
 
+async def _revocation_retry_loop(db_path: str) -> None:
+    """Background loop: retry queued revocation deliveries with exponential backoff.
+
+    Uses its own DB connection to avoid concurrent access on the shared
+    singleton connection used by request handlers (C4 fix).
+    """
+    import aiosqlite  # pylint: disable=import-outside-toplevel
+    from agentcafe.cafe.integration import attempt_pending_deliveries  # pylint: disable=import-outside-toplevel
+    try:
+        db = await aiosqlite.connect(db_path)
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA foreign_keys = ON")
+        while True:
+            await asyncio.sleep(30)
+            try:
+                count = await attempt_pending_deliveries(db)
+                if count:
+                    logger.info("Revocation retry: delivered %d queued revocations", count)
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("Revocation retry loop error")
+    finally:
+        await db.close()
+
+
 @asynccontextmanager
 async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI lifespan protocol
     """Startup/shutdown for standalone Cafe (used by Docker and uvicorn CLI)."""
@@ -80,8 +104,19 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
     else:
         logger.info("Passport mode: MVP (demo-passport only)")
     logger.info("MCP adapter available at /mcp")
+
+    # Start background revocation retry loop (ADR-031)
+    revocation_task = asyncio.create_task(_revocation_retry_loop(cfg.db_path))
+
     async with mcp_server.session_manager.run():
         yield
+
+    revocation_task.cancel()
+    try:
+        await revocation_task
+    except asyncio.CancelledError:
+        pass
+
     await close_http_client()
     await close_db()
 

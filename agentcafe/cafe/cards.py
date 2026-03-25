@@ -810,6 +810,10 @@ async def revoke_card(
 
     await db.commit()
 
+    # Push revocation to jointly-verified services (ADR-031)
+    from agentcafe.cafe.integration import queue_jv_revocation
+    await queue_jv_revocation(db, card_id, "human_revoked")
+
     logger.info("Card %s revoked by user %s", card_id, user_id)
     return {"card_id": card_id, "status": "revoked", "revoked_at": now}
 
