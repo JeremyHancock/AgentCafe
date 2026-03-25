@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 8, 2026 (Phase 8.1 complete — Company Cards deployed, 311 tests, pylint 10.00/10. See `docs/strategy/strategic-review-briefing.md`)
+Last Updated: March 25, 2026 (Service Integration Standard complete — jointly-verified mode, per-request artifacts, revocation push delivery. 405 tests, pylint 10.00/10.)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -134,6 +134,22 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - MCP adapts to the Cafe — not the other way around (ADR-029)
 - 18 tests in `test_mcp_adapter.py`
 
+**Service Integration Standard — COMPLETE.** Jointly-verified mode for account-bearing services (ADR-030, ADR-031):
+- **PR 1: Jointly-verified proxy path** — `cafe/artifact.py` (canonical request hashing, per-request RS256 artifact signing), `cafe/binding.py` (identity binding resolution, human→service account mapping), `cafe/consent.py` (jointly-verified consent creates binding + grant), `cafe/cards.py` (card approval creates grant for JV services)
+  - Migration 0012: `integration_mode` column on proxy_configs, `human_service_accounts` table, `authorization_grants` table, `revocation_deliveries` table
+  - Separate artifact key pair (`art_` prefix) independent from Passport keys, both served via JWKS
+  - Gates 3-4 in `router.py`: binding resolution → artifact signing → `X-AgentCafe-Authorization` header on proxied requests
+  - Service-side artifact error translation (`_translate_service_artifact_error` in router.py)
+  - 45 tests in `test_service_integration.py`
+- **PR 2: Revocation push delivery** — `cafe/integration.py` (HM config, revocation queue/delivery/retry)
+  - Migration 0013: `correlation_id` column on revocation_deliveries
+  - Grant state machine: `active` → `revoke_queued` → `revoke_delivered`
+  - Inline delivery attempt on revocation + background retry loop (exponential backoff: 5s, 15s, 45s, 135s, 300s, max 10 attempts)
+  - Hooks in `pages.py` (dashboard policy revoke, tab card revoke) and `cards.py` (API card revoke)
+  - Background retry task in `main.py` lifespan (own DB connection, polls every 30s)
+  - 25 tests in `test_revocation_delivery.py`
+- **HM onboarding readiness:** Phase 2 answers sent (`docs/architecture/service-integration/phase-2-answers-for-hm.md`). AC infrastructure complete. Awaiting HM-side implementation (artifact validation, `/integration/revoke` endpoint, dual auth path).
+
 ## 6. Codebase Map
 
 ```
@@ -147,7 +163,7 @@ AgentCafe/
 │   │   ├── engine.py               # DB connection singleton (aiosqlite)
 │   │   ├── seed.py                 # Seeds demo data on startup
 │   │   ├── migrate.py              # Numbered SQL migration runner
-│   │   ├── migrations/             # 0001–0010 SQL migration files
+│   │   ├── migrations/             # 0001–0013 SQL migration files
 │   │   └── services/               # Demo service Menu JSONs + OpenAPI specs (loaded by seed.py)
 │   ├── cafe/
 │   │   ├── menu.py                 # Assembles locked Menu (incl. security_status)
@@ -158,6 +174,9 @@ AgentCafe/
 │   │   ├── consent.py              # Consent flow: initiate/approve, token exchange/refresh
 │   │   ├── cards.py                # Company Cards: request, approve, token, revoke, edit, report-spend
 │   │   ├── mcp_adapter.py          # MCP Server Adapter: 4 tools (search, get_details, request_card, invoke) at /mcp
+│   │   ├── artifact.py             # Per-request artifact: compute_request_hash, hash_human_id, sign_artifact
+│   │   ├── binding.py              # Identity binding: resolve_human_id, resolve_binding, BindingResult
+│   │   ├── integration.py          # Revocation push delivery: queue, deliver, retry, HM config
 │   │   ├── pages.py                # Jinja2 server-rendered pages (login, register, /authorize/, /activate, /enroll-passkey, /tab)
 │   │   └── wizard_pages.py         # Company wizard Jinja2 pages (login, register, onboard, services, admin)
 │   ├── wizard/                     # Company Onboarding Wizard
@@ -193,11 +212,14 @@ AgentCafe/
 │   ├── test_crypto.py              # AES-256-GCM encrypt/decrypt tests
 │   ├── test_cards.py              # Company Cards lifecycle, edit, Tab pages, budget, card suggestion tests
 │   ├── test_mcp_adapter.py        # MCP Server Adapter: 4 tools, request logging, analytics endpoint
+│   ├── test_service_integration.py # Service Integration Standard: artifact, binding, grants, consent/card JV (45 tests)
+│   ├── test_revocation_delivery.py # Revocation push delivery: queue, deliver, retry, backoff (25 tests)
 │   └── test_e2e.py                 # 11 cross-cutting E2E integration tests
 ├── docs/
 │   ├── architecture/
 │   │   ├── decisions.md            # ADR-001 through ADR-031
-│   │   └── passport/               # Passport V2: threat-model, v2-discussion, v2-spec
+│   │   ├── passport/               # Passport V2: threat-model, v2-discussion, v2-spec
+│   │   └── service-integration/    # 3 locked specs + HM phase-2 answers
 │   ├── planning/
 │   │   ├── development-plan.md     # Ordered phases with completion status
 │   │   └── webauthn-passkeys-plan.md # WebAuthn implementation plan (Sprints 1–4 complete)
@@ -227,6 +249,9 @@ AgentCafe/
 | Quarantine / suspension | **Real** | 7-day quarantine on new services (configurable via `QUARANTINE_DAYS`), instant suspension via admin endpoint |
 | MCP Server Adapter | **Real** | 4-tool LLM-native discovery at `/mcp`, request logging, admin analytics |
 | Passport signing keys | **Real** | RS256 asymmetric signing, JWKS endpoint, dual-key rotation, HS256 legacy fallback |
+| Jointly-verified mode | **Real** | Per-request RS256 artifact, identity binding, grant state machine, `X-AgentCafe-Authorization` header |
+| Revocation push delivery | **Real** | Queue + inline delivery + background retry (exponential backoff, 10 attempts max) |
+| Artifact key infrastructure | **Real** | Separate `art_`-prefixed key pair, served alongside Passport keys in JWKS |
 
 ## 8. How to Run
 
@@ -247,7 +272,7 @@ python -m agentcafe.main           # Starts Cafe (8000) + 3 demo backends (8001-
 # Menu:  http://127.0.0.1:8000/cafe/menu
 # Order: POST http://127.0.0.1:8000/cafe/order
 # API docs: http://127.0.0.1:8000/docs
-python -m pytest tests/ -v         # 335 tests passing
+python -m pytest tests/ -v         # 405 tests passing
 python -m pylint agentcafe/ tests/ --disable=C,R  # 10.00/10
 ```
 
@@ -277,7 +302,8 @@ python -m agentcafe.demo_agent --base-url https://agentcafe.io  # Against live s
 - **Wizard auth**: JWT session tokens signed with `PASSPORT_SIGNING_SECRET`, 8-hour expiry, `iss=agentcafe-wizard`. Draft ownership enforced on all endpoints.
 - **Passport V2 validation chain**: JWT decode → JTI revoked check → policy revoked_at check → tier check → scope check → authorization check.
 - **Test patterns**: `_MultiBackendTransport` for backend mocking, DB save/restore in E2E tests to avoid session-scoped interference.
-- **Decisions log**: See `docs/architecture/decisions.md` (ADR-001 through ADR-026).
+- **Jointly-verified proxy path**: Gate 3 resolves identity binding + grant, Gate 4 signs per-request artifact after path resolution. `_jv_binding`, `_jv_consent_ref`, `_jv_ac_human_id` carry state between the split gates.
+- **Decisions log**: See `docs/architecture/decisions.md` (ADR-001 through ADR-031).
 
 ## 9.1 Known Limitations
 

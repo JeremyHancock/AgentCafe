@@ -2,7 +2,7 @@
 
 **Date:** March 11, 2026
 **Author:** Cascade
-**Status:** Draft — for adversarial review
+**Status:** Locked and implemented (March 25, 2026). Code: `cafe/router.py` (Gates 3-4), `cafe/artifact.py`, `cafe/binding.py`. Tests: `tests/test_service_integration.py` (45 tests).
 **Parent:** Service Integration Standard Briefing (approved)
 **Implements:** Briefing Artifact 0
 **Depends on:** Nothing (first in sequence, alongside Artifact 1)

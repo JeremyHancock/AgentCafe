@@ -1,7 +1,7 @@
 # AgentCafe Development Plan
 
-**Current Status:** Phase 8.4 complete (Open Source Prep) — deployed to Fly.io, live at agentcafe.io, CI/CD green. 335 tests, pylint 10.00/10. Legacy Next.js dashboard removed. README rewritten, CONTRIBUTING.md added, documentation audit complete.
-**Last Updated:** March 24, 2026
+**Current Status:** Service Integration Standard complete — jointly-verified mode, per-request artifacts, revocation push delivery implemented. HM onboarding ready. 405 tests, pylint 10.00/10. Deployed to Fly.io, live at agentcafe.io, CI/CD green.
+**Last Updated:** March 25, 2026
 
 **MVP Success Criteria**
 We can run end-to-end locally:
@@ -162,7 +162,7 @@ We can run end-to-end locally:
 - 🔜 Alerting on 5xx spikes or service suspensions (email/Slack)
 
 **Beta Success Criteria**
-- At least 1 real service onboarded through the wizard (Agent Memory — see Phase 8)
+- At least 1 real service onboarded through the wizard (Human Memory — see Service Integration Standard above)
 - At least 3 external AI agents successfully complete a write action using only the public Menu + consent flow
 - Zero security incidents in first 48 hours
 - <5 % of agent requests rejected for unexpected reasons
@@ -183,7 +183,7 @@ The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identifi
   - Budget tracking: `report-spend` endpoint, budget enforcement on token issuance, period reset
   - 40 tests covering card lifecycle, edit constraints, Tab pages, card suggestions, budget tracking
   - See `docs/planning/company-cards-plan.md` for full design
-- ⬜ **8.2 First Real Service: Agent Memory** — The Cafe's first real onboarded service. Human-owned persistent state for agents (key-value + document storage). Developed as a **separate project/repo** with its own API and deployment. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. Creates the bootstrap traffic wedge. See §8.3 of strategic briefing.
+- 🔜 **8.2 First Real Service: Human Memory** — The Cafe's first real onboarded service and first jointly-verified integration. Developed as a **separate project/repo** with its own API and deployment. AC-side infrastructure complete (Service Integration Standard). HM-side implementation in progress: artifact validation, `/integration/revoke` endpoint, dual auth path. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. Creates the bootstrap traffic wedge.
 - ✅ **8.3 MCP Server Adapter** — 4-tool LLM-native discovery pattern (`cafe.search`, `cafe.get_details`, `cafe.request_card`, `cafe.invoke`) via remote Streamable HTTP at `/mcp`. Stateless transport via official `mcp` SDK. MCP adapts to the Cafe — not the other way around (ADR-029).
   - `cafe/mcp_adapter.py`: FastMCP server with 4 tools, mounted at `/mcp` in main.py
   - `cafe.search`: keyword search across Menu, returns summaries only (service_id, action_id, name, short_description, risk_tier, relevance)
@@ -193,6 +193,13 @@ The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identifi
   - 18 tests in `test_mcp_adapter.py`
   - See `docs/strategy/strategic-review-briefing.md` §8.2 + ADR-029
 - ✅ **8.4 Open Source Prep** — README rewritten for public launch (MCP endpoint, Company Cards, env vars table, updated project layout). CONTRIBUTING.md added. Legacy Next.js `dashboard/` removed from repo (sample-spec.yaml preserved in `examples/`). AGENT_CONTEXT.md updated (removed dashboard, added MCP, fixed test counts). No hardcoded secrets or local paths found. Documentation audit complete.
+
+**Service Integration Standard — COMPLETE** (ADR-030, ADR-031. Specs locked March 14, implementation March 25.)
+- ✅ **PR 1: Jointly-verified proxy path** — `cafe/artifact.py` (canonical request hashing, per-request RS256 artifact signing, 30s TTL), `cafe/binding.py` (identity binding resolution, human→service account mapping), migration 0012 (`integration_mode` column, `human_service_accounts`, `authorization_grants`, `revocation_deliveries` tables). Separate artifact key pair (`art_` prefix), JWKS serves both. Gates 3-4 in `router.py`: binding resolution → artifact signing → `X-AgentCafe-Authorization` header. Consent + Card approval create grants for JV services. Service-side artifact error translation. 45 tests in `test_service_integration.py`. 380 total passing.
+- ✅ **PR 2: Revocation push delivery** — `cafe/integration.py` (HM config, revocation queue/delivery/retry with exponential backoff: 5s, 15s, 45s, 135s, 300s, max 10 attempts). Migration 0013 (`correlation_id` column). Grant state machine: `active` → `revoke_queued` → `revoke_delivered`. Inline delivery + background retry loop in `main.py` lifespan (own DB connection, polls every 30s). Hooks in `pages.py` and `cards.py`. 25 tests in `test_revocation_delivery.py`. 405 total passing.
+- ✅ **HM Phase 2 answers** — Response to HM team's 6 integration questions (`docs/architecture/service-integration/phase-2-answers-for-hm.md`). All values confirmed: `service_id=human-memory`, 5 action_ids, JWKS endpoint, artifact claims, credential format.
+- ⬜ **HM onboarding** — AC infrastructure complete. Awaiting HM-side implementation: artifact validation, `/integration/revoke` endpoint, dual auth path (`X-AgentCafe-Authorization` present → artifact, absent → PAT). Proxy config rows and credential exchange happen collaboratively during onboarding.
+- Deferred: `revoke_honored` state, `GET /integration/grant-status` reconciliation, Company Card fan-out, `service_integration_configs` table, deferred binding background resolver, capability wizard UI.
 
 **Phase 9: Scale & Harden** (deferred — post-beta, when real traffic justifies it)
 - ⬜ SQLite → PostgreSQL migration (Alembic, connection string swap, test all migrations)

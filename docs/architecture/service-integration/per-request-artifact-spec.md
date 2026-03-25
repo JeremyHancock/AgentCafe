@@ -2,7 +2,7 @@
 
 **Date:** March 11, 2026
 **Author:** Cascade
-**Status:** Draft — for adversarial review
+**Status:** Locked and implemented (March 25, 2026). Code: `cafe/artifact.py` (sign_artifact, compute_request_hash), `keys.py` (artifact key management, `art_` prefix). Tests: `tests/test_service_integration.py`.
 **Parent:** Service Integration Standard Briefing (approved)
 **Implements:** Briefing Artifact 1
 **Depends on:** Nothing (first in sequence)

@@ -39,7 +39,7 @@ AgentCafe's proxy infrastructure handles a complete agent lifecycle for **statel
 | **Backend credential encryption** | Shipped | AES-256-GCM via `crypto.py` |
 | **Deployment** | Live | Fly.io, agentcafe.io, CI/CD via GitHub Actions |
 
-**Test coverage:** 271 tests passing, pylint 10.00/10.
+**Test coverage:** 405 tests passing, pylint 10.00/10. (271 at time of briefing; 70 added by Service Integration Standard.)
 
 ### 1.2 How the Proxy Works Today
 
@@ -73,13 +73,13 @@ This is the core gap. The current proxy model works perfectly for services where
 
 | Item | Phase | Status |
 |------|-------|--------|
-| **MCP Adapter** | 8.3 | Designed (ADR-029, 4-tool pattern), not built |
+| **MCP Adapter** | 8.3 | **Shipped** (`cafe/mcp_adapter.py` — 4-tool pattern, ADR-029) |
 | **RS256 signing keys** | 6 | **Shipped** (`keys.py` — RS256 signing, JWKS endpoint, dual-key rotation, HS256 legacy fallback) |
-| **Service Integration Standard** | — | **Not yet designed.** This document. |
-| **Identity claim forwarding** | — | Not designed |
-| **Account linking protocol** | — | Not designed |
-| **Revocation propagation** | — | Not designed |
-| **Consent text from services** | — | Not designed |
+| **Service Integration Standard** | — | **Shipped** (March 25, 2026). 3 locked specs + implementation across 2 PRs. See ADR-031. |
+| **Identity claim forwarding** | — | **Shipped** — per-request artifact with `sub`, `ac_human_id_hash`, `consent_ref` claims (`cafe/artifact.py`) |
+| **Account linking protocol** | — | **Shipped** — `human_service_accounts` + `authorization_grants` tables, `cafe/binding.py` |
+| **Revocation propagation** | — | **Shipped** — `cafe/integration.py`, inline delivery + background retry, exponential backoff |
+| **Consent text from services** | — | Deferred (AC-authored consent text used for all services, including JV) |
 
 ---
 

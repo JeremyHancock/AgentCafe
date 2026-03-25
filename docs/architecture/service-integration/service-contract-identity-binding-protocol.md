@@ -2,7 +2,7 @@
 
 **Date:** March 11, 2026
 **Author:** Cascade
-**Status:** Draft — for adversarial review
+**Status:** Locked and implemented (March 25, 2026). Code: `cafe/binding.py` (resolve_binding, resolve_human_id), `cafe/integration.py` (revocation delivery), `cafe/consent.py` + `cafe/cards.py` (grant creation). Tests: `tests/test_service_integration.py`, `tests/test_revocation_delivery.py`.
 **Parent:** Service Integration Standard Briefing (approved)
 **Implements:** Briefing Artifact 2
 **Depends on:** Nothing (first in sequence, alongside Artifacts 0 and 1)

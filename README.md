@@ -126,6 +126,8 @@ You'll be prompted to create an account (or log in), then you'll see the consent
 - **Passport V2** — Two-tier JWT system with RS256 signing, JWKS endpoint (`/.well-known/jwks.json`), risk-tier ceilings, identity verification, instant revocation
 - **Company Cards** — Standing multi-action policies with budget, duration, and scope constraints
 - **MCP Server Adapter** — 4-tool LLM-native discovery via Streamable HTTP at `/mcp`
+- **Jointly-verified mode** — For account-bearing services (e.g., Human Memory). Per-request RS256 artifact (30s TTL) via `X-AgentCafe-Authorization` header. Service independently verifies who authorized the request, what they authorized, and that the artifact is bound to the specific request body.
+- **Revocation delivery** — When a human revokes, the grant transitions immediately (`active` → `revoke_queued` → `revoke_delivered`). Inline delivery attempt + background retry with exponential backoff. 30s artifact TTL as backstop.
 - **WebAuthn passkeys** — Phishing-resistant auth for humans. Passkey required for consent approval. Grace period auto-disables password login.
 - **Consent UI** — Server-rendered pages for authorization (login, review, approve/decline, activation codes)
 - **Company Onboarding Wizard** — OpenAPI spec → guided review → one-click publish
@@ -150,15 +152,18 @@ AgentCafe/
 │   │   ├── human.py        # Human accounts: register, login, passkeys
 │   │   ├── cards.py        # Company Cards: request, approve, token, revoke, budget
 │   │   ├── mcp_adapter.py  # MCP Server: 4 tools at /mcp
+│   │   ├── artifact.py     # Per-request artifact signing (RS256, 30s TTL)
+│   │   ├── binding.py      # Identity binding resolution (human → service account)
+│   │   ├── integration.py  # Revocation push delivery + HM integration config
 │   │   ├── pages.py        # Jinja2 pages (login, consent, dashboard, tab)
 │   │   └── wizard_pages.py # Company wizard pages (onboard, services, admin)
 │   ├── wizard/             # Onboarding Wizard (spec parser, AI enricher, publisher)
 │   ├── templates/          # Jinja2 templates
-│   ├── db/                 # SQLite schema, migrations (0001–0011), seed data
+│   ├── db/                 # SQLite schema, migrations (0001–0013), seed data
 │   ├── demo_backends/      # 3 demo services (hotel, lunch, home)
 │   └── demo_agent/         # CLI demo agent (9-step lifecycle)
 ├── examples/               # Integration snippets (GPT, Claude, sample spec)
-├── tests/                  # 335 tests
+├── tests/                  # 405 tests
 ├── docs/                   # ADRs, specs, planning, strategy, reviews
 ├── Dockerfile              # Multi-stage build, hardened slim image, non-root
 ├── docker-compose.yml      # Cafe + 3 demo backends
@@ -191,5 +196,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-**Status:** Live at [agentcafe.io](https://agentcafe.io). 335 tests, pylint 10.00/10. CI/CD via GitHub Actions → Fly.io.  
+**Status:** Live at [agentcafe.io](https://agentcafe.io). 405 tests, pylint 10.00/10. CI/CD via GitHub Actions → Fly.io.  
 **Built for:** Human-authorized delegation to autonomous agents
