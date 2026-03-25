@@ -128,7 +128,8 @@ async def place_order(req: OrderRequest):
     cursor = await db.execute(
         """SELECT backend_url, backend_path, backend_method, backend_auth_header,
                   scope, human_auth_required, rate_limit, risk_tier,
-                  human_identifier_field, quarantine_until, suspended_at
+                  human_identifier_field, quarantine_until, suspended_at,
+                  integration_mode
            FROM proxy_configs
            WHERE service_id = ? AND action_id = ?""",
         (req.service_id, req.action_id),
@@ -152,6 +153,7 @@ async def place_order(req: OrderRequest):
     _rate_limit = row["rate_limit"]
     risk_tier = row["risk_tier"] if "risk_tier" in row.keys() else "medium"
     human_identifier_field = row["human_identifier_field"] if "human_identifier_field" in row.keys() else None
+    integration_mode = row["integration_mode"] if "integration_mode" in row.keys() else None
 
     # --- GATE 0: Service-level blocks (ADR-025) ---
     suspended_at = row["suspended_at"] if "suspended_at" in row.keys() else None
@@ -346,6 +348,43 @@ async def place_order(req: OrderRequest):
             headers={"Retry-After": str(retry_after)},
         )
 
+    # --- GATE 3-4: Jointly-verified mode (ADR-031) ---
+    artifact_token = None
+    jv_body_bytes = None
+    if integration_mode == "jointly_verified" and _state.use_real_passport:
+        from agentcafe.cafe.artifact import compute_request_hash, sign_artifact
+        from agentcafe.cafe.binding import resolve_binding, resolve_human_id
+
+        # Extract human identity from already-validated Passport
+        try:
+            passport_claims = jwt.decode(req.passport, options={"verify_signature": False})
+        except Exception as exc:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "passport_decode_failed", "message": "Could not decode Passport claims."},
+            ) from exc
+
+        ac_human_id = await resolve_human_id(db, passport_claims["sub"])
+        consent_ref = passport_claims.get("policy_id") or passport_claims.get("card_id", "")
+
+        binding = await resolve_binding(db, ac_human_id, req.service_id, consent_ref)
+
+        # Gate 4: Sign per-request artifact
+        jti = str(uuid.uuid4())
+        request_hash, jv_body_bytes = compute_request_hash(
+            backend_method, backend_path, req.inputs,
+        )
+        artifact_token = sign_artifact(
+            service_id=req.service_id,
+            service_account_id=binding.service_account_id,
+            action_id=req.action_id,
+            consent_ref=consent_ref,
+            ac_human_id=ac_human_id,
+            identity_binding=binding.identity_binding,
+            request_hash=request_hash,
+            jti=jti,
+        )
+
     # --- PROXY: Forward to backend ---
     # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])
     resolved_path = backend_path
@@ -380,24 +419,37 @@ async def place_order(req: OrderRequest):
 
     target_url = f"{backend_url}{resolved_path}"
 
-    headers = {}
-    if backend_auth_header:
-        headers["Authorization"] = backend_auth_header
-
     start_time = datetime.now(timezone.utc)
 
     try:
         client = await get_http_client()
-        if backend_method.upper() == "GET":
-            resp = await client.get(target_url, headers=headers)
-        elif backend_method.upper() == "POST":
-            resp = await client.post(target_url, json=req.inputs, headers=headers)
-        elif backend_method.upper() == "PUT":
-            resp = await client.put(target_url, json=req.inputs, headers=headers)
-        elif backend_method.upper() == "DELETE":
-            resp = await client.delete(target_url, headers=headers)
+        if artifact_token and jv_body_bytes is not None:
+            # Jointly-verified mode: canonical body bytes + artifact header
+            proxy_headers: dict[str, str] = {"Content-Type": "application/json"}
+            if backend_auth_header:
+                proxy_headers["Authorization"] = backend_auth_header
+            proxy_headers["X-AgentCafe-Authorization"] = f"Bearer {artifact_token}"
+            resp = await client.request(
+                method=backend_method.upper(),
+                url=target_url,
+                content=jv_body_bytes,
+                headers=proxy_headers,
+            )
         else:
-            resp = await client.post(target_url, json=req.inputs, headers=headers)
+            # Standard mode — unchanged
+            headers: dict[str, str] = {}
+            if backend_auth_header:
+                headers["Authorization"] = backend_auth_header
+            if backend_method.upper() == "GET":
+                resp = await client.get(target_url, headers=headers)
+            elif backend_method.upper() == "POST":
+                resp = await client.post(target_url, json=req.inputs, headers=headers)
+            elif backend_method.upper() == "PUT":
+                resp = await client.put(target_url, json=req.inputs, headers=headers)
+            elif backend_method.upper() == "DELETE":
+                resp = await client.delete(target_url, headers=headers)
+            else:
+                resp = await client.post(target_url, json=req.inputs, headers=headers)
     except httpx.RequestError as exc:
         await _audit_log(db, req, "backend_error", 502)
         raise HTTPException(
@@ -406,6 +458,15 @@ async def place_order(req: OrderRequest):
         ) from exc
 
     latency_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+
+    # Translate service-side artifact errors for jointly-verified mode
+    if artifact_token and resp.status_code >= 400:
+        svc_body = _try_parse_json(resp)
+        svc_error = svc_body.get("error", "") if svc_body else ""
+        translated = _translate_service_artifact_error(resp.status_code, svc_error)
+        if translated:
+            await _audit_log(db, req, translated["error"], translated["status"], latency_ms)
+            raise HTTPException(status_code=translated["status"], detail=translated)
 
     # Audit log
     outcome = "success" if 200 <= resp.status_code < 400 else "backend_error"
@@ -628,6 +689,45 @@ async def suspend_service(
 
     logger.warning("Service %s suspended: %s", service_id, req.reason or "(no reason)")
     return {"service_id": service_id, "suspended_at": now, "reason": req.reason}
+
+
+# ---------------------------------------------------------------------------
+# Service artifact error translation (jointly-verified mode)
+# ---------------------------------------------------------------------------
+
+def _try_parse_json(resp: httpx.Response) -> dict | None:
+    """Best-effort JSON parse of an httpx response."""
+    try:
+        return resp.json()
+    except (ValueError, KeyError):
+        return None
+
+
+_SERVICE_ARTIFACT_ERROR_MAP: dict[str, dict] = {
+    "artifact_missing": {"status": 502, "error": "integration_error", "message": "Service did not accept the authorization artifact."},
+    "artifact_invalid": {"status": 502, "error": "integration_error", "message": "Service rejected the authorization artifact signature."},
+    "artifact_expired": {"status": 502, "error": "integration_error", "message": "Authorization artifact expired before reaching the service."},
+    "artifact_audience_mismatch": {"status": 502, "error": "integration_error", "message": "Service rejected the authorization artifact (audience mismatch)."},
+    "artifact_issuer_mismatch": {"status": 502, "error": "integration_error", "message": "Service rejected the authorization artifact (issuer mismatch)."},
+    "artifact_subject_unknown": {"status": 403, "error": "account_not_found_on_service", "message": "The service does not recognize the account associated with your authorization."},
+    "request_hash_mismatch": {"status": 502, "error": "integration_error", "message": "Request integrity check failed between Cafe and service."},
+    "artifact_version_unsupported": {"status": 502, "error": "integration_version_mismatch", "message": "Service does not support this version of the integration standard."},
+    "artifact_replay_detected": {"status": 409, "error": "duplicate_request", "message": "This request has already been processed."},
+}
+
+
+def _translate_service_artifact_error(status_code: int, error_code: str) -> dict | None:
+    """Translate a service-side artifact error into an agent-facing error.
+
+    Returns None if the error is not artifact-related (pass through normally).
+    """
+    entry = _SERVICE_ARTIFACT_ERROR_MAP.get(error_code)
+    if entry:
+        return dict(entry)
+    # Map generic 401/403 from the service when we sent an artifact
+    if status_code == 401:
+        return {"status": 502, "error": "integration_error", "message": "Service rejected the authorization artifact."}
+    return None
 
 
 # ---------------------------------------------------------------------------

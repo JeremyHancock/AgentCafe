@@ -26,7 +26,7 @@ from agentcafe.config import load_config
 from agentcafe.crypto import configure_crypto
 from agentcafe.db.engine import close_db, init_db
 from agentcafe.db.seed import seed_demo_data
-from agentcafe.keys import configure_keys, get_key_manager
+from agentcafe.keys import configure_artifact_keys, configure_keys, get_artifact_key_manager, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
 from agentcafe.wizard.router import configure_wizard, wizard_router
 from agentcafe.cafe.mcp_adapter import mcp_server
@@ -52,6 +52,10 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         rsa_private_key_pem=cfg.passport_rsa_private_key,
         rsa_key_file=cfg.passport_rsa_key_file,
         legacy_hs256_secret=cfg.passport_signing_secret,
+    )
+    configure_artifact_keys(
+        rsa_private_key_pem=cfg.artifact_rsa_private_key,
+        rsa_key_file=cfg.artifact_rsa_key_file,
     )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(
@@ -132,8 +136,10 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
 
     @app.get("/.well-known/jwks.json")
     async def jwks():
-        """Public JWKS endpoint — agents and verifiers use this to validate Passport JWTs."""
-        return get_key_manager().jwks()
+        """Public JWKS endpoint — serves both Passport and artifact public keys."""
+        passport_keys = get_key_manager().jwks()["keys"]
+        artifact_keys = get_artifact_key_manager().jwks()["keys"]
+        return {"keys": passport_keys + artifact_keys}
 
     return app
 
@@ -183,6 +189,10 @@ async def main() -> None:
         rsa_private_key_pem=cfg.passport_rsa_private_key,
         rsa_key_file=cfg.passport_rsa_key_file,
         legacy_hs256_secret=cfg.passport_signing_secret,
+    )
+    configure_artifact_keys(
+        rsa_private_key_pem=cfg.artifact_rsa_private_key,
+        rsa_key_file=cfg.artifact_rsa_key_file,
     )
     configure_passport(cfg.passport_signing_secret, cfg.issuer_api_key)
     configure_human(

@@ -1,12 +1,13 @@
-"""RSA key management for Passport signing (RS256).
+"""RSA key management for Passport and artifact signing (RS256).
 
 Supports:
 - Auto-generation for development (ephemeral key pair per startup)
-- PEM-encoded private key via env var (PASSPORT_RSA_PRIVATE_KEY)
-- PEM file path via env var (PASSPORT_RSA_KEY_FILE)
+- PEM-encoded private key via env var (PASSPORT_RSA_PRIVATE_KEY / ARTIFACT_RSA_PRIVATE_KEY)
+- PEM file path via env var (PASSPORT_RSA_KEY_FILE / ARTIFACT_RSA_KEY_FILE)
 - JWKS endpoint serving public keys for external verification
-- Key ID (kid) derived from public key thumbprint
+- Key ID (kid) derived from public key thumbprint, with optional prefix
 - Dual-key rotation (sign with current, verify with current + previous)
+- Separate key pairs for Passports and per-request artifacts (ADR-031)
 """
 
 from __future__ import annotations
@@ -39,12 +40,17 @@ class KeyEntry:
 
 
 class PassportKeyManager:
-    """Manages RSA key pairs for Passport JWT signing and verification."""
+    """Manages RSA key pairs for JWT signing and verification.
 
-    def __init__(self):
+    Used for both Passport keys and artifact keys — distinguished by *kid_prefix*.
+    Passport keys use no prefix (backward compat); artifact keys use ``"art_"``.
+    """
+
+    def __init__(self, kid_prefix: str = ""):
         self._current: KeyEntry | None = None
         self._previous: KeyEntry | None = None
         self._legacy_hs256_secret: str = ""
+        self._kid_prefix = kid_prefix
 
     @property
     def current_key(self) -> KeyEntry:
@@ -70,7 +76,7 @@ class PassportKeyManager:
         if not isinstance(private_key, RSAPrivateKey):
             raise ValueError("Key is not an RSA private key")
         public_key = private_key.public_key()
-        kid = _compute_kid(public_key)
+        kid = self._kid_prefix + _compute_kid(public_key)
 
         # Rotate: current becomes previous
         if self._current:
@@ -82,7 +88,7 @@ class PassportKeyManager:
         """Generate a fresh 2048-bit RSA key pair (suitable for development)."""
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         public_key = private_key.public_key()
-        kid = _compute_kid(public_key)
+        kid = self._kid_prefix + _compute_kid(public_key)
 
         if self._current:
             self._previous = self._current
@@ -108,11 +114,17 @@ class PassportKeyManager:
 # ---------------------------------------------------------------------------
 
 _key_manager = PassportKeyManager()
+_artifact_key_manager = PassportKeyManager(kid_prefix="art_")
 
 
 def get_key_manager() -> PassportKeyManager:
-    """Return the module-level key manager singleton."""
+    """Return the module-level Passport key manager singleton."""
     return _key_manager
+
+
+def get_artifact_key_manager() -> PassportKeyManager:
+    """Return the module-level artifact key manager singleton (``art_`` prefix)."""
+    return _artifact_key_manager
 
 
 def configure_keys(
@@ -150,13 +162,52 @@ def configure_keys(
     return _key_manager
 
 
+def configure_artifact_keys(
+    rsa_private_key_pem: str = "",
+    rsa_key_file: str = "",
+) -> PassportKeyManager:
+    """Initialize the artifact key manager (separate key pair from Passports).
+
+    Priority is the same as :func:`configure_keys`:
+    1. *rsa_private_key_pem* (``ARTIFACT_RSA_PRIVATE_KEY``)
+    2. *rsa_key_file* (``ARTIFACT_RSA_KEY_FILE``)
+    3. Auto-generate (development mode)
+    """
+    if rsa_private_key_pem:
+        _artifact_key_manager.load_from_pem(rsa_private_key_pem)
+        logger.info("Artifact signing: RS256 (key from environment variable)")
+    elif rsa_key_file:
+        with open(rsa_key_file, encoding="utf-8") as fh:
+            _artifact_key_manager.load_from_pem(fh.read())
+        logger.info("Artifact signing: RS256 (key from file: %s)", rsa_key_file)
+    else:
+        _artifact_key_manager.generate()
+        logger.warning(
+            "Artifact signing: RS256 with auto-generated key — NOT for production. "
+            "Set ARTIFACT_RSA_PRIVATE_KEY or ARTIFACT_RSA_KEY_FILE for production use."
+        )
+    return _artifact_key_manager
+
+
 # ---------------------------------------------------------------------------
-# Sign / decode helpers (used by passport.py and consent.py)
+# Sign / decode helpers (used by passport.py, consent.py, artifact.py)
 # ---------------------------------------------------------------------------
 
 def sign_passport_token(payload: dict) -> str:
     """Sign a passport payload with RS256, embedding the *kid* in the header."""
     km = get_key_manager()
+    entry = km.current_key
+    return jwt.encode(
+        payload,
+        entry.private_key,
+        algorithm="RS256",
+        headers={"kid": entry.kid},
+    )
+
+
+def sign_artifact_token(payload: dict) -> str:
+    """Sign a per-request artifact payload with RS256 using the artifact key pair."""
+    km = get_artifact_key_manager()
     entry = km.current_key
     return jwt.encode(
         payload,
