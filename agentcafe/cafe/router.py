@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from agentcafe.cafe.menu import get_full_menu
 from agentcafe.cafe.passport import validate_passport_jwt
+from agentcafe.keys import decode_passport_token
 from agentcafe.cafe.policy import check_rate_limit, validate_input_types
 from agentcafe.crypto import decrypt
 from agentcafe.db.engine import get_db
@@ -348,42 +349,33 @@ async def place_order(req: OrderRequest):
             headers={"Retry-After": str(retry_after)},
         )
 
-    # --- GATE 3-4: Jointly-verified mode (ADR-031) ---
+    # --- GATE 3: Jointly-verified identity binding (ADR-031) ---
     artifact_token = None
     jv_body_bytes = None
+    _jv_binding = None
+    _jv_consent_ref = None
+    _jv_ac_human_id = None
     if integration_mode == "jointly_verified" and _state.use_real_passport:
-        from agentcafe.cafe.artifact import compute_request_hash, sign_artifact
         from agentcafe.cafe.binding import resolve_binding, resolve_human_id
 
-        # Extract human identity from already-validated Passport
+        # Re-decode with full validation (Passport already passed Gate 1a)
         try:
-            passport_claims = jwt.decode(req.passport, options={"verify_signature": False})
+            passport_claims = decode_passport_token(req.passport)
         except Exception as exc:
             raise HTTPException(
                 status_code=401,
                 detail={"error": "passport_decode_failed", "message": "Could not decode Passport claims."},
             ) from exc
 
-        ac_human_id = await resolve_human_id(db, passport_claims["sub"])
-        consent_ref = passport_claims.get("policy_id") or passport_claims.get("card_id", "")
+        _jv_ac_human_id = await resolve_human_id(db, passport_claims["sub"])
+        _jv_consent_ref = passport_claims.get("policy_id") or passport_claims.get("card_id")
+        if not _jv_consent_ref:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "missing_consent_ref", "message": "Jointly-verified actions require a policy_id or card_id in the Passport."},
+            )
 
-        binding = await resolve_binding(db, ac_human_id, req.service_id, consent_ref)
-
-        # Gate 4: Sign per-request artifact
-        jti = str(uuid.uuid4())
-        request_hash, jv_body_bytes = compute_request_hash(
-            backend_method, backend_path, req.inputs,
-        )
-        artifact_token = sign_artifact(
-            service_id=req.service_id,
-            service_account_id=binding.service_account_id,
-            action_id=req.action_id,
-            consent_ref=consent_ref,
-            ac_human_id=ac_human_id,
-            identity_binding=binding.identity_binding,
-            request_hash=request_hash,
-            jti=jti,
-        )
+        _jv_binding = await resolve_binding(db, _jv_ac_human_id, req.service_id, _jv_consent_ref)
 
     # --- PROXY: Forward to backend ---
     # Resolve path parameters from inputs (e.g., {room_id} → inputs["room_id"])
@@ -415,6 +407,25 @@ async def place_order(req: OrderRequest):
                 "message": f"Required path parameters not provided: {', '.join(unresolved)}",
                 "fields": unresolved,
             },
+        )
+
+    # --- GATE 4: Sign per-request artifact (after path resolution) ---
+    if _jv_binding is not None:
+        from agentcafe.cafe.artifact import compute_request_hash, sign_artifact
+
+        jti = str(uuid.uuid4())
+        request_hash, jv_body_bytes = compute_request_hash(
+            backend_method, resolved_path, req.inputs,
+        )
+        artifact_token = sign_artifact(
+            service_id=req.service_id,
+            service_account_id=_jv_binding.service_account_id,
+            action_id=req.action_id,
+            consent_ref=_jv_consent_ref,
+            ac_human_id=_jv_ac_human_id,
+            identity_binding=_jv_binding.identity_binding,
+            request_hash=request_hash,
+            jti=jti,
         )
 
     target_url = f"{backend_url}{resolved_path}"
