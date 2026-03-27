@@ -78,7 +78,7 @@
 
     function doPasskeyLogin() {
         var email = document.getElementById('passkey-email').value.trim();
-        var nextUrl = (document.getElementById('next-url') || {}).value || '/';
+        var nextUrl = (document.getElementById('next-url') || {}).value || '/tab';
         var btn = document.getElementById('passkey-btn');
         btn.disabled = true;
         btn.textContent = 'Waiting for passkey...';

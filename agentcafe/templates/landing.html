@@ -341,6 +341,8 @@
     <div class="header">
         <a href="/" class="logo">☕ AgentCafe</a>
         <div class="header-links">
+            <a href="/login">Sign in</a>
+            <a href="/services/register">List your service</a>
             <a href="https://github.com/JeremyHancock/AgentCafe" target="_blank">GitHub</a>
         </div>
     </div>
@@ -352,7 +354,8 @@
             open a Tab, and place orders — with a human in the loop for anything that matters.
         </p>
         <div class="hero-actions">
-            <a href="https://github.com/JeremyHancock/AgentCafe" class="btn btn-primary" target="_blank">View on GitHub</a>
+            <a href="/login" class="btn btn-primary">Sign in</a>
+            <a href="/services/register" class="btn btn-outline">List your service</a>
         </div>
     </div>
 
@@ -361,18 +364,51 @@
         <div class="steps">
             <div class="step">
                 <div class="step-num">1</div>
-                <h3>Browse the Menu</h3>
-                <p>Your agent walks in and checks what's available — hotels, food delivery, home services, and whatever gets added next.</p>
+                <h3>Connect via MCP</h3>
+                <p>Your AI agent connects to AgentCafe through the Model Context Protocol endpoint. No SDK required — just point and go.</p>
             </div>
             <div class="step">
                 <div class="step-num">2</div>
-                <h3>Open a Tab</h3>
-                <p>Reading is free — agents open a Tab instantly. Want to book something? Your human approves it first.</p>
+                <h3>Browse the Menu</h3>
+                <p>Your agent checks what's available — hotels, food delivery, home services, and whatever gets added next.</p>
             </div>
             <div class="step">
                 <div class="step-num">3</div>
+                <h3>Human Approves</h3>
+                <p>Want to book something? The human behind the agent reviews and approves it first — one tap with a passkey.</p>
+            </div>
+            <div class="step">
+                <div class="step-num">4</div>
                 <h3>Place an Order</h3>
                 <p>The Cafe validates every request, proxies it to the backend, and logs the whole thing. Two checks on every order.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>For humans</h2>
+        <div class="steps" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+            <div class="step">
+                <h3>Stay in control</h3>
+                <p>Every action your agent takes on a real service needs your approval. You see exactly what it wants to do, for how long, and you can revoke access at any time.</p>
+            </div>
+            <div class="step">
+                <h3>Manage your Tab</h3>
+                <p>Company Cards give your agent standing access to services you trust. Set budgets, exclude actions, and monitor usage from your dashboard.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>For companies</h2>
+        <div class="steps" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+            <div class="step">
+                <h3>List your API</h3>
+                <p>Bring your OpenAPI spec and the onboarding wizard generates your Menu entry, configures auth, and sets risk tiers — live in minutes.</p>
+            </div>
+            <div class="step">
+                <h3>Reach every agent</h3>
+                <p>Any MCP-compatible AI agent can discover and use your service. No SDK integration, no per-agent onboarding. Just list it on the Menu.</p>
             </div>
         </div>
     </div>
