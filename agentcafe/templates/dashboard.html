@@ -76,14 +76,6 @@
     .section-label:first-of-type {
         margin-top: 0;
     }
-    .logout-link {
-        font-size: 13px;
-        color: var(--text-muted);
-        text-decoration: none;
-    }
-    .logout-link:hover {
-        color: var(--danger);
-    }
 </style>
 {% endblock %}
 
@@ -93,7 +85,6 @@
         <h1>Your Policies</h1>
         <p class="meta">Keep tabs on what your agents can do.</p>
     </div>
-    <a href="/logout" class="logout-link">Sign out</a>
 </div>
 
 {% if success_message %}
@@ -108,12 +99,16 @@
         <span class="policy-service">{{ p.service_name }}</span>
         <span class="badge badge-{{ p.risk_tier }}">{{ p.risk_tier }}</span>
     </div>
-    <div class="policy-actions">{{ p.action_ids }}</div>
+    <div class="policy-actions">
+        {% for desc in p.action_descriptions %}
+        <span style="display:inline-block; padding:2px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; margin:2px 4px 2px 0; font-size:12px;">{{ desc }}</span>
+        {% endfor %}
+    </div>
     <div class="policy-meta">
         <span>Created {{ p.created_at_human }}</span>
         <span>Expires {{ p.expires_at_human }}</span>
         <span>{{ p.active_token_count }} active token{{ "s" if p.active_token_count != 1 else "" }}</span>
-        <span>Max lifetime {{ p.max_lifetime_label }}</span>
+        <span>Last used: {{ p.last_used_human }}</span>
     </div>
     <div style="margin-top: 12px;">
         <form method="post" action="/dashboard/revoke/{{ p.id }}" style="display:inline;">
@@ -136,7 +131,11 @@
         <span class="policy-service">{{ p.service_name }}</span>
         <span class="badge badge-{{ p.risk_tier }}">{{ p.risk_tier }}</span>
     </div>
-    <div class="policy-actions">{{ p.action_ids }}</div>
+    <div class="policy-actions">
+        {% for desc in p.action_descriptions %}
+        <span style="display:inline-block; padding:2px 8px; background:var(--bg); border:1px solid var(--border); border-radius:4px; margin:2px 4px 2px 0; font-size:12px;">{{ desc }}</span>
+        {% endfor %}
+    </div>
     <div class="policy-meta">
         <span>Created {{ p.created_at_human }}</span>
         <span>Revoked {{ p.revoked_at_human }}</span>

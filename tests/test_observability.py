@@ -15,7 +15,7 @@ from agentcafe.logging_config import configure_logging
 from agentcafe.main import create_cafe_app  # noqa: F401
 from agentcafe.middleware import request_id_var
 
-# pylint: disable=redefined-outer-name,unused-argument
+# pylint: disable=redefined-outer-name,unused-argument,protected-access
 
 TEST_API_KEY = "test-obs-api-key"
 

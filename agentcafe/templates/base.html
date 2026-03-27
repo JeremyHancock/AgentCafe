@@ -55,6 +55,42 @@
             font-weight: 400;
         }
 
+        .nav-links {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+        }
+
+        .nav-links a {
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: background-color 0.15s, color 0.15s;
+        }
+
+        .nav-links a:hover {
+            background: var(--surface-hover);
+            color: var(--text);
+        }
+
+        .nav-links a.active {
+            background: var(--surface);
+            color: var(--accent);
+        }
+
+        .nav-links .nav-logout {
+            color: var(--text-muted);
+            margin-left: 8px;
+        }
+
+        .nav-links .nav-logout:hover {
+            color: var(--danger);
+        }
+
         .container {
             width: 100%;
             max-width: 560px;
@@ -279,6 +315,13 @@
 <body>
     <div class="header">
         <a href="/" class="logo">☕ AgentCafe</a>
+        {% if active_nav is defined and active_nav %}
+        <nav class="nav-links">
+            <a href="/tab" class="{% if active_nav == 'tab' %}active{% endif %}">Cards</a>
+            <a href="/dashboard" class="{% if active_nav == 'dashboard' %}active{% endif %}">Policies</a>
+            <a href="/logout" class="nav-logout">Sign out</a>
+        </nav>
+        {% endif %}
     </div>
     <div class="container">
         {% block content %}{% endblock %}
