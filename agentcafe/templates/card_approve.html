@@ -177,9 +177,16 @@
         </div>
 
         <div class="btn-row">
-            <a href="/tab" class="btn btn-outline">Cancel</a>
             <button type="submit" class="btn btn-primary">Approve Card</button>
         </div>
+    </form>
+
+    <form method="post" action="/tab/{{ card_id }}/decline" style="margin-top:8px; text-align:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-outline" style="width:100%;"
+                onclick="return confirm('Decline this card request? The agent will not get access.');">
+            Decline Request
+        </button>
     </form>
 </div>
 {% endblock %}

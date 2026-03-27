@@ -1340,6 +1340,8 @@ async def tab_page(request: Request, action: str = ""):
         success_message = "First use confirmed. The agent can now use this card."
     elif action == "approved":
         success_message = "Card approved. The agent can now request tokens."
+    elif action == "declined":
+        success_message = "Card request declined. The agent has been denied access."
 
     return templates.TemplateResponse("tab.html", {
         "request": request,
@@ -1574,6 +1576,43 @@ async def tab_revoke(
     await queue_jv_revocation(db, card_id, "human_revoked")
 
     return RedirectResponse(url="/tab?action=revoked", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/decline — Decline a pending card request
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/decline", response_class=HTMLResponse)
+async def tab_decline(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Decline a pending Company Card request."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND status = 'pending'",
+        (card_id,),
+    )
+    card = await cursor.fetchone()
+    if not card:
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET status = 'declined', revoked_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+    await db.commit()
+
+    return RedirectResponse(url="/tab?action=declined", status_code=303)
 
 
 # ---------------------------------------------------------------------------
