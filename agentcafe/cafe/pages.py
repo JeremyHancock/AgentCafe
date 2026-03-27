@@ -267,31 +267,65 @@ async def dashboard_page(request: Request, revoked: str = ""):
         for tc in await tc_cursor.fetchall():
             token_counts[tc["policy_id"]] = tc["cnt"]
 
-    # Look up service names
+    # Look up service names and action descriptions
     service_names: dict[str, str] = {}
+    action_descriptions: dict[str, dict[str, str]] = {}  # service_id -> {action_id: description}
     service_ids = list({r["service_id"] for r in rows})
     for sid in service_ids:
         svc_cursor = await db.execute(
-            "SELECT name FROM published_services WHERE service_id = ?", (sid,)
+            "SELECT name, menu_entry_json FROM published_services WHERE service_id = ?", (sid,)
         )
         svc = await svc_cursor.fetchone()
         service_names[sid] = svc["name"] if svc else sid
+        if svc:
+            menu = json.loads(svc["menu_entry_json"])
+            action_descriptions[sid] = {
+                a["action_id"]: a.get("description", a["action_id"])
+                for a in menu.get("actions", [])
+            }
+
+    # Look up "last used" per policy via audit_log
+    last_used: dict[str, str] = {}  # policy_id -> timestamp
+    for row in rows:
+        lu_cursor = await db.execute(
+            """SELECT MAX(al.timestamp) AS last_ts
+               FROM audit_log al
+               WHERE al.service_id = ?
+                 AND al.timestamp >= ?""",
+            (row["service_id"], row["created_at"]),
+        )
+        lu = await lu_cursor.fetchone()
+        if lu and lu["last_ts"]:
+            last_used[row["id"]] = lu["last_ts"]
 
     active_policies = []
     revoked_policies = []
     now_iso = datetime.now(timezone.utc).isoformat()
 
     for row in rows:
+        # Build human-readable action list from descriptions
+        raw_ids = row["allowed_action_ids"]
+        sid = row["service_id"]
+        descs = action_descriptions.get(sid, {})
+        action_list = []
+        for aid in raw_ids.split(","):
+            aid = aid.strip()
+            if aid:
+                action_list.append(descs.get(aid, aid))
+
+        lu_ts = last_used.get(row["id"])
         entry = {
             "id": row["id"],
-            "service_name": service_names.get(row["service_id"], row["service_id"]),
-            "action_ids": row["allowed_action_ids"],
+            "service_name": service_names.get(sid, sid),
+            "action_ids": raw_ids,
+            "action_descriptions": action_list,
             "risk_tier": row["risk_tier"],
             "max_lifetime_label": _lifetime_label(row["max_token_lifetime_seconds"]),
             "active_token_count": token_counts.get(row["id"], 0),
             "created_at_human": _human_date(row["created_at"]),
             "expires_at_human": _human_date(row["expires_at"]),
             "revoked_at_human": _human_date(row["revoked_at"]),
+            "last_used_human": _human_date(lu_ts) if lu_ts else "never used",
         }
         if row["revoked_at"] or row["expires_at"] < now_iso:
             revoked_policies.append(entry)
@@ -308,6 +342,7 @@ async def dashboard_page(request: Request, revoked: str = ""):
         "revoked_policies": revoked_policies,
         "csrf_token": _generate_csrf_token(request),
         "success_message": success_message,
+        "active_nav": "dashboard",
     })
 
 
@@ -485,6 +520,7 @@ async def enroll_passkey_page(request: Request, next_url: str = "/"):
         "next_url": next_url,
         "session_token": session_token,
         "grace_days": grace_days,
+        "active_nav": "tab",
     })
 
 
@@ -1223,23 +1259,70 @@ async def tab_page(request: Request, action: str = ""):
     active_cards = []
     revoked_cards = []
 
+    # Preload action descriptions per service
+    svc_action_descs: dict[str, dict[str, str]] = {}
+
     for row in rows:
         svc_name = await _lookup_service_name(db, row["service_id"])
+        sid = row["service_id"]
+
+        # Load action descriptions once per service
+        if sid not in svc_action_descs:
+            svc_cursor = await db.execute(
+                "SELECT menu_entry_json FROM published_services WHERE service_id = ?", (sid,),
+            )
+            svc_row = await svc_cursor.fetchone()
+            if svc_row:
+                menu = json.loads(svc_row["menu_entry_json"])
+                svc_action_descs[sid] = {
+                    a["action_id"]: a.get("description", a["action_id"])
+                    for a in menu.get("actions", [])
+                }
+            else:
+                svc_action_descs[sid] = {}
+
+        descs = svc_action_descs[sid]
+        # Build human-readable action list (all actions minus excluded)
+        excluded = set((row["excluded_action_ids"] or "").split(","))
+        action_list = [d for aid, d in descs.items() if aid not in excluded]
+
+        # Last used from audit_log
+        last_used_human = "never used"
+        if row["policy_id"]:
+            lu_cursor = await db.execute(
+                """SELECT MAX(al.timestamp) AS last_ts
+                   FROM audit_log al
+                   WHERE al.service_id = ?
+                     AND al.timestamp >= ?""",
+                (sid, row["created_at"]),
+            )
+            lu = await lu_cursor.fetchone()
+            if lu and lu["last_ts"]:
+                last_used_human = _human_date(lu["last_ts"])
+
+        # Budget progress percentage
+        budget_limit = row["budget_limit_cents"] or 0
+        budget_spent = row["budget_spent_cents"] or 0
+        budget_pct = min(int(budget_spent / budget_limit * 100), 100) if budget_limit else 0
+
         entry = {
             "card_id": row["id"],
             "service_name": svc_name,
             "status": row["status"],
             "activation_code": row["activation_code"],
             "excluded_action_ids": row["excluded_action_ids"] or "",
-            "budget_limit_cents": row["budget_limit_cents"] or 0,
-            "budget_spent_cents": row["budget_spent_cents"] or 0,
+            "action_descriptions": action_list,
+            "budget_limit_cents": budget_limit,
+            "budget_spent_cents": budget_spent,
             "budget_period": row["budget_period"] or "",
+            "budget_pct": budget_pct,
             "first_use_confirmation": row["first_use_confirmation"],
             "first_use_confirmed_at": row["first_use_confirmed_at"],
             "active_token_count": token_counts.get(row["policy_id"], 0) if row["policy_id"] else 0,
             "created_at_human": _human_date(row["created_at"]),
             "expires_at_human": _human_date(row["expires_at"]),
             "revoked_at_human": _human_date(row["revoked_at"]),
+            "last_used_human": last_used_human,
         }
 
         if row["status"] == "pending":
@@ -1266,6 +1349,7 @@ async def tab_page(request: Request, action: str = ""):
         "csrf_token": _generate_csrf_token(request),
         "success_message": success_message,
         "error_message": error_message,
+        "active_nav": "tab",
     })
 
 
@@ -1304,6 +1388,7 @@ async def tab_approve_page(request: Request, card_id: str):
         "excluded_actions": [],
         "csrf_token": _generate_csrf_token(request),
         "error": None,
+        "active_nav": "tab",
     })
 
 

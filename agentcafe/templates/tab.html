@@ -11,27 +11,6 @@
         margin-bottom: 24px;
     }
     .tab-header .meta { font-size: 14px; }
-    .tab-nav {
-        display: flex;
-        gap: 8px;
-        margin-bottom: 24px;
-    }
-    .tab-nav a {
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-size: 13px;
-        font-weight: 600;
-        text-decoration: none;
-        color: var(--text-muted);
-        border: 1px solid var(--border);
-        transition: all 0.15s;
-    }
-    .tab-nav a:hover { background: var(--surface-hover); }
-    .tab-nav a.active {
-        background: var(--accent);
-        color: white;
-        border-color: var(--accent);
-    }
     .card-item {
         background: var(--surface);
         border: 1px solid var(--border);
@@ -89,6 +68,25 @@
         border: 1px solid var(--border);
         color: var(--text-muted);
     }
+    .budget-bar {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+        flex: 1;
+        min-width: 60px;
+    }
+    .budget-bar-fill {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.3s;
+    }
+    .budget-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
     .card-actions {
         display: flex;
         gap: 8px;
@@ -118,12 +116,6 @@
         margin-top: 28px;
     }
     .section-label:first-of-type { margin-top: 0; }
-    .logout-link {
-        font-size: 13px;
-        color: var(--text-muted);
-        text-decoration: none;
-    }
-    .logout-link:hover { color: var(--danger); }
     .first-use-badge {
         display: inline-block;
         padding: 2px 6px;
@@ -151,12 +143,6 @@
         <h1>Your Tab</h1>
         <p class="meta">Company Cards — standing policies for your agent.</p>
     </div>
-    <a href="/logout" class="logout-link">Sign out</a>
-</div>
-
-<div class="tab-nav">
-    <a href="/tab" class="active">Cards</a>
-    <a href="/dashboard">Policies</a>
 </div>
 
 {% if success_message %}
@@ -202,16 +188,23 @@
     <div class="card-details">
         <span>Expires {{ c.expires_at_human }}</span>
         <span>{{ c.active_token_count }} active token{{ "s" if c.active_token_count != 1 else "" }}</span>
+        <span>Last used: {{ c.last_used_human }}</span>
     </div>
+    {% if c.action_descriptions %}
     <div class="card-constraints">
-        {% if c.excluded_action_ids %}
-        <span class="constraint-tag">Excluded: {{ c.excluded_action_ids }}</span>
-        {% endif %}
-        {% if c.budget_limit_cents %}
-        <span class="constraint-tag">Budget: ${{ "%.2f"|format(c.budget_limit_cents / 100) }}/{{ c.budget_period }}</span>
-        <span class="constraint-tag">Spent: ${{ "%.2f"|format(c.budget_spent_cents / 100) }}</span>
-        {% endif %}
+        {% for desc in c.action_descriptions %}
+        <span class="constraint-tag">{{ desc }}</span>
+        {% endfor %}
     </div>
+    {% endif %}
+    {% if c.budget_limit_cents %}
+    <div class="budget-row">
+        <span style="font-size:12px; color:var(--text-muted);">${{ "%.2f"|format(c.budget_spent_cents / 100) }} / ${{ "%.2f"|format(c.budget_limit_cents / 100) }} {{ c.budget_period }}</span>
+        <div class="budget-bar">
+            <div class="budget-bar-fill" style="width:{{ c.budget_pct }}%; background:{% if c.budget_pct >= 90 %}var(--danger){% elif c.budget_pct >= 70 %}var(--warning){% else %}var(--success){% endif %};"></div>
+        </div>
+    </div>
+    {% endif %}
     <div class="card-actions">
         {% if c.first_use_confirmation and not c.first_use_confirmed_at %}
         <form method="post" action="/tab/{{ c.card_id }}/confirm" style="display:inline;">
