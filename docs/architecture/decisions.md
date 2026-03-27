@@ -454,3 +454,66 @@ Key findings fixed: missing grant-not-found check in Gate 3, `UNIQUE` constraint
 - PR 1: `cafe/artifact.py`, `cafe/binding.py`, `cafe/router.py` (Gates 3-4), `cafe/consent.py`, `cafe/cards.py`, `keys.py`, migration 0012. 45 tests.
 - PR 2: `cafe/integration.py`, `cafe/pages.py`, `cafe/cards.py`, `main.py` (background retry), migration 0013. 25 tests.
 - HM onboarding: AC ready. Awaiting HM-side artifact validation and integration endpoints.
+
+---
+
+### ADR-032: Account creation strategy for jointly-verified services — hybrid model
+
+**Date:** March 27, 2026
+**Context:** During HM's Phase 2 integration, HM raised a fragmentation concern: a human who signs up directly at a service AND later connects through AC ends up with two accounts and siloed data. In `opaque_id` mode, AC never shares the human's email, so the service cannot match the brokered account to the direct one. The accounts are permanently split.
+
+Internal review escalated this to an existential concern: **if using AgentCafe makes a human's experience worse than using the service directly, AC is creating a problem, not a solution.** A bank customer who accidentally gets a second account through AC, or an HM user whose agent-stored memories land in an inaccessible namespace, are unacceptable outcomes.
+
+The initial proposal — eliminate brokered accounts entirely for jointly-verified services and require redirect-based linking for all account creation — was pressure-tested by two adversarial reviewers (architectural + security/UX). Both found it too broad: it breaks AC-owned services (HM has no login UI), headless/API-only services, autonomous agents with no human present, and voice-only agents that can't complete browser redirects.
+
+**Decision: Hybrid model based on service-declared `has_direct_signup`.**
+
+Services declare during onboarding whether humans can create accounts directly (outside AC). This single flag determines the consent-time account creation strategy:
+
+1. **`has_direct_signup: false`** (AC-owned services, API-only services, new services with no existing users).
+   - Consent flow uses `account-create` as today. Brokered accounts are the correct mechanism — there are no existing accounts to fragment against.
+   - No linking flow needed.
+   - Example: Human Memory (AC-owned, no independent signup today).
+
+2. **`has_direct_signup: true`** (services with existing user bases — banks, SaaS tools, any service with its own registration).
+   - During consent, AC asks the human: **"Do you already have a {Service} account?"**
+   - **If yes** → service-initiated linking flow (Service Contract §A.4). The human authenticates on the service's site, the service confirms the match, AC binds the existing account. No brokered account created.
+   - **If no** → `account-create` proceeds normally. The human is genuinely new to the service; no fragmentation risk.
+   - **If the human answers wrong** (says "no" but has an existing account) → AC provides a post-hoc "Link existing account" flow accessible from the human's dashboard. This is the recovery path, not the happy path.
+
+3. **Agent fragmentation signal.** For `has_direct_signup: true` services, when the human's account was created via `account-create` (not linked), AC includes `X-AgentCafe-Account-Status: unlinked` on proxied requests. Agents can use this signal to surface a linking prompt to the human. This is advisory — agents are not required to act on it, but well-designed agents should.
+
+4. **`has_direct_signup` is declared at onboarding.** It is recorded in `service_integration_configs` (or the MVS equivalent) and cannot be changed without re-onboarding. It appears in the configuration agreement template.
+
+5. **Schema migration guidance is concept-level only.** AC does not prescribe specific SQL or migration strategies. Services run diverse database engines (PostgreSQL, MySQL, SQLite, others) and have varying schema complexity. AC's guidance states *what* the schema must support (nullable identity fields, account type distinction), not *how* to implement the migration. Services plan their own migration strategy.
+
+**Key invariants:**
+
+- Brokered accounts (`account-create`) remain a first-class mechanism. They are correct for `has_direct_signup: false` services and for genuinely new users on `has_direct_signup: true` services.
+- The consent ceremony is the primary fragmentation prevention point. By asking "do you already have an account?" at consent time, AC prevents the most common fragmentation scenario.
+- The linking flow (Service Contract §A.4–A.5) is the mechanism for connecting existing accounts. It is already specified and requires no protocol changes — only the consent UI and the `has_direct_signup` declaration are new.
+- The dashboard "Link existing account" flow is the recovery path for humans who answered incorrectly. It uses the same linking protocol.
+- PAT issuance policy on brokered accounts is a **service-level decision**, not an AC-mandated constraint. Services should enforce it via route-level policy (not schema constraints) so it can evolve with account linking.
+
+**Security mitigations for the linking flow:**
+
+- `linking_url` domain must match the service's declared domain (no open redirect).
+- CSRF `state` parameter round-tripped through AC (already in §A.4).
+- Linking codes are time-bound (5 min max), single-use, and bound to `consent_ref`.
+- Service authentication quality during linking is the service's responsibility — AC validates the binding, not the service's login strength.
+
+**What this means for HM specifically:**
+
+- HM has `has_direct_signup: false` today. Brokered `account-create` remains correct.
+- When/if HM adds direct signup (their Phase 3 roadmap), they would update to `has_direct_signup: true` and implement the linking flow.
+- HM's proposed route-level PAT restriction for brokered accounts is the correct pattern — AC endorses policy-level enforcement over schema constraints.
+- The namespace fragmentation HM identified is real but deferred until HM has direct signup.
+
+**Review process:** 2 adversarial reviewers. Key findings that shaped this decision:
+- Eliminating brokered accounts universally breaks AC-owned services, headless APIs, autonomous agents, and voice-only agents.
+- Redirect-based linking requires a human in the loop — cannot be the only account creation path.
+- The fragmentation problem is service-type-dependent, not universal — the fix should be too.
+- `linking_url` needs domain validation to prevent open redirect attacks.
+
+**Rationale:** The hybrid model satisfies both constraints: (1) AC must not silently fragment a human's data across duplicate accounts, and (2) AC must support autonomous agents, headless services, and services where brokered accounts are the only correct mechanism. The `has_direct_signup` flag makes this a service-level declaration rather than a protocol-level restriction, and the consent-time question makes the system correct by default rather than relying on post-hoc human action.
+**Status:** Approved. Design only — implementation deferred to Phase 3 (account linking). Onboarding guide and configuration template updated to reflect this decision. HM notified.

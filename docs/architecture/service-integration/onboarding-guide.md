@@ -217,29 +217,27 @@ The service uses `identity_claim.value` to match or create the account. `ac_huma
 
 ---
 
-## 3. Brokered Account Guidance
+## 3. Account Creation Strategy (ADR-032)
 
-Services in `opaque_id` mode receive accounts without human-facing identity (no email, no phone). This section describes how to handle these accounts cleanly.
+How AC creates accounts on a service depends on whether the service has existing users who might also connect through AC. The goal: **a human who uses both AC and the service directly must never end up with siloed duplicate accounts.**
 
-### Recommended: First-class brokered account type
+### The `has_direct_signup` declaration
 
-The recommended pattern is to introduce a distinct account type for AC-brokered accounts:
+During onboarding (Section 7 of the configuration template), the service declares:
 
-```sql
--- Schema addition
-ALTER TABLE accounts ADD COLUMN account_type TEXT NOT NULL DEFAULT 'direct';
--- 'direct' = created via service's own registration (has email, password, etc.)
--- 'ac_brokered' = created via AC's integration endpoint (no email, no password)
+| `has_direct_signup` | Meaning | Account creation strategy |
+|---|---|---|
+| `false` | Humans can only reach this service through AC (or the service has no existing users) | `account-create` (brokered). No fragmentation risk. |
+| `true` | Humans can sign up directly at the service, independent of AC | Consent-time question → linking flow or `account-create` depending on human's answer. |
 
-ALTER TABLE accounts ALTER COLUMN email DROP NOT NULL;
--- Or: make email nullable only when account_type = 'ac_brokered'
-```
+### `has_direct_signup: false` — brokered accounts
 
-**Why this matters:**
-- Brokered accounts have no email, no password, and no direct login. They exist only in the AC auth path.
-- Making this explicit prevents features that assume email (notifications, password reset, admin lookup) from silently failing.
-- The `ac_human_id_hash` is the stable identifier — it should be the account's primary key or indexed lookup field, not a derived synthetic email.
-- Admin tooling can distinguish brokered accounts at a glance.
+This is the simpler path. AC calls `POST /integration/account-create` during consent, the service creates an account, and AC stores the binding. The account has no human-facing identity (no email, no phone) — `ac_human_id_hash` is the sole correlator.
+
+**What the service needs to support:**
+- Accept account creation without human-facing identity fields (email, phone). How you achieve this in your schema is your decision — nullable columns, a separate account type, a distinct table — whatever fits your data model.
+- Use `ac_human_id_hash` as the stable lookup key for AC-brokered accounts.
+- Distinguish AC-brokered accounts from direct accounts in admin tooling, so support and debugging can identify them at a glance.
 
 **Account creation in opaque_id mode:**
 ```python
@@ -258,29 +256,43 @@ async def handle_account_create(request: AccountCreateRequest) -> AccountCreateR
     return AccountCreateResponse(service_account_id=account.id, created=True)
 ```
 
+### `has_direct_signup: true` — consent-time prevention + linking
+
+When a service has existing users, creating a brokered account risks fragmenting the human's data. AC prevents this at consent time:
+
+1. **During consent**, AC asks the human: "Do you already have a {Service} account?"
+2. **If yes** → AC initiates the linking flow (Service Contract §A.4). The human authenticates on the service's site, the service confirms the identity match, and AC binds the existing account. No new account created.
+3. **If no** → AC calls `account-create` as normal. The human is genuinely new to the service.
+4. **If the human gets it wrong** (says "no" but has an existing account) → The human can link later from the AC dashboard ("Link existing account"). Agents receive `X-AgentCafe-Account-Status: unlinked` on proxied requests as a signal to surface a linking prompt.
+
+**What the service needs to support:**
+- `POST /integration/account-check` — so AC can verify the human's answer
+- The linking flow endpoints (§A.4–A.5) — `linking_url` redirect + `POST /integration/link-complete`
+- `POST /integration/account-create` — for genuinely new users
+- Domain validation on `linking_url` — must match the service's declared domain (AC validates this too)
+
 ### Fallback: Synthetic identifier (legacy systems only)
 
-If the service **truly cannot modify its schema** to make email nullable (e.g., legacy database with CHECK constraints that cannot be altered), a synthetic identifier is acceptable as a last resort:
+If the service **truly cannot modify its schema** to support accounts without human-facing identity (e.g., legacy database with CHECK constraints that cannot be altered), a synthetic identifier is acceptable as a last resort:
 
 ```python
-# FALLBACK ONLY — use first-class brokered accounts when possible
+# FALLBACK ONLY — use a proper brokered account type when possible
 synthetic_email = f"ac_{ac_human_id_hash[:16]}@ac.internal"
 ```
 
 **If using this fallback:**
 - Document it prominently in the service's codebase
-- Add a `is_synthetic` or `account_type` flag to distinguish these accounts in queries
+- Add a flag to distinguish these accounts in queries
 - Ensure no code path attempts to send email to `@ac.internal` addresses
-- Plan to migrate to the recommended pattern when schema changes become feasible
+- Plan to migrate away when schema changes become feasible
 
 ### Scope isolation
 
 Brokered accounts should not be eligible for:
 - Direct login (password or passkey)
-- PAT issuance (the service's own token system)
 - Password reset or email verification flows
 
-They exist only in the AC-brokered auth path. Enforce this with a check in the relevant endpoints:
+Whether brokered accounts can issue PATs (the service's own token system) is a **service-level policy decision**. AC recommends enforcing this via route-level checks (not schema constraints), so the policy can evolve as account linking matures:
 
 ```python
 if account.account_type == "ac_brokered":

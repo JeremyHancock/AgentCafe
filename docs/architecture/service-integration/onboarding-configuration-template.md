@@ -37,22 +37,29 @@ One row per agent-facing operation. All jointly-verified services must declare e
 
 ---
 
-## 3. Identity Matching
+## 3. Identity Matching & Account Creation
 
 | Field | Value | Notes |
 |-------|-------|-------|
 | `identity_matching` | **(Agree together)** | `opaque_id` (default, privacy-preserving) or `email` (service matches by verified email). |
+| `has_direct_signup` | **(Service fills)** | `true` if humans can create accounts directly at the service (outside AC). `false` if accounts are only created through AC. Determines consent-time account creation strategy (see ADR-032). |
 
 **If `opaque_id`:**
 - AC sends `ac_human_id_hash` as the sole identity correlator
 - `identity_claim` field is **omitted** from integration endpoint requests
 - Service MUST accept accounts without human-facing identity (email/phone)
-- See "Brokered Account Guidance" in `onboarding-guide.md`
+- See "Account Creation Strategy" in `onboarding-guide.md`
 
 **If `email`:**
 - AC sends `identity_claim: { type: "email", value: "...", verified: true }` on account-check/create
 - Service matches on email address
 - Consent page discloses email sharing to the human
+
+**If `has_direct_signup: true`:**
+- AC's consent flow asks the human "Do you already have a {Service} account?" before account creation
+- Service MUST implement the linking flow (§A.4–A.5) to support existing-account binding
+- Service MUST implement `account-check` so AC can verify the human's answer
+- See "Account Creation Strategy" in `onboarding-guide.md` for full details
 
 ---
 
