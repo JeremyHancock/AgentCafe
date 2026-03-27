@@ -401,7 +401,7 @@ async def set_session(request: Request):
     """Accept a session_token from JS passkey flow, set httponly cookie, return redirect."""
     body = await request.json()
     token = body.get("session_token", "")
-    next_url = body.get("next_url", "/")
+    next_url = body.get("next_url", "/tab")
     # Validate the token before setting the cookie
     try:
         validate_human_session(token)
@@ -486,10 +486,10 @@ async def login_submit(
 
     # If user has no passkey, redirect to enrollment prompt instead of final destination
     if not pk_status["enrolled"]:
-        enroll_next = next_url if next_url else "/"
+        enroll_next = next_url if next_url else "/tab"
         redirect_url = f"/enroll-passkey?next={enroll_next}"
     else:
-        redirect_url = next_url if next_url else "/"
+        redirect_url = next_url if next_url else "/tab"
 
     response = RedirectResponse(url=redirect_url, status_code=303)
     _set_session_cookie(response, session_token)
@@ -603,7 +603,7 @@ async def register_submit(
     await db.commit()
 
     session_token = _create_human_session_token(user_id, email.lower())
-    redirect_url = next_url if next_url else "/"
+    redirect_url = next_url if next_url else "/tab"
     response = RedirectResponse(url=redirect_url, status_code=303)
     _set_session_cookie(response, session_token)
     return response
