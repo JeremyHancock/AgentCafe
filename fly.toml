@@ -17,6 +17,9 @@ primary_region = "iad"
   CAFE_DB_PATH = "/app/data/agentcafe.db"
   USE_REAL_PASSPORT = "true"
   CAFE_LOG_LEVEL = "INFO"
+  WEBAUTHN_RP_ID = "agentcafe.io"
+  WEBAUTHN_RP_NAME = "AgentCafe"
+  WEBAUTHN_ORIGIN = "https://agentcafe.io"
 
 [http_service]
   internal_port = 8000
