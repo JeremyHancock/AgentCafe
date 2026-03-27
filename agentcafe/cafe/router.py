@@ -124,6 +124,7 @@ async def place_order(req: OrderRequest):
     Then proxy the request to the backend.
     """
     db = await get_db()
+    logger.info("order_received", extra={"service_id": req.service_id, "action_id": req.action_id})
 
     # --- Look up the proxy config for this service_id + action_id ---
     cursor = await db.execute(
@@ -137,6 +138,7 @@ async def place_order(req: OrderRequest):
     )
     row = await cursor.fetchone()
     if row is None:
+        logger.warning("gate_failed", extra={"gate": "lookup", "error": "action_not_found", "service_id": req.service_id, "action_id": req.action_id})
         raise HTTPException(
             status_code=404,
             detail={
@@ -201,6 +203,7 @@ async def place_order(req: OrderRequest):
                 "human_auth_required": "This action requires explicit human authorization in your Passport.",
             }
             await _audit_log(db, req, error_code, status_code)
+            logger.warning("gate_failed", extra={"gate": "passport", "error": error_code, "service_id": req.service_id, "action_id": req.action_id})
             detail = {"error": error_code, "message": message_map.get(error_code, "Passport validation failed.")}
             if error_code in ("tier_insufficient", "scope_missing", "human_auth_required"):
                 detail["card_suggestion"] = _card_suggestion(req.service_id)
@@ -463,12 +466,14 @@ async def place_order(req: OrderRequest):
                 resp = await client.post(target_url, json=req.inputs, headers=headers)
     except httpx.RequestError as exc:
         await _audit_log(db, req, "backend_error", 502)
+        logger.warning("backend_error", extra={"service_id": req.service_id, "action_id": req.action_id, "error": str(exc)})
         raise HTTPException(
             status_code=502,
             detail={"error": "backend_error", "message": "The service backend is temporarily unreachable."},
         ) from exc
 
     latency_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
+    logger.info("backend_call", extra={"service_id": req.service_id, "action_id": req.action_id, "status": resp.status_code, "latency_ms": latency_ms})
 
     # Translate service-side artifact errors for jointly-verified mode
     if artifact_token and resp.status_code >= 400:
@@ -482,6 +487,7 @@ async def place_order(req: OrderRequest):
     # Audit log
     outcome = "success" if 200 <= resp.status_code < 400 else "backend_error"
     await _audit_log(db, req, outcome, resp.status_code, latency_ms)
+    logger.info("order_complete", extra={"service_id": req.service_id, "action_id": req.action_id, "outcome": outcome, "latency_ms": latency_ms})
 
     # Return the backend response to the agent
     try:
@@ -542,6 +548,55 @@ async def admin_overview(x_api_key: str | None = Header(default=None, alias="X-A
     )
     recent_entries = [dict(row) for row in await cursor.fetchall()]
 
+    # Hourly request counts (last 24 hours) — for sparklines
+    cursor = await db.execute(
+        "SELECT strftime('%Y-%m-%dT%H:00:00Z', timestamp) AS hour, COUNT(*) AS cnt "
+        "FROM audit_log WHERE timestamp > datetime('now', '-1 day') "
+        "GROUP BY hour ORDER BY hour"
+    )
+    hourly_rows = await cursor.fetchall()
+    requests_per_hour_24h = [{"hour": r["hour"], "count": r["cnt"]} for r in hourly_rows]
+
+    # Latency percentiles (from last 1000 requests with latency data)
+    cursor = await db.execute(
+        "SELECT latency_ms FROM audit_log WHERE latency_ms IS NOT NULL "
+        "ORDER BY timestamp DESC LIMIT 1000"
+    )
+    latencies = sorted(r["latency_ms"] for r in await cursor.fetchall())
+    p50_latency = latencies[len(latencies) // 2] if latencies else 0
+    p95_latency = latencies[int(len(latencies) * 0.95)] if latencies else 0
+
+    # Active policies count
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM policies WHERE revoked_at IS NULL "
+        "AND (expires_at IS NULL OR expires_at > datetime('now'))"
+    )
+    active_policies = (await cursor.fetchone())[0]
+
+    # Active cards count
+    try:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM company_cards WHERE status = 'active'"
+        )
+        active_cards = (await cursor.fetchone())[0]
+    except Exception:  # pylint: disable=broad-except
+        active_cards = 0  # table may not exist in minimal test setups
+
+    # Consent funnel stats (last 24h)
+    try:
+        cursor = await db.execute(
+            "SELECT status, COUNT(*) AS cnt FROM consents "
+            "WHERE created_at > datetime('now', '-1 day') GROUP BY status"
+        )
+        consent_rows = {r["status"]: r["cnt"] for r in await cursor.fetchall()}
+        consent_stats = {
+            "pending": consent_rows.get("pending", 0),
+            "approved_24h": consent_rows.get("approved", 0),
+            "declined_24h": consent_rows.get("declined", 0) + consent_rows.get("expired", 0),
+        }
+    except Exception:  # pylint: disable=broad-except
+        consent_stats = {"pending": 0, "approved_24h": 0, "declined_24h": 0}
+
     return {
         "services": menu["services"],
         "stats": {
@@ -549,6 +604,12 @@ async def admin_overview(x_api_key: str | None = Header(default=None, alias="X-A
             "recent_requests_24h": recent_requests,
             "failed_requests": failed_requests,
             "per_service": per_service_stats,
+            "requests_per_hour_24h": requests_per_hour_24h,
+            "p50_latency_ms": p50_latency,
+            "p95_latency_ms": p95_latency,
+            "active_policies": active_policies,
+            "active_cards": active_cards,
+            "consent_stats": consent_stats,
         },
         "recent_audit": recent_entries,
     }

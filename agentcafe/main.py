@@ -16,6 +16,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from agentcafe.logging_config import configure_logging
+from agentcafe.middleware import RequestIDMiddleware
 from agentcafe.cafe.cards import configure_cards, cards_router
 from agentcafe.cafe.consent import configure_consent, consent_router
 from agentcafe.cafe.human import configure_human, human_router
@@ -24,7 +26,7 @@ from agentcafe.cafe.passport import configure_passport, passport_router
 from agentcafe.cafe.router import close_http_client, configure_router, router as cafe_router
 from agentcafe.config import load_config
 from agentcafe.crypto import configure_crypto
-from agentcafe.db.engine import close_db, init_db
+from agentcafe.db.engine import close_db, get_db, init_db
 from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_artifact_keys, configure_keys, get_artifact_key_manager, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
@@ -62,10 +64,7 @@ async def _revocation_retry_loop(db_path: str) -> None:
 async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI lifespan protocol
     """Startup/shutdown for standalone Cafe (used by Docker and uvicorn CLI)."""
     cfg = load_config()
-    logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+    configure_logging(cfg.log_level, cfg.log_format)
     logger.info("Initializing database...")
     db = await init_db(cfg.db_path)
     logger.info("Seeding demo services...")
@@ -148,6 +147,7 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestIDMiddleware)
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -167,7 +167,14 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "service": "agentcafe"}
+        try:
+            db = await get_db()
+            await db.execute("SELECT 1")
+            db_ok = True
+        except Exception:  # pylint: disable=broad-except
+            db_ok = False
+        status = "ok" if db_ok else "degraded"
+        return {"status": status, "service": "agentcafe", "db": "ok" if db_ok else "error"}
 
     @app.get("/.well-known/jwks.json")
     async def jwks():
@@ -205,11 +212,7 @@ async def main() -> None:
     independently (see docker-compose.yml).
     """
     cfg = load_config()
-
-    logging.basicConfig(
-        level=getattr(logging, cfg.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
-    )
+    configure_logging(cfg.log_level, cfg.log_format)
 
     # Initialize database and seed demo data
     logger.info("Initializing database...")

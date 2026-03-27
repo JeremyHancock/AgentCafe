@@ -66,6 +66,7 @@ class CafeConfig:
 
     # Logging
     log_level: str = "INFO"
+    log_format: str = "text"  # "text" for dev, "json" for production
 
     @property
     def hotel_backend_url(self) -> str:
@@ -110,4 +111,5 @@ def load_config() -> CafeConfig:
         public_url=os.getenv("CAFE_PUBLIC_URL", ""),
         cors_allowed_origins=os.getenv("CORS_ALLOWED_ORIGINS", "*"),
         log_level=os.getenv("CAFE_LOG_LEVEL", "INFO"),
+        log_format=os.getenv("CAFE_LOG_FORMAT", "text"),
     )
