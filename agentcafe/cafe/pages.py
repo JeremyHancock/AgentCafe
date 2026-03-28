@@ -178,6 +178,7 @@ def _consent_text(service_name: str, actions: list[dict]) -> str:
 @pages_router.get("/", response_class=HTMLResponse)
 async def root_page(request: Request):
     """Render the public landing page."""
+    session = _get_session(request)
     db = await get_db()
     cursor = await db.execute(
         "SELECT service_id, name, menu_entry_json, status FROM published_services WHERE status = 'live'"
@@ -195,6 +196,7 @@ async def root_page(request: Request):
     return templates.TemplateResponse("landing.html", {
         "request": request,
         "services": services,
+        "logged_in": session is not None,
     })
 
 
