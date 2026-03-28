@@ -286,19 +286,32 @@ async def dashboard_page(request: Request, revoked: str = ""):
                 for a in menu.get("actions", [])
             }
 
-    # Look up "last used" per policy via audit_log
+    # Look up "last used" and recent activity per policy via audit_log
     last_used: dict[str, str] = {}  # policy_id -> timestamp
+    policy_activity: dict[str, list] = {}  # policy_id -> list of recent entries
     for row in rows:
         lu_cursor = await db.execute(
-            """SELECT MAX(al.timestamp) AS last_ts
+            """SELECT al.timestamp, al.action_id, al.outcome, al.response_code, al.latency_ms
                FROM audit_log al
                WHERE al.service_id = ?
-                 AND al.timestamp >= ?""",
+                 AND al.timestamp >= ?
+               ORDER BY al.timestamp DESC LIMIT 5""",
             (row["service_id"], row["created_at"]),
         )
-        lu = await lu_cursor.fetchone()
-        if lu and lu["last_ts"]:
-            last_used[row["id"]] = lu["last_ts"]
+        entries = await lu_cursor.fetchall()
+        if entries:
+            last_used[row["id"]] = entries[0]["timestamp"]
+            sid = row["service_id"]
+            descs = action_descriptions.get(sid, {})
+            policy_activity[row["id"]] = [
+                {
+                    "timestamp": e["timestamp"][:19].replace("T", " ") if e["timestamp"] else "",
+                    "action": descs.get(e["action_id"], e["action_id"]),
+                    "outcome": e["outcome"] or "",
+                    "latency_ms": e["latency_ms"],
+                }
+                for e in entries
+            ]
 
     active_policies = []
     revoked_policies = []
@@ -328,6 +341,7 @@ async def dashboard_page(request: Request, revoked: str = ""):
             "expires_at_human": _human_date(row["expires_at"]),
             "revoked_at_human": _human_date(row["revoked_at"]),
             "last_used_human": _human_date(lu_ts) if lu_ts else "never used",
+            "recent_activity": policy_activity.get(row["id"], []),
         }
         if row["revoked_at"] or row["expires_at"] < now_iso:
             revoked_policies.append(entry)
@@ -1334,6 +1348,31 @@ async def tab_page(request: Request, action: str = ""):
         else:
             revoked_cards.append(entry)
 
+    # Recent activity: last 20 audit entries for services this user has cards for
+    recent_activity = []
+    user_service_ids = list({r["service_id"] for r in rows})
+    if user_service_ids:
+        ph = ",".join("?" * len(user_service_ids))
+        act_cursor = await db.execute(
+            f"""SELECT al.timestamp, al.service_id, al.action_id, al.outcome,
+                       al.response_code, al.latency_ms
+                FROM audit_log al
+                WHERE al.service_id IN ({ph})
+                ORDER BY al.timestamp DESC LIMIT 20""",
+            tuple(user_service_ids),
+        )
+        for a in await act_cursor.fetchall():
+            sid = a["service_id"]
+            svc_descs = svc_action_descs.get(sid, {})
+            recent_activity.append({
+                "timestamp": a["timestamp"][:19].replace("T", " ") if a["timestamp"] else "",
+                "service_name": await _lookup_service_name(db, sid),
+                "action": svc_descs.get(a["action_id"], a["action_id"]),
+                "outcome": a["outcome"] or "",
+                "status_code": a["response_code"] or "",
+                "latency_ms": a["latency_ms"],
+            })
+
     success_message = ""
     error_message = ""
     if action == "revoked":
@@ -1350,6 +1389,7 @@ async def tab_page(request: Request, action: str = ""):
         "pending_cards": pending_cards,
         "active_cards": active_cards,
         "revoked_cards": revoked_cards,
+        "recent_activity": recent_activity,
         "csrf_token": _generate_csrf_token(request),
         "success_message": success_message,
         "error_message": error_message,

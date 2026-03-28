@@ -1040,12 +1040,82 @@ async def admin_page(request: Request):
     recent_row = await c.fetchone()
     recent_requests = recent_row["cnt"] if recent_row else 0
 
-    # Recent audit log
+    # Active policies & cards
+    now_iso = datetime.now(timezone.utc).isoformat()
+    active_policies_count = 0
+    active_cards_count = 0
+    try:
+        c = await db.execute(
+            "SELECT COUNT(*) as cnt FROM policies WHERE revoked_at IS NULL AND expires_at > ?",
+            (now_iso,),
+        )
+        row = await c.fetchone()
+        active_policies_count = row["cnt"] if row else 0
+    except Exception:  # pylint: disable=broad-except
+        pass
+    try:
+        c = await db.execute(
+            "SELECT COUNT(*) as cnt FROM company_cards WHERE status = 'active' AND expires_at > ?",
+            (now_iso,),
+        )
+        row = await c.fetchone()
+        active_cards_count = row["cnt"] if row else 0
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    # Consent stats (24h)
+    consent_pending = 0
+    consent_approved_24h = 0
+    consent_declined_24h = 0
+    try:
+        c = await db.execute("SELECT COUNT(*) as cnt FROM company_cards WHERE status = 'pending'")
+        row = await c.fetchone()
+        consent_pending = row["cnt"] if row else 0
+        c = await db.execute(
+            "SELECT COUNT(*) as cnt FROM company_cards WHERE status = 'active' AND updated_at > ?",
+            (cutoff,),
+        )
+        row = await c.fetchone()
+        consent_approved_24h = row["cnt"] if row else 0
+        c = await db.execute(
+            "SELECT COUNT(*) as cnt FROM company_cards WHERE status = 'declined' AND updated_at > ?",
+            (cutoff,),
+        )
+        row = await c.fetchone()
+        consent_declined_24h = row["cnt"] if row else 0
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    # Latency percentiles (from last 1000 requests)
+    p50_latency = None
+    p95_latency = None
+    try:
+        c = await db.execute(
+            "SELECT latency_ms FROM audit_log WHERE latency_ms IS NOT NULL ORDER BY timestamp DESC LIMIT 1000",
+        )
+        latencies = sorted([r["latency_ms"] for r in await c.fetchall()])
+        if latencies:
+            p50_latency = latencies[len(latencies) // 2]
+            p95_latency = latencies[int(len(latencies) * 0.95)]
+    except Exception:  # pylint: disable=broad-except
+        pass
+
+    # Paginated audit log
+    page = 1
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except (ValueError, TypeError):
+        pass
+    page_size = 20
+    offset = (page - 1) * page_size
+
     c = await db.execute(
-        "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 50",
+        "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        (page_size, offset),
     )
     audit_rows = await c.fetchall()
     audit_entries = [dict(row) for row in audit_rows]
+    has_next_page = len(audit_entries) == page_size
 
     response = templates.TemplateResponse("wizard/admin.html", {
         "request": request,
@@ -1054,7 +1124,16 @@ async def admin_page(request: Request):
         "services": services,
         "total_requests": total_requests,
         "recent_requests": recent_requests,
+        "active_policies_count": active_policies_count,
+        "active_cards_count": active_cards_count,
+        "consent_pending": consent_pending,
+        "consent_approved_24h": consent_approved_24h,
+        "consent_declined_24h": consent_declined_24h,
+        "p50_latency": p50_latency,
+        "p95_latency": p95_latency,
         "audit_entries": audit_entries,
+        "audit_page": page,
+        "audit_has_next": has_next_page,
     })
 
     if admin_key:

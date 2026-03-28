@@ -108,16 +108,38 @@
         <div class="value">{{ services | length }}</div>
     </div>
     <div class="stat-card">
-        <div class="label">Total Actions</div>
-        <div class="value">{{ services | map(attribute='actions') | map('length') | sum if services else 0 }}</div>
-    </div>
-    <div class="stat-card">
         <div class="label">Total Requests</div>
         <div class="value">{{ total_requests }}</div>
     </div>
     <div class="stat-card">
         <div class="label">Last 24h</div>
         <div class="value">{{ recent_requests }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Active Policies</div>
+        <div class="value">{{ active_policies_count }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Active Cards</div>
+        <div class="value">{{ active_cards_count }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">p50 Latency</div>
+        <div class="value">{{ (p50_latency | string ~ 'ms') if p50_latency is not none else '—' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">p95 Latency</div>
+        <div class="value">{{ (p95_latency | string ~ 'ms') if p95_latency is not none else '—' }}</div>
+    </div>
+</div>
+
+<!-- Consent funnel -->
+<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+    <h3 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">Consent Funnel (24h)</h3>
+    <div style="display: flex; gap: 24px; font-size: 14px;">
+        <span style="color: var(--warning);">{{ consent_pending }} pending</span>
+        <span style="color: var(--success);">{{ consent_approved_24h }} approved</span>
+        <span style="color: var(--danger);">{{ consent_declined_24h }} declined</span>
     </div>
 </div>
 
@@ -149,12 +171,11 @@
 {% endif %}
 
 <!-- Audit log -->
-<details style="margin-top: 24px;">
-    <summary style="cursor: pointer; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
-                     color: var(--text-muted); font-weight: 600;">
-        Recent Audit Log ({{ audit_entries | length }})
-    </summary>
-    <div style="margin-top: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto;">
+<div style="margin-top: 24px;">
+    <h2 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">
+        Audit Log (page {{ audit_page }})
+    </h2>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto;">
         <table>
             <thead>
                 <tr>
@@ -187,6 +208,16 @@
             </tbody>
         </table>
     </div>
-</details>
+    <div style="display: flex; justify-content: space-between; margin-top: 12px;">
+        {% if audit_page > 1 %}
+        <a href="/admin?page={{ audit_page - 1 }}" style="color: var(--accent); text-decoration: none; font-size: 13px;">Previous</a>
+        {% else %}
+        <span></span>
+        {% endif %}
+        {% if audit_has_next %}
+        <a href="/admin?page={{ audit_page + 1 }}" style="color: var(--accent); text-decoration: none; font-size: 13px;">Next</a>
+        {% endif %}
+    </div>
+</div>
 {% endif %}
 {% endblock %}
