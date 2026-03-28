@@ -341,8 +341,13 @@
     <div class="header">
         <a href="/" class="logo">☕ AgentCafe</a>
         <div class="header-links">
+            {% if logged_in %}
+            <a href="/tab">My Tab</a>
+            <a href="/dashboard">Policies</a>
+            {% else %}
             <a href="/login">Sign in</a>
             <a href="/services/register">List your service</a>
+            {% endif %}
             <a href="https://github.com/JeremyHancock/AgentCafe" target="_blank">GitHub</a>
         </div>
     </div>
@@ -354,8 +359,12 @@
             open a Tab, and place orders — with a human in the loop for anything that matters.
         </p>
         <div class="hero-actions">
+            {% if logged_in %}
+            <a href="/tab" class="btn btn-primary">Go to your Tab</a>
+            {% else %}
             <a href="/login" class="btn btn-primary">Sign in</a>
             <a href="/services/register" class="btn btn-outline">List your service</a>
+            {% endif %}
         </div>
     </div>
 
