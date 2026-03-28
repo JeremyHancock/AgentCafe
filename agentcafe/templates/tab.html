@@ -248,4 +248,34 @@
     <p>When an agent requests a Company Card, it will appear here for your approval.</p>
 </div>
 {% endif %}
+
+{% if recent_activity %}
+<div class="section-label" style="margin-top: 32px;">Recent Activity</div>
+<div style="background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+        <thead>
+            <tr>
+                <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);">Time</th>
+                <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);">Service</th>
+                <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);">Action</th>
+                <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);">Result</th>
+                <th style="text-align: left; padding: 8px 12px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border);">Latency</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in recent_activity %}
+            <tr>
+                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-family: monospace; color: var(--text-muted); white-space: nowrap;">{{ a.timestamp }}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">{{ a.service_name }}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px;">{{ a.action }}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border);">
+                    <span style="color: {{ 'var(--success)' if a.outcome == 'success' else 'var(--danger)' }};">{{ a.outcome }}</span>
+                </td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-muted);">{{ (a.latency_ms | string ~ 'ms') if a.latency_ms is not none else '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 {% endblock %}
