@@ -11,6 +11,15 @@
         <h2>Configure policies &amp; backend</h2>
         <p class="subtitle">Set access policies for each action and provide your backend URL where the Cafe will proxy requests.</p>
 
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+            <strong style="color: var(--text);">Policy quick reference</strong>
+            <ul style="margin: 6px 0 0 16px; padding: 0;">
+                <li><strong>Rate limit</strong> — How many requests per minute an agent can make. Start lower for write operations.</li>
+                <li><strong>Human consent</strong> — "Yes" means the human must approve before each use (Tier-2 Passport). "No" means the agent can act with just its own token (Tier-1).</li>
+                <li><strong>Scope</strong> — The permission string checked at request time (usually <code>service:action</code>).</li>
+            </ul>
+        </div>
+
         <div class="form-row">
             <div class="form-group">
                 <label for="backend_url">Backend URL <span style="color: var(--danger);">*</span></label>
@@ -42,6 +51,13 @@
                 {% if action.suggested_risk_tier %}
                 <span class="badge badge-{{ 'high' if action.suggested_risk_tier in ['high', 'critical'] else action.suggested_risk_tier }}">
                     {{ action.suggested_risk_tier }} risk
+                </span>
+                <span style="font-size: 11px; color: var(--text-muted);">
+                    {% if action.suggested_risk_tier == 'low' %}read-only, no side effects
+                    {% elif action.suggested_risk_tier == 'medium' %}modifies data, reversible
+                    {% elif action.suggested_risk_tier == 'high' %}significant side effects, hard to reverse
+                    {% elif action.suggested_risk_tier == 'critical' %}irreversible or financial impact
+                    {% endif %}
                 </span>
                 {% endif %}
             </div>

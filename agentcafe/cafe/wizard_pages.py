@@ -43,6 +43,16 @@ wizard_pages_router = APIRouter(tags=["wizard-pages"])
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
+_SAMPLE_SPEC_PATH = Path(__file__).resolve().parent.parent.parent / "examples" / "sample-spec.yaml"
+
+
+def _load_sample_spec() -> str:
+    """Load the sample spec file for the 'Try a sample' button."""
+    try:
+        return _SAMPLE_SPEC_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
 _COOKIE_NAME = "company_session"
 _COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours (matches wizard JWT expiry)
 
@@ -345,6 +355,7 @@ async def onboard_spec_page(request: Request):
         "error": None,
         "step": 1,
         "raw_spec": "",
+        "sample_spec": _load_sample_spec(),
     })
 
 
@@ -367,6 +378,7 @@ async def onboard_spec_page_with_draft(request: Request, draft_id: str):
         "error": None,
         "step": 1,
         "raw_spec": raw_spec,
+        "sample_spec": _load_sample_spec(),
     })
 
 
@@ -393,6 +405,7 @@ async def onboard_spec_submit(
             "error": "Invalid or expired form. Please try again.",
             "step": 1,
             "raw_spec": raw_spec,
+            "sample_spec": _load_sample_spec(),
         }, status_code=403)
 
     db = await get_db()
@@ -409,6 +422,7 @@ async def onboard_spec_submit(
                 "error": "Spec file must be under 2 MB.",
                 "step": 1,
                 "raw_spec": raw_spec,
+                "sample_spec": _load_sample_spec(),
             }, status_code=413)
         try:
             spec_text = content.decode("utf-8")
@@ -420,6 +434,7 @@ async def onboard_spec_submit(
                 "error": "File must be UTF-8 encoded text.",
                 "step": 1,
                 "raw_spec": raw_spec,
+                "sample_spec": _load_sample_spec(),
             }, status_code=422)
     elif spec_url.strip():
         if not spec_url.startswith(("http://", "https://")):
@@ -430,6 +445,7 @@ async def onboard_spec_submit(
                 "error": "URL must start with http:// or https://.",
                 "step": 1,
                 "raw_spec": raw_spec,
+                "sample_spec": _load_sample_spec(),
             }, status_code=422)
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -444,6 +460,7 @@ async def onboard_spec_submit(
                 "error": f"Could not fetch URL: {exc}",
                 "step": 1,
                 "raw_spec": raw_spec,
+                "sample_spec": _load_sample_spec(),
             }, status_code=422)
         if len(spec_text) > 2 * 1024 * 1024:
             return templates.TemplateResponse("wizard/onboard_spec.html", {
@@ -453,6 +470,7 @@ async def onboard_spec_submit(
                 "error": "Fetched spec must be under 2 MB.",
                 "step": 1,
                 "raw_spec": raw_spec,
+                "sample_spec": _load_sample_spec(),
             }, status_code=413)
     elif raw_spec.strip():
         spec_text = raw_spec
@@ -464,6 +482,7 @@ async def onboard_spec_submit(
             "error": "Please paste a spec, upload a file, or provide a URL.",
             "step": 1,
             "raw_spec": raw_spec,
+            "sample_spec": _load_sample_spec(),
         }, status_code=400)
 
     # Parse
@@ -477,6 +496,7 @@ async def onboard_spec_submit(
             "error": f"Spec parse error: {exc.message}",
             "step": 1,
             "raw_spec": raw_spec,
+            "sample_spec": _load_sample_spec(),
         }, status_code=422)
 
     # Enrich and create draft
