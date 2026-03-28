@@ -12,16 +12,22 @@
         <h2>Review AI-generated Menu entry</h2>
         <p class="subtitle">Edit any field below. The AI generated these values from your spec — adjust anything that looks wrong.</p>
 
+        <div class="notice notice-warning" style="margin-bottom: 16px;">
+            <p style="margin-bottom: 0;">These values were <strong>AI-generated</strong> from your spec. Please verify them before continuing.</p>
+        </div>
+
         <div class="form-row">
             <div class="form-group">
                 <label for="service_id">Service ID</label>
                 <input type="text" id="service_id" name="service_id"
                        value="{{ candidate.service_id or '' }}" style="font-family: monospace;">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Unique identifier agents use to call your service (e.g. <code>bookshelf</code>)</p>
             </div>
             <div class="form-group">
                 <label for="name">Display name</label>
                 <input type="text" id="name" name="name"
                        value="{{ candidate.name or '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Human-readable name shown on the Menu</p>
             </div>
         </div>
 
@@ -30,11 +36,13 @@
                 <label for="category">Category</label>
                 <input type="text" id="category" name="category"
                        value="{{ candidate.category or '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Helps agents find your service (e.g. <code>travel</code>, <code>food-delivery</code>)</p>
             </div>
             <div class="form-group">
                 <label for="capability_tags">Tags <span style="color:var(--text-muted);">(comma-separated)</span></label>
                 <input type="text" id="capability_tags" name="capability_tags"
                        value="{{ candidate.capability_tags | join(', ') if candidate.capability_tags else '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Keywords for discovery (e.g. <code>books, lending, catalog</code>)</p>
             </div>
         </div>
 
@@ -42,6 +50,7 @@
             <label for="description">Description</label>
             <textarea id="description" name="description" rows="2"
                       style="font-family: inherit;">{{ candidate.description or '' }}</textarea>
+            <p class="meta" style="margin-top: 4px; margin-bottom: 0;">One or two sentences explaining what your service does — this is what agents read first</p>
         </div>
     </div>
 
