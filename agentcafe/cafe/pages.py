@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from agentcafe.cafe.cards import _create_jv_grant_if_needed
-from agentcafe.cafe.consent import _fire_consent_callback
+from agentcafe.cafe.consent import _fire_consent_callback, _handle_jointly_verified_consent
 from agentcafe.cafe.human import (
     _hash_password, _verify_password, _rehash_if_legacy,
     _create_human_session_token, validate_human_session,
@@ -799,6 +799,12 @@ async def consent_approve_submit(
                 risk_tier, lifetime,
                 policy_expires.isoformat(), now.isoformat(), now.isoformat(),
             ),
+        )
+
+        # Handle jointly-verified service binding (ADR-031)
+        email = session["sub"].removeprefix("user:")
+        await _handle_jointly_verified_consent(
+            db, user_id, email, consent["service_id"], policy_id, action_ids,
         )
 
         # Update consent

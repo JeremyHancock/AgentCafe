@@ -51,6 +51,7 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(pages_module, "verify_passkey_assertion", _mock_verify_passkey)
     configure_keys(legacy_hs256_secret=TEST_SECRET)
     passport_module._register_hits.clear()
+    human_module._challenge_hits.clear()
     yield
 
 
