@@ -72,7 +72,7 @@ async def _mock_complete_passkey_registration(challenge_id, credential):  # pyli
         (user_id, email, "Test User", "", now, now),
     )
     await db.commit()
-    session_token = _create_human_session_token(user_id, email)
+    session_token = _create_human_session_token(user_id, email, auth_method="passkey")
     return {
         "user_id": user_id,
         "email": email,
@@ -98,6 +98,7 @@ async def _configure_modules(monkeypatch):
     configure_keys(legacy_hs256_secret=TEST_SECRET)
     # Clear IP rate limit state between tests
     passport_module._register_hits.clear()
+    human_module._challenge_hits.clear()
     pages_module._activate_hits.clear()
     yield
 

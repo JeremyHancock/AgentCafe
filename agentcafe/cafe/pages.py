@@ -20,6 +20,7 @@ from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from agentcafe.cafe.cards import _create_jv_grant_if_needed
 from agentcafe.cafe.consent import _fire_consent_callback
 from agentcafe.cafe.human import (
     _hash_password, _verify_password, _rehash_if_legacy,
@@ -1548,6 +1549,10 @@ async def tab_approve_submit(
             card_id,
         ),
     )
+
+    # Create authorization grant for jointly-verified services (ADR-031)
+    await _create_jv_grant_if_needed(db, user_id, card["service_id"], card_id)
+
     await db.commit()
 
     logger.info("Card %s approved via page by user %s", card_id, user_id)
