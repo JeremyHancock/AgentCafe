@@ -72,7 +72,7 @@ async def _mock_complete_passkey_registration(challenge_id, credential):  # pyli
         (user_id, email, "Test User", "", now, now),
     )
     await db.commit()
-    session_token = _create_human_session_token(user_id, email)
+    session_token = _create_human_session_token(user_id, email, auth_method="passkey")
     return {
         "user_id": user_id,
         "email": email,
@@ -98,6 +98,7 @@ async def _configure_modules(monkeypatch):
     configure_keys(legacy_hs256_secret=TEST_SECRET)
     # Clear IP rate limit state between tests
     passport_module._register_hits.clear()
+    human_module._challenge_hits.clear()
     pages_module._activate_hits.clear()
     yield
 
@@ -1836,3 +1837,26 @@ async def test_activate_lookup_rejects_expired_consent(cafe_client):
     })
     # Expired consent should be treated as not found or show expiry error
     assert resp.status_code in (404, 410)
+
+
+# ---------------------------------------------------------------------------
+# Session token auth_method claim (SEC-6)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_session_token_includes_auth_method(cafe_client):
+    """Session tokens from password login should include auth_method='password'."""
+    email = f"authmethod-{__import__('uuid').uuid4().hex[:6]}@example.com"
+    resp = await cafe_client.post("/human/register", json={
+        "email": email,
+        "password": "secure-password-123",
+        "display_name": "AuthMethodTest",
+    })
+    assert resp.status_code == 200
+    token = resp.json()["session_token"]
+
+    payload = jwt.decode(
+        token, TEST_SECRET, algorithms=["HS256"],
+        audience="human-dashboard",
+    )
+    assert payload["auth_method"] == "password"

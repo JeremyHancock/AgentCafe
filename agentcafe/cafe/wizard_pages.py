@@ -210,8 +210,7 @@ async def company_login_page(request: Request):
     company_id = _get_company_id(request)
     if company_id:
         return RedirectResponse(url=await _company_landing_url(company_id), status_code=303)
-    return templates.TemplateResponse("wizard/login.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/login.html", {
         "csrf_token": _generate_csrf_token(request),
         "error": None,
     })
@@ -226,8 +225,7 @@ async def company_login_submit(
 ):
     """Handle company login form submission."""
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("wizard/login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/login.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "Invalid or expired form. Please try again.",
         }, status_code=403)
@@ -239,8 +237,7 @@ async def company_login_submit(
     )
     row = await cursor.fetchone()
     if row is None:
-        return templates.TemplateResponse("wizard/login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/login.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "Invalid email or password.",
         }, status_code=401)
@@ -249,8 +246,7 @@ async def company_login_submit(
     if isinstance(stored_hash, str):
         stored_hash = stored_hash.encode()
     if not bcrypt.checkpw(password.encode(), stored_hash):
-        return templates.TemplateResponse("wizard/login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/login.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "Invalid email or password.",
         }, status_code=401)
@@ -268,8 +264,7 @@ async def company_register_page(request: Request):
     company_id = _get_company_id(request)
     if company_id:
         return RedirectResponse(url=await _company_landing_url(company_id), status_code=303)
-    return templates.TemplateResponse("wizard/register.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/register.html", {
         "csrf_token": _generate_csrf_token(request),
         "error": None,
     })
@@ -286,15 +281,13 @@ async def company_register_submit(
 ):
     """Handle company registration form submission."""
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("wizard/register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/register.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "Invalid or expired form. Please try again.",
         }, status_code=403)
 
     if len(password) < 8:
-        return templates.TemplateResponse("wizard/register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/register.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "Password must be at least 8 characters.",
         }, status_code=400)
@@ -304,8 +297,7 @@ async def company_register_submit(
         "SELECT id FROM companies WHERE email = ?", (email,),
     )
     if await cursor.fetchone():
-        return templates.TemplateResponse("wizard/register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/register.html", {
             "csrf_token": _generate_csrf_token(request),
             "error": "An account with this email already exists.",
         }, status_code=409)
@@ -348,8 +340,7 @@ async def onboard_spec_page(request: Request):
     if redirect:
         return redirect
     company_name = await _get_company_name(company_id)
-    return templates.TemplateResponse("wizard/onboard_spec.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "error": None,
@@ -371,8 +362,7 @@ async def onboard_spec_page_with_draft(request: Request, draft_id: str):
     if draft and draft["company_id"] == company_id:
         raw_spec = draft["raw_spec_text"] or ""
     company_name = await _get_company_name(company_id)
-    return templates.TemplateResponse("wizard/onboard_spec.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "error": None,
@@ -398,8 +388,7 @@ async def onboard_spec_submit(
     company_name = await _get_company_name(company_id)
 
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("wizard/onboard_spec.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "error": "Invalid or expired form. Please try again.",
@@ -415,8 +404,7 @@ async def onboard_spec_submit(
     if spec_file and spec_file.filename:
         content = await spec_file.read()
         if len(content) > 2 * 1024 * 1024:
-            return templates.TemplateResponse("wizard/onboard_spec.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
                 "error": "Spec file must be under 2 MB.",
@@ -427,8 +415,7 @@ async def onboard_spec_submit(
         try:
             spec_text = content.decode("utf-8")
         except UnicodeDecodeError:
-            return templates.TemplateResponse("wizard/onboard_spec.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
                 "error": "File must be UTF-8 encoded text.",
@@ -438,8 +425,7 @@ async def onboard_spec_submit(
             }, status_code=422)
     elif spec_url.strip():
         if not spec_url.startswith(("http://", "https://")):
-            return templates.TemplateResponse("wizard/onboard_spec.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
                 "error": "URL must start with http:// or https://.",
@@ -453,8 +439,7 @@ async def onboard_spec_submit(
                 resp.raise_for_status()
                 spec_text = resp.text
         except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            return templates.TemplateResponse("wizard/onboard_spec.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
                 "error": f"Could not fetch URL: {exc}",
@@ -463,8 +448,7 @@ async def onboard_spec_submit(
                 "sample_spec": _load_sample_spec(),
             }, status_code=422)
         if len(spec_text) > 2 * 1024 * 1024:
-            return templates.TemplateResponse("wizard/onboard_spec.html", {
-                "request": request,
+            return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
                 "error": "Fetched spec must be under 2 MB.",
@@ -475,8 +459,7 @@ async def onboard_spec_submit(
     elif raw_spec.strip():
         spec_text = raw_spec
     else:
-        return templates.TemplateResponse("wizard/onboard_spec.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "error": "Please paste a spec, upload a file, or provide a URL.",
@@ -489,8 +472,7 @@ async def onboard_spec_submit(
     try:
         parsed_spec = parse_openapi_spec(spec_text)
     except SpecParseError as exc:
-        return templates.TemplateResponse("wizard/onboard_spec.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "error": f"Spec parse error: {exc.message}",
@@ -533,8 +515,7 @@ async def onboard_review_page(request: Request, draft_id: str):
     excluded_list = json.loads(draft.get("excluded_actions") or "[]")
     company_name = await _get_company_name(company_id)
 
-    return templates.TemplateResponse("wizard/onboard_review.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_review.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "draft_id": draft_id,
@@ -574,8 +555,7 @@ async def onboard_review_submit(
     candidate = json.loads(draft.get("candidate_menu_json") or "{}")
 
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("wizard/onboard_review.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_review.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "draft_id": draft_id,
@@ -643,8 +623,7 @@ async def onboard_policy_page(request: Request, draft_id: str):
         ]
     company_name = await _get_company_name(company_id)
 
-    return templates.TemplateResponse("wizard/onboard_policy.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "draft_id": draft_id,
@@ -682,8 +661,7 @@ async def onboard_policy_submit(
     candidate = json.loads(draft.get("candidate_menu_json") or "{}")
 
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("wizard/onboard_policy.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "draft_id": draft_id,
@@ -693,8 +671,7 @@ async def onboard_policy_submit(
         }, status_code=403)
 
     if not backend_url.strip():
-        return templates.TemplateResponse("wizard/onboard_policy.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "draft_id": draft_id,
@@ -755,8 +732,7 @@ async def onboard_preview_page(request: Request, draft_id: str):
         preview_obj = await generate_preview(db, draft_id)
         preview = preview_obj.model_dump() if hasattr(preview_obj, 'model_dump') else preview_obj
     except ValueError as exc:
-        return templates.TemplateResponse("wizard/onboard_policy.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "draft_id": draft_id,
@@ -765,8 +741,7 @@ async def onboard_preview_page(request: Request, draft_id: str):
             "error": str(exc),
         }, status_code=400)
 
-    return templates.TemplateResponse("wizard/onboard_preview.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_preview.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "draft_id": draft_id,
@@ -806,8 +781,7 @@ async def onboard_publish_submit(
         company_name = await _get_company_name(company_id)
         preview_obj = await generate_preview(db, draft_id)
         preview = preview_obj.model_dump() if hasattr(preview_obj, 'model_dump') else preview_obj
-        return templates.TemplateResponse("wizard/onboard_preview.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/onboard_preview.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
             "draft_id": draft_id,
@@ -840,8 +814,7 @@ async def onboard_success_page(request: Request, draft_id: str):
     final_menu = json.loads(draft.get("final_menu_json") or "{}")
     company_name = await _get_company_name(company_id)
 
-    return templates.TemplateResponse("wizard/onboard_success.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/onboard_success.html", {
         "company_name": company_name,
         "service_name": final_menu.get("name", ""),
         "service_id": final_menu.get("service_id", ""),
@@ -904,8 +877,7 @@ async def services_list_page(request: Request):
             "recent_requests": recent_requests,
         })
 
-    return templates.TemplateResponse("wizard/services.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "wizard/services.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
         "services": services,
@@ -997,8 +969,7 @@ async def admin_page(request: Request):
     active_key = admin_key or session_key
 
     if not active_key or active_key != _state.issuer_api_key:
-        return templates.TemplateResponse("wizard/admin.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "wizard/admin.html", {
             "authenticated": False,
             "error": "Invalid admin key." if active_key else None,
             "data": None,
@@ -1117,8 +1088,7 @@ async def admin_page(request: Request):
     audit_entries = [dict(row) for row in audit_rows]
     has_next_page = len(audit_entries) == page_size
 
-    response = templates.TemplateResponse("wizard/admin.html", {
-        "request": request,
+    response = templates.TemplateResponse(request, "wizard/admin.html", {
         "authenticated": True,
         "error": None,
         "services": services,

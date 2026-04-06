@@ -1,6 +1,6 @@
 # AGENT_CONTEXT.md — AgentCafe
 **Project Bible for All AI Contributors — read this first before touching any code.**  
-Last Updated: March 25, 2026 (Service Integration Standard complete — jointly-verified mode, per-request artifacts, revocation push delivery. 405 tests, pylint 10.00/10.)
+Last Updated: April 6, 2026 (Production readiness complete — SEC-1/6/8/9 resolved, TemplateResponse deprecation fixed, all go-live checklist items closed. 459 tests, pylint 10.00/10.)
 
 ## 1. Project Vision & Origin
 We are building **AgentCafe** — the friendly, trusted Cafe where AI agents discover and safely use services that companies have voluntarily registered.
@@ -102,7 +102,7 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Sprint 3: Human dashboard (policy management + one-click revoke), consent webhook/callback
 - 214 tests passing, pylint 10.00/10
 
-**Phase 7 — IN PROGRESS.** Deployment & Real-Agent Beta:
+**Phase 7 — COMPLETE.** Deployment & Real-Agent Beta:
 - Deployed to Fly.io (app: agentcafe, region: iad). Live at **agentcafe.io** (Cloudflare DNS + Let’s Encrypt TLS)
 - CI/CD via GitHub Actions: lint → test → deploy on push to main
 - Landing page with beta banner, light/dark mode, live service cards
@@ -149,6 +149,14 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
   - Background retry task in `main.py` lifespan (own DB connection, polls every 30s)
   - 25 tests in `test_revocation_delivery.py`
 - **HM onboarding readiness:** Phase 2 answers sent (`docs/architecture/service-integration/phase-2-answers-for-hm.md`). AC infrastructure complete. Awaiting HM-side implementation (artifact validation, `/integration/revoke` endpoint, dual auth path).
+
+**Production Readiness — COMPLETE.** Security hardening for real traffic:
+- SEC-9: Card approval page now requires passkey assertion (matching consent pattern)
+- SEC-1: `ALLOW_PASSWORD_AUTH` defaults to `false` (config.py + fly.toml)
+- SEC-6: Session JWTs include `auth_method` claim (`"password"` or `"passkey"`)
+- SEC-8: Passkey challenge endpoints rate-limited (10 req/min/IP sliding window)
+- Starlette `TemplateResponse` migrated to new API (59 call sites across pages.py + wizard_pages.py)
+- All Production Go-Live Checklist items in `docs/security/SECURITY-DEBT.md` closed (except E2E passkey account test — requires physical authenticator)
 
 ## 6. Codebase Map
 

@@ -4,7 +4,7 @@
 
 **Invariant:** *No agent may obtain write-scope access to a real service endpoint without a cryptographically verified human approval (passkey).*
 
-**Last audited:** March 3, 2026 (Sprint 4 complete, SEC-2/3/4 resolved, SEC-1 mitigated by grace period)
+**Last audited:** April 6, 2026 (Production readiness complete: SEC-1/6/8/9 resolved, all checklist items closed)
 
 ---
 
@@ -17,7 +17,7 @@
 - **Impact:** Agent creates account → obtains session → approves its own consent → gets write-scope Passport.
 - **Fix:** Set `ALLOW_PASSWORD_AUTH=false` in production. The flag and gating code already exist. **Do not enable real company endpoints until this is false.**
 - **Mitigation (Sprint 4):** Grace period logic now auto-disables password login per-user 7 days after passkey enrollment. Password login prompts enrollment on every login. Even with `ALLOW_PASSWORD_AUTH=true`, the attack requires: (1) agent registers account, (2) agent somehow completes a passkey enrollment (impossible without physical authenticator), (3) consent approval requires passkey assertion. The remaining gap is that an agent can create a password account and use it during the 7-day grace window — but consent approval independently requires passkey assertion (SEC-2), so the agent still cannot approve its own consent.
-- **Status:** ⚠️ OPEN but **effectively mitigated** by SEC-2 (consent approval requires passkey). Set `ALLOW_PASSWORD_AUTH=false` for defense-in-depth.
+- **Status:** ✅ RESOLVED — April 6, 2026. Default changed to `false` in `config.py` and `fly.toml`.
 
 ### ~~SEC-2: Consent API endpoint has no passkey requirement~~ → RESOLVED
 - **Resolved:** March 3, 2026. Implemented option (a): `ApproveRequest` now requires `passkey_challenge_id` + `passkey_credential`. Server calls `verify_passkey_assertion()` and confirms passkey user matches session user. Both API and page-flow consent approval use the same `verify_passkey_assertion()` code path.
@@ -48,7 +48,7 @@
 - **Risk:** Session JWTs are issued identically for password-based and passkey-based logins. There's no claim distinguishing how the session was obtained. A session from password login has the same privileges as one from passkey login.
 - **Impact:** If password auth is enabled alongside passkeys, a password-obtained session can approve consents that should require passkey-level assurance.
 - **Fix:** Add an `auth_method` claim to session JWTs (`"password"` vs `"passkey"`). Consent approval should reject sessions with `auth_method: "password"` when passkey enforcement is required.
-- **Status:** 🔵 DEFERRED (mitigated by SEC-1 fix — disabling password auth removes this path)
+- **Status:** ✅ RESOLVED — April 6, 2026. `auth_method` claim added to all session JWTs.
 
 ### SEC-7: Company wizard uses password-only auth
 - **File:** `agentcafe/wizard/router.py:127-135, 147-163`
@@ -62,14 +62,14 @@
 - **Risk:** An attacker could flood challenge generation, filling the `webauthn_challenges` table with garbage rows. Challenges expire after 5 minutes and `cleanup_expired_challenges()` exists, but there's no per-IP throttle.
 - **Impact:** Denial of service via DB bloat. No auth bypass risk.
 - **Fix:** Add IP-based rate limiting (similar to `_register_hits` in `passport.py`).
-- **Status:** 🔵 DEFERRED
+- **Status:** ✅ RESOLVED — April 6, 2026. Sliding-window rate limit (10 req/min/IP) on both challenge endpoints.
 
 ### SEC-9: Company Card page approval skips passkey assertion
 - **File:** `agentcafe/cafe/pages.py` — `POST /tab/approve/{card_id}/submit`
 - **Risk:** ADR-028 requires passkey for card approval ceremony. The API endpoint (`POST /cards/{card_id}/approve`) enforces `passkey_challenge_id` + `passkey_credential` via `verify_passkey_assertion()`. The page-based approval only requires session cookie + CSRF token — no passkey re-auth.
 - **Impact:** If an attacker has a valid session cookie (e.g., from an XSS or session theft), they can approve Company Cards without proving physical presence via passkey. Company Cards grant standing authorization for multiple actions, making this a higher-value target than single-action consents.
 - **Fix:** Add WebAuthn assertion to the card approval page flow, matching the consent approval page pattern (SEC-2 resolution). The `card_approve.html` template needs a JS-driven passkey assertion step before form submission.
-- **Status:** ⚠️ OPEN
+- **Status:** ✅ RESOLVED — April 6, 2026. Card approval page now requires passkey assertion (identical to consent pattern).
 
 ### SEC-10: `report-spend` endpoint has no card-agent relationship check
 - **File:** `agentcafe/cafe/cards.py` — `POST /cards/{card_id}/report-spend`
@@ -84,18 +84,18 @@
 
 Before any real company's endpoints are proxied through AgentCafe:
 
-- [ ] `ALLOW_PASSWORD_AUTH=false` (SEC-1) — defense-in-depth; consent approval already requires passkey
-- [ ] `USE_REAL_PASSPORT=true` (SEC-5)
+- [x] `ALLOW_PASSWORD_AUTH=false` (SEC-1) — April 6, 2026. Default flipped to `false` in config.py + fly.toml
+- [x] `USE_REAL_PASSPORT=true` (SEC-5) — already set in fly.toml
 - [x] Consent API endpoint requires passkey proof (SEC-2) — March 3, 2026
 - [x] Consent page blocks approval when passkey not supported (SEC-3) — March 3, 2026
 - [x] Consent page `<noscript>` fallback removed (SEC-4) — March 3, 2026
 - [x] Grace period auto-disables password login after passkey enrollment — March 3, 2026
 - [x] Password login prompts passkey enrollment — March 3, 2026
-- [ ] Company Card page approval requires passkey assertion (SEC-9)
-- [ ] `WEBAUTHN_RP_ID=agentcafe.io`, `WEBAUTHN_ORIGIN=https://agentcafe.io`
+- [x] Company Card page approval requires passkey assertion (SEC-9) — April 6, 2026
+- [x] `WEBAUTHN_RP_ID=agentcafe.io`, `WEBAUTHN_ORIGIN=https://agentcafe.io` — already set in fly.toml
 - [ ] At least one human account registered via passkey and tested end-to-end
-- [ ] Session tokens include `auth_method` claim (SEC-6) — nice-to-have if SEC-1 is resolved
-- [ ] Challenge endpoint rate limiting (SEC-8) — nice-to-have
+- [x] Session tokens include `auth_method` claim (SEC-6) — April 6, 2026
+- [x] Challenge endpoint rate limiting (SEC-8) — April 6, 2026. 10 req/min/IP sliding window
 
 ---
 
@@ -104,3 +104,7 @@ Before any real company's endpoints are proxied through AgentCafe:
 - **SEC-2** — March 3, 2026: `ApproveRequest` requires `passkey_challenge_id` + `passkey_credential`; `verify_passkey_assertion()` shared by API + page flow; user mismatch returns 403
 - **SEC-3** — March 3, 2026: `consent.html` now disables approve button + shows error when `isPasskeySupported()` is false
 - **SEC-4** — March 3, 2026: `consent.html` `<noscript>` block replaced with "JavaScript required" message
+- **SEC-1** — April 6, 2026: `ALLOW_PASSWORD_AUTH` default changed to `false` in `config.py` and explicitly set in `fly.toml`
+- **SEC-6** — April 6, 2026: `auth_method` claim (`"password"` or `"passkey"`) added to all human session JWTs via `_create_human_session_token()`
+- **SEC-8** — April 6, 2026: IP-based sliding-window rate limiting (10 req/min) on `/human/passkey/register/begin` and `/human/passkey/login/begin`
+- **SEC-9** — April 6, 2026: Card approval page (`card_approve.html`) now requires passkey assertion via `doApprove()` JS + `verify_passkey_assertion()` server-side (identical to consent pattern)
