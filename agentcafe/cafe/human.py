@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
 import bcrypt
 import jwt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from webauthn import (
@@ -56,6 +58,31 @@ class _State:
     allow_password_auth: bool = True
 
 _state = _State()
+
+# ---------------------------------------------------------------------------
+# IP-based rate limiter for passkey challenge endpoints (SEC-8)
+# ---------------------------------------------------------------------------
+
+_CHALLENGE_RATE_LIMIT = 10  # max challenges per window per IP
+_CHALLENGE_RATE_WINDOW = 60  # window in seconds
+_challenge_hits: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_challenge_rate_limit(client_ip: str) -> tuple[bool, int]:
+    """Check if the client IP has exceeded the passkey challenge rate limit.
+
+    Returns (allowed, retry_after_seconds). Cleans up expired entries.
+    """
+    now = time.monotonic()
+    cutoff = now - _CHALLENGE_RATE_WINDOW
+    hits = _challenge_hits[client_ip]
+    _challenge_hits[client_ip] = hits = [t for t in hits if t > cutoff]
+    if len(hits) >= _CHALLENGE_RATE_LIMIT:
+        oldest = hits[0]
+        retry_after = int(oldest - cutoff) + 1
+        return False, max(retry_after, 1)
+    hits.append(now)
+    return True, 0
 
 
 def configure_human(
@@ -172,7 +199,9 @@ async def _rehash_if_legacy(db, user_id: str, password: str, stored_hash: str) -
         logger.info("Rehashed legacy SHA-256 password to bcrypt for user %s", user_id)
 
 
-def _create_human_session_token(user_id: str, email: str) -> str:
+def _create_human_session_token(
+    user_id: str, email: str, auth_method: str = "password",
+) -> str:
     """Create a human session JWT (aud: human-dashboard)."""
     now = datetime.now(timezone.utc)
     payload = {
@@ -183,6 +212,7 @@ def _create_human_session_token(user_id: str, email: str) -> str:
         "iat": now,
         "jti": str(uuid.uuid4()),
         "user_id": user_id,
+        "auth_method": auth_method,
     }
     return jwt.encode(payload, _state.signing_secret, algorithm="HS256")
 
@@ -395,11 +425,24 @@ async def login_human(req: LoginRequest):
 # ---------------------------------------------------------------------------
 
 @human_router.post("/passkey/register/begin")
-async def passkey_register_begin(req: PasskeyRegisterBeginRequest):
+async def passkey_register_begin(request: Request, req: PasskeyRegisterBeginRequest):
     """Begin passkey registration. Returns WebAuthn creation options.
 
     The browser calls navigator.credentials.create() with these options.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = _check_challenge_rate_limit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limit_exceeded",
+                "message": f"Too many challenge requests. Try again in {retry_after}s.",
+                "retry_after_seconds": retry_after,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+
     email = req.email.lower()
     db = await get_db()
 
@@ -511,7 +554,7 @@ async def complete_passkey_registration(challenge_id: str, credential: dict) -> 
 
     logger.info("Passkey registered for user %s (%s)", user_id, email)
 
-    session_token = _create_human_session_token(user_id, email)
+    session_token = _create_human_session_token(user_id, email, auth_method="passkey")
 
     return {
         "user_id": user_id,
@@ -650,12 +693,25 @@ async def passkey_enroll_complete(req: PasskeyEnrollCompleteRequest):
 # ---------------------------------------------------------------------------
 
 @human_router.post("/passkey/login/begin")
-async def passkey_login_begin(req: PasskeyLoginBeginRequest):
+async def passkey_login_begin(request: Request, req: PasskeyLoginBeginRequest):
     """Begin passkey login. Returns WebAuthn authentication options.
 
     If email is provided, returns allowed credentials for that user.
     If email is omitted, allows discoverable credential (resident key) login.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    allowed, retry_after = _check_challenge_rate_limit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "rate_limit_exceeded",
+                "message": f"Too many challenge requests. Try again in {retry_after}s.",
+                "retry_after_seconds": retry_after,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+
     db = await get_db()
     allow_credentials = []
     user_id = None
@@ -782,7 +838,9 @@ async def passkey_login_complete(req: PasskeyLoginCompleteRequest):
 
     logger.info("Passkey login for user %s (%s)", user_info["user_id"], user_info["email"])
 
-    session_token = _create_human_session_token(user_info["user_id"], user_info["email"])
+    session_token = _create_human_session_token(
+        user_info["user_id"], user_info["email"], auth_method="passkey",
+    )
 
     return JSONResponse(content={
         "user_id": user_info["user_id"],

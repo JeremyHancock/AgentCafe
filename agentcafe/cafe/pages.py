@@ -193,8 +193,7 @@ async def root_page(request: Request):
             "description": entry.get("description", ""),
             "action_count": len(entry.get("actions", [])),
         })
-    return templates.TemplateResponse("landing.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "landing.html", {
         "services": services,
         "logged_in": session is not None,
     })
@@ -352,8 +351,7 @@ async def dashboard_page(request: Request, revoked: str = ""):
     if revoked == "1":
         success_message = "Policy revoked successfully. All active tokens have been invalidated."
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "dashboard.html", {
         "active_policies": active_policies,
         "revoked_policies": revoked_policies,
         "csrf_token": _generate_csrf_token(request),
@@ -435,8 +433,7 @@ async def set_session(request: Request):
 @pages_router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next_url: str = ""):
     """Render the login page."""
-    return templates.TemplateResponse("login.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "login.html", {
         "next_url": next_url,
         "error": None,
         "email": None,
@@ -459,8 +456,7 @@ async def login_submit(
 ):
     """Handle login form submission."""
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "login.html", {
             "next_url": next_url,
             "error": "Invalid or expired form submission. Please try again.",
             "email": email,
@@ -473,8 +469,7 @@ async def login_submit(
     )
     row = await cursor.fetchone()
     if not row or not _verify_password(password, row["password_hash"]):
-        return templates.TemplateResponse("login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "login.html", {
             "next_url": next_url,
             "error": "Invalid email or password.",
             "email": email,
@@ -485,8 +480,7 @@ async def login_submit(
     # Grace period: reject password login if user has passkey enrolled > N days ago
     pk_status = await _check_passkey_enrollment(db, row["id"])
     if pk_status["grace_expired"]:
-        return templates.TemplateResponse("login.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "login.html", {
             "next_url": next_url,
             "error": "Your account has a passkey enrolled. "
                      "Password login is no longer available. Please sign in with your passkey.",
@@ -531,8 +525,7 @@ async def enroll_passkey_page(request: Request, next_url: str = "/"):
     from agentcafe.cafe.human import _state as human_state
     grace_days = human_state.passkey_grace_period_days
 
-    return templates.TemplateResponse("enroll_passkey.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "enroll_passkey.html", {
         "next_url": next_url,
         "session_token": session_token,
         "grace_days": grace_days,
@@ -547,8 +540,7 @@ async def enroll_passkey_page(request: Request, next_url: str = "/"):
 @pages_router.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, next_url: str = ""):
     """Render the registration page."""
-    return templates.TemplateResponse("register.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "register.html", {
         "next_url": next_url,
         "error": None,
         "email": None,
@@ -573,8 +565,7 @@ async def register_submit(
 ):
     """Handle registration form submission."""
     if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse("register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "register.html", {
             "next_url": next_url,
             "error": "Invalid or expired form submission. Please try again.",
             "email": email,
@@ -583,8 +574,7 @@ async def register_submit(
             "allow_password_auth": _state.allow_password_auth,
         }, status_code=403)
     if len(password) < 8:
-        return templates.TemplateResponse("register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "register.html", {
             "next_url": next_url,
             "error": "Password must be at least 8 characters.",
             "email": email,
@@ -598,8 +588,7 @@ async def register_submit(
         "SELECT id FROM cafe_users WHERE email = ?", (email.lower(),)
     )
     if await cursor.fetchone():
-        return templates.TemplateResponse("register.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "register.html", {
             "next_url": next_url,
             "error": "An account with this email already exists.",
             "email": email,
@@ -642,8 +631,7 @@ async def consent_page(request: Request, consent_id: str):
     )
     consent = await cursor.fetchone()
     if not consent:
-        return templates.TemplateResponse("consent_done.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "consent_done.html", {
             "status": "error",
             "title": "Not Found",
             "message": "This consent request does not exist.",
@@ -653,8 +641,7 @@ async def consent_page(request: Request, consent_id: str):
 
     # Check expiry
     if consent["expires_at"] < datetime.now(timezone.utc).isoformat():
-        return templates.TemplateResponse("consent_done.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "consent_done.html", {
             "status": "expired",
             "title": "Request Expired",
             "message": "",
@@ -664,8 +651,7 @@ async def consent_page(request: Request, consent_id: str):
 
     # Already approved
     if consent["status"] == "approved":
-        return templates.TemplateResponse("consent_done.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "consent_done.html", {
             "status": "approved",
             "title": "Already Approved",
             "message": "This consent has already been approved.",
@@ -675,8 +661,7 @@ async def consent_page(request: Request, consent_id: str):
 
     # Already declined
     if consent["status"] == "declined":
-        return templates.TemplateResponse("consent_done.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "consent_done.html", {
             "status": "declined",
             "title": "Declined",
             "message": "",
@@ -718,8 +703,7 @@ async def consent_page(request: Request, consent_id: str):
     expires_dt = datetime.fromisoformat(consent["expires_at"])
     expires_human = expires_dt.strftime("%b %d, %Y at %I:%M %p UTC")
 
-    return templates.TemplateResponse("consent.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "consent.html", {
         "consent_id": consent_id,
         "service_name": service_name,
         "consent_text": _consent_text(service_name, actions),
@@ -835,8 +819,7 @@ async def consent_approve_submit(
         # Fire webhook callback (best-effort)
         await _fire_consent_callback(consent["callback_url"], consent_id, "approved", policy_id)
 
-        return templates.TemplateResponse("consent_done.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "consent_done.html", {
             "status": "approved",
             "title": "Authorization Approved",
             "message": "",
@@ -885,8 +868,7 @@ async def consent_decline(
     # Fire webhook callback (best-effort)
     await _fire_consent_callback(callback_url, consent_id, "declined")
 
-    return templates.TemplateResponse("consent_done.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "consent_done.html", {
         "status": "declined",
         "title": "Authorization Declined",
         "message": "",
@@ -954,8 +936,7 @@ async def _lookup_consent_details(db, consent):
 @pages_router.get("/activate", response_class=HTMLResponse)
 async def activate_page(request: Request, code: str = ""):
     """GET /activate — show activation code entry form."""
-    return templates.TemplateResponse("activate.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "activate.html", {
         "step": "enter_code",
         "code": code,
         "error": None,
@@ -975,8 +956,7 @@ async def activate_lookup(
 
     ip = request.client.host if request.client else "unknown"
     if not _activate_rate_ok(ip):
-        return templates.TemplateResponse("activate.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "activate.html", {
             "step": "enter_code",
             "code": code,
             "error": "Too many attempts. Please wait a few minutes and try again.",
@@ -985,8 +965,7 @@ async def activate_lookup(
 
     code = code.strip().upper()
     if not code or len(code) != 8:
-        return templates.TemplateResponse("activate.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "activate.html", {
             "step": "enter_code",
             "code": code,
             "error": "Please enter a valid 8-character activation code.",
@@ -1001,8 +980,7 @@ async def activate_lookup(
     consent = await cursor.fetchone()
 
     if not consent:
-        return templates.TemplateResponse("activate.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "activate.html", {
             "step": "enter_code",
             "code": code,
             "error": "Code not found or already used. Check the code and try again.",
@@ -1014,8 +992,7 @@ async def activate_lookup(
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if datetime.now(timezone.utc) > expires_at:
-        return templates.TemplateResponse("activate.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "activate.html", {
             "step": "enter_code",
             "code": code,
             "error": "This activation code has expired. Ask the agent for a new one.",
@@ -1029,8 +1006,7 @@ async def activate_lookup(
 
     service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
 
-    return templates.TemplateResponse("activate.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "activate.html", {
         "step": "register_approve",
         "code": code,
         "service_name": service_name,
@@ -1092,8 +1068,7 @@ async def activate_complete(
         reg_result = await complete_passkey_registration(challenge_id, credential_dict)
     except HTTPException:
         service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
-        return templates.TemplateResponse("activate.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "activate.html", {
             "step": "register_approve",
             "code": activation_code,
             "service_name": service_name,
@@ -1164,8 +1139,7 @@ async def activate_complete(
     svc_row = await svc_cursor.fetchone()
     service_name = svc_row["name"] if svc_row else consent["service_id"]
 
-    response = templates.TemplateResponse("activate.html", {
-        "request": request,
+    response = templates.TemplateResponse(request, "activate.html", {
         "step": "success",
         "service_name": service_name,
     })
@@ -1210,8 +1184,7 @@ async def activate_decline(
         await db.commit()
         await _fire_consent_callback(consent["callback_url"], consent["id"], "declined")
 
-    return templates.TemplateResponse("activate.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "activate.html", {
         "step": "declined",
     })
 
@@ -1384,8 +1357,7 @@ async def tab_page(request: Request, action: str = ""):
     elif action == "declined":
         success_message = "Card request declined. The agent has been denied access."
 
-    return templates.TemplateResponse("tab.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "tab.html", {
         "pending_cards": pending_cards,
         "active_cards": active_cards,
         "revoked_cards": revoked_cards,
@@ -1424,8 +1396,7 @@ async def tab_approve_page(request: Request, card_id: str):
     action_rows = await cursor.fetchall()
     actions = [{"action_id": r["action_id"], "risk_tier": r["risk_tier"] or "medium"} for r in action_rows]
 
-    return templates.TemplateResponse("card_approve.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "card_approve.html", {
         "card_id": card_id,
         "service_name": service_name,
         "actions": actions,
@@ -1449,12 +1420,28 @@ async def tab_approve_submit(
     budget_limit: str = Form(""),
     budget_period: str = Form(""),
     first_use_confirmation: str = Form(""),
+    passkey_challenge_id: str = Form(""),
+    passkey_credential: str = Form(""),
 ):
     """Process card approval from the page form."""
     session = _get_session(request)
     if not session:
         return RedirectResponse(url="/login?next=/tab", status_code=303)
     if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+
+    # Verify passkey assertion — cryptographic human-presence proof
+    if not passkey_challenge_id or not passkey_credential:
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    try:
+        credential_dict = json.loads(passkey_credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    try:
+        passkey_user = await verify_passkey_assertion(passkey_challenge_id, credential_dict)
+    except HTTPException:
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    if passkey_user["user_id"] != session["user_id"]:
         return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
 
     user_id = session["user_id"]

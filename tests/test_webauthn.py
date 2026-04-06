@@ -33,6 +33,7 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(human_module._state, "webauthn_rp_name", "AgentCafe Test")
     monkeypatch.setattr(human_module._state, "webauthn_origin", "http://localhost:8000")
     monkeypatch.setattr(human_module._state, "allow_password_auth", True)
+    human_module._challenge_hits.clear()
     yield
 
 
@@ -590,3 +591,55 @@ async def test_page_login_grace_period_blocks(cafe_client):
     assert resp.status_code == 403
     assert "passkey" in resp.text.lower()
     assert "no longer available" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Passkey challenge rate limiting (SEC-8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_passkey_challenge_rate_limit(cafe_client, monkeypatch):
+    """Passkey challenge endpoints should return 429 when rate limit exceeded."""
+    # Lower the limit for testing
+    monkeypatch.setattr(human_module, "_CHALLENGE_RATE_LIMIT", 2)
+
+    email = f"ratelimit-{uuid.uuid4().hex[:6]}@example.com"
+
+    # First two should succeed (409 = email exists is fine, we just care it's not 429)
+    for _ in range(2):
+        resp = await cafe_client.post(
+            "/human/passkey/register/begin",
+            json={"email": email},
+        )
+        assert resp.status_code != 429
+
+    # Third should be rate limited
+    resp = await cafe_client.post(
+        "/human/passkey/register/begin",
+        json={"email": email},
+    )
+    assert resp.status_code == 429
+    assert "retry_after_seconds" in resp.json()
+    assert "Retry-After" in resp.headers
+
+
+@pytest.mark.asyncio
+async def test_passkey_login_challenge_rate_limit(cafe_client, monkeypatch):
+    """Passkey login begin should also be rate limited."""
+    monkeypatch.setattr(human_module, "_CHALLENGE_RATE_LIMIT", 2)
+    human_module._challenge_hits.clear()
+
+    for _ in range(2):
+        resp = await cafe_client.post(
+            "/human/passkey/login/begin",
+            json={"email": None},
+        )
+        assert resp.status_code != 429
+
+    resp = await cafe_client.post(
+        "/human/passkey/login/begin",
+        json={"email": None},
+    )
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers

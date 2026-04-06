@@ -46,8 +46,9 @@ async def _configure_modules(monkeypatch):
     monkeypatch.setattr(consent_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(cards_module._state, "signing_secret", TEST_SECRET)
     monkeypatch.setattr(pages_module._state, "signing_secret", TEST_SECRET)
-    # Mock passkey verification
+    # Mock passkey verification (API + page flow)
     monkeypatch.setattr(cards_module, "verify_passkey_assertion", _mock_verify_passkey)
+    monkeypatch.setattr(pages_module, "verify_passkey_assertion", _mock_verify_passkey)
     configure_keys(legacy_hs256_secret=TEST_SECRET)
     passport_module._register_hits.clear()
     yield
@@ -735,7 +736,84 @@ async def test_tab_approve_page_renders(cafe_client):
         cookies={"cafe_session": session},
     )
     assert resp.status_code == 200
-    assert "Approve Card" in resp.text
+    assert "Approve with Passkey" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tab_approve_page_submit_requires_passkey(cafe_client):
+    """POST /tab/approve/{card_id}/submit without passkey should redirect (not approve)."""
+    agent_token = await _register_agent(cafe_client)
+    _, session = await _register_human(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_id = resp.json()["card_id"]
+
+    # Get CSRF token from approve page
+    page_resp = await cafe_client.get(
+        f"/tab/approve/{card_id}", cookies={"cafe_session": session},
+    )
+    import re
+    csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', page_resp.text)
+    csrf_token = csrf_match.group(1)
+
+    # Submit without passkey fields — should redirect, not approve
+    resp = await cafe_client.post(
+        f"/tab/approve/{card_id}/submit",
+        data={"csrf_token": csrf_token, "duration_days": "30"},
+        cookies={"cafe_session": session},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+
+    # Card should still be pending
+    status_resp = await cafe_client.get(f"/cards/{card_id}/status")
+    assert status_resp.json()["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_tab_approve_page_submit_with_passkey(cafe_client):
+    """POST /tab/approve/{card_id}/submit with valid passkey should approve the card."""
+    import json as json_mod
+    agent_token = await _register_agent(cafe_client)
+    user_id, session = await _register_human(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_id = resp.json()["card_id"]
+
+    # Get CSRF token from approve page
+    page_resp = await cafe_client.get(
+        f"/tab/approve/{card_id}", cookies={"cafe_session": session},
+    )
+    import re
+    csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', page_resp.text)
+    csrf_token = csrf_match.group(1)
+
+    # Submit with passkey fields (mock sends user_id as challenge_id)
+    resp = await cafe_client.post(
+        f"/tab/approve/{card_id}/submit",
+        data={
+            "csrf_token": csrf_token,
+            "duration_days": "30",
+            "passkey_challenge_id": user_id,
+            "passkey_credential": json_mod.dumps({"rawId": "test"}),
+        },
+        cookies={"cafe_session": session},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "action=approved" in resp.headers["location"]
+
+    # Card should now be active
+    status_resp = await cafe_client.get(f"/cards/{card_id}/status")
+    assert status_resp.json()["status"] == "active"
 
 
 @pytest.mark.asyncio
