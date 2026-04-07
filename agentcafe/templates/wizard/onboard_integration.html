@@ -1,0 +1,158 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Integration Setup — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+<form method="post" action="/services/onboard/{{ draft_id }}/integration" id="integration-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <div class="section-card">
+        <h2>Jointly-verified integration</h2>
+        <p class="subtitle">Configure how AgentCafe communicates with your service for account linking, identity binding, and grant lifecycle events.</p>
+
+        {% if error %}
+        <div class="alert alert-error" style="margin-bottom: 16px;">{{ error }}</div>
+        {% endif %}
+
+        <div class="form-group">
+            <label for="integration_base_url">Integration base URL <span style="color: var(--danger);">*</span></label>
+            <input type="url" id="integration_base_url" name="integration_base_url"
+                   value="{{ saved_config.get('integration_base_url', '') }}"
+                   placeholder="https://api.yourservice.com/agentcafe"
+                   required>
+            <small style="color: var(--text-muted);">The base URL where AgentCafe will send integration requests (account checks, grant notifications, revocations).</small>
+        </div>
+
+        <div class="form-group">
+            <label for="integration_auth_header">Integration auth header</label>
+            <input type="password" id="integration_auth_header" name="integration_auth_header"
+                   value="{{ saved_config.get('integration_auth_header', '') }}"
+                   placeholder="Bearer your-secret-token">
+            <small style="color: var(--text-muted);">Sent as the <code>Authorization</code> header on integration requests. Leave blank if your integration endpoint uses a different auth method.</small>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2>Identity matching</h2>
+        <p class="subtitle">How should AgentCafe identify humans to your service?</p>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="identity_matching" value="opaque_id"
+                       {{ 'checked' if not saved_config.get('identity_matching') or saved_config.get('identity_matching') == 'opaque_id' }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Opaque ID</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — AgentCafe sends a unique, per-service identifier for each human. Best for privacy.</span>
+                </div>
+            </label>
+        </div>
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="identity_matching" value="email"
+                       {{ 'checked' if saved_config.get('identity_matching') == 'email' }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Email</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — AgentCafe shares the human's email address. Use this if your service already has user accounts matched by email.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-top: 16px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="has_direct_signup"
+                       value="true"
+                       {{ 'checked' if saved_config.get('has_direct_signup') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Service has direct signup</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — Users can also sign up for your service directly (outside AgentCafe). AgentCafe will check for existing accounts before creating new ones.</span>
+                </div>
+            </label>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2>Capabilities</h2>
+        <p class="subtitle">Which integration endpoints does your service implement? At least one of account-check, account-create, or link-complete is required.</p>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_account_check" value="on"
+                       {{ 'checked' if saved_config.get('cap_account_check') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Account check</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /account-check</code> — AgentCafe can query whether a human already has an account on your service.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_account_create" value="on"
+                       {{ 'checked' if saved_config.get('cap_account_create') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Account create</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /account-create</code> — AgentCafe can provision a new account on your service for a human.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_link_complete" value="on"
+                       {{ 'checked' if saved_config.get('cap_link_complete') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Link complete</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /link-complete</code> — AgentCafe notifies your service when an identity binding is confirmed.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_unlink" value="on"
+                       {{ 'checked' if saved_config.get('cap_unlink') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Unlink</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /unlink</code> — AgentCafe can notify your service to remove an identity binding.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_revoke" value="on"
+                       {{ 'checked' if saved_config.get('cap_revoke', True) }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Revoke</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /revoke</code> — AgentCafe pushes revocation notifications when a human withdraws consent. Enabled by default.</span>
+                </div>
+            </label>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 0;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="cap_grant_status" value="on"
+                       {{ 'checked' if saved_config.get('cap_grant_status') }}
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Grant status</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — <code>POST /grant-status</code> — AgentCafe can query whether a specific authorization grant is still active on your side.</span>
+                </div>
+            </label>
+        </div>
+    </div>
+
+    <div style="display: flex; gap: 12px; margin-top: 24px;">
+        <a href="/services/onboard/{{ draft_id }}/policy" class="btn btn-outline" style="flex: 1; text-align: center;">Back to Policy</a>
+        <button type="submit" class="btn btn-primary" style="flex: 1;">Continue to Preview</button>
+    </div>
+</form>
+{% endblock %}

@@ -31,6 +31,7 @@ from agentcafe.wizard.review_engine import (
     create_draft,
     generate_preview,
     get_draft,
+    save_integration,
     save_policy,
     save_review,
 )
@@ -172,7 +173,7 @@ def _require_auth(request: Request):
     """Return company_id or redirect response if not authenticated."""
     company_id = _get_company_id(request)
     if company_id is None:
-        return None, RedirectResponse(url="/services/login", status_code=303)
+        return None, RedirectResponse(url="/login", status_code=303)
     return company_id, None
 
 
@@ -199,63 +200,42 @@ async def _get_company_name(company_id: str) -> str:
     return row["name"] if row else "Company"
 
 
+def _has_human_session(request: Request) -> bool:
+    """Check if a valid human session cookie is present."""
+    from agentcafe.cafe.human import validate_human_session  # avoid circular
+    token = request.cookies.get("cafe_session")
+    if not token:
+        return False
+    try:
+        validate_human_session(token)
+        return True
+    except Exception:
+        return False
+
+
+def _build_nav_context(request: Request) -> dict:
+    """Build navigation context for templates, checking both session types."""
+    return {
+        "has_human_session": _has_human_session(request),
+        "has_company_session": _get_company_id(request) is not None,
+        "active_nav": "services",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Company login / register
 # ---------------------------------------------------------------------------
 
-@wizard_pages_router.get("/services/login", response_class=HTMLResponse)
+@wizard_pages_router.get("/services/login")
 async def company_login_page(request: Request):
-    """Render the company login page."""
-    # If already logged in, redirect to services
-    company_id = _get_company_id(request)
-    if company_id:
-        return RedirectResponse(url=await _company_landing_url(company_id), status_code=303)
-    return templates.TemplateResponse(request, "wizard/login.html", {
-        "csrf_token": _generate_csrf_token(request),
-        "error": None,
-    })
+    """Redirect to unified login page."""
+    return RedirectResponse(url="/login", status_code=303)
 
 
-@wizard_pages_router.post("/services/login", response_class=HTMLResponse)
-async def company_login_submit(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-    csrf_token: str = Form(""),
-):
-    """Handle company login form submission."""
-    if not _validate_csrf_token(request, csrf_token):
-        return templates.TemplateResponse(request, "wizard/login.html", {
-            "csrf_token": _generate_csrf_token(request),
-            "error": "Invalid or expired form. Please try again.",
-        }, status_code=403)
-
-    db = await get_db()
-    cursor = await db.execute(
-        "SELECT id, name, password_hash FROM companies WHERE email = ?",
-        (email,),
-    )
-    row = await cursor.fetchone()
-    if row is None:
-        return templates.TemplateResponse(request, "wizard/login.html", {
-            "csrf_token": _generate_csrf_token(request),
-            "error": "Invalid email or password.",
-        }, status_code=401)
-
-    stored_hash = row["password_hash"]
-    if isinstance(stored_hash, str):
-        stored_hash = stored_hash.encode()
-    if not bcrypt.checkpw(password.encode(), stored_hash):
-        return templates.TemplateResponse(request, "wizard/login.html", {
-            "csrf_token": _generate_csrf_token(request),
-            "error": "Invalid email or password.",
-        }, status_code=401)
-
-    token = _create_company_session(row["id"])
-    landing = await _company_landing_url(row["id"])
-    response = RedirectResponse(url=landing, status_code=303)
-    _set_company_cookie(response, token)
-    return response
+@wizard_pages_router.post("/services/login")
+async def company_login_submit(request: Request):
+    """Redirect to unified login page."""
+    return RedirectResponse(url="/login", status_code=303)
 
 
 @wizard_pages_router.get("/services/register", response_class=HTMLResponse)
@@ -323,9 +303,10 @@ async def company_register_submit(
 
 @wizard_pages_router.get("/services/logout")
 async def company_logout(request: Request):  # pylint: disable=unused-argument
-    """Log out the company session."""
-    response = RedirectResponse(url="/services/login", status_code=303)
+    """Clear both session cookies and redirect to login."""
+    response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(key=_COOKIE_NAME)
+    response.delete_cookie(key="cafe_session")
     return response
 
 
@@ -343,6 +324,7 @@ async def onboard_spec_page(request: Request):
     return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "error": None,
         "step": 1,
         "raw_spec": "",
@@ -365,6 +347,7 @@ async def onboard_spec_page_with_draft(request: Request, draft_id: str):
     return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "error": None,
         "step": 1,
         "raw_spec": raw_spec,
@@ -391,6 +374,7 @@ async def onboard_spec_submit(
         return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "error": "Invalid or expired form. Please try again.",
             "step": 1,
             "raw_spec": raw_spec,
@@ -407,6 +391,7 @@ async def onboard_spec_submit(
             return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
+        **_build_nav_context(request),
                 "error": "Spec file must be under 2 MB.",
                 "step": 1,
                 "raw_spec": raw_spec,
@@ -418,6 +403,7 @@ async def onboard_spec_submit(
             return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
+        **_build_nav_context(request),
                 "error": "File must be UTF-8 encoded text.",
                 "step": 1,
                 "raw_spec": raw_spec,
@@ -428,6 +414,7 @@ async def onboard_spec_submit(
             return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
+        **_build_nav_context(request),
                 "error": "URL must start with http:// or https://.",
                 "step": 1,
                 "raw_spec": raw_spec,
@@ -442,6 +429,7 @@ async def onboard_spec_submit(
             return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
+        **_build_nav_context(request),
                 "error": f"Could not fetch URL: {exc}",
                 "step": 1,
                 "raw_spec": raw_spec,
@@ -451,6 +439,7 @@ async def onboard_spec_submit(
             return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
                 "csrf_token": _generate_csrf_token(request),
                 "company_name": company_name,
+        **_build_nav_context(request),
                 "error": "Fetched spec must be under 2 MB.",
                 "step": 1,
                 "raw_spec": raw_spec,
@@ -462,6 +451,7 @@ async def onboard_spec_submit(
         return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "error": "Please paste a spec, upload a file, or provide a URL.",
             "step": 1,
             "raw_spec": raw_spec,
@@ -475,6 +465,7 @@ async def onboard_spec_submit(
         return templates.TemplateResponse(request, "wizard/onboard_spec.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "error": f"Spec parse error: {exc.message}",
             "step": 1,
             "raw_spec": raw_spec,
@@ -518,6 +509,7 @@ async def onboard_review_page(request: Request, draft_id: str):
     return templates.TemplateResponse(request, "wizard/onboard_review.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "draft_id": draft_id,
         "candidate": candidate,
         "excluded_list": excluded_list,
@@ -558,6 +550,7 @@ async def onboard_review_submit(
         return templates.TemplateResponse(request, "wizard/onboard_review.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "draft_id": draft_id,
             "candidate": candidate,
             "step": 2,
@@ -622,15 +615,18 @@ async def onboard_policy_page(request: Request, draft_id: str):
             if a.get("action_id") not in excluded
         ]
     company_name = await _get_company_name(company_id)
+    saved_integration_mode = draft.get("integration_mode") or "standard"
 
     return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "draft_id": draft_id,
         "candidate": merged,
         "saved_policy": saved_policy,
         "saved_backend_url": saved_backend_url,
         "has_saved_auth": bool(saved_auth_header),
+        "saved_integration_mode": saved_integration_mode,
         "step": 3,
         "error": None,
     })
@@ -646,6 +642,7 @@ async def onboard_policy_submit(
     backend_url: str = Form(""),
     backend_auth_header: str = Form(""),
     policy_json: str = Form("{}"),
+    integration_mode: str = Form("standard"),
 ):
     """Save policy and redirect to preview step."""
     company_id, redirect = _require_auth(request)
@@ -664,6 +661,7 @@ async def onboard_policy_submit(
         return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "draft_id": draft_id,
             "candidate": candidate,
             "step": 3,
@@ -674,6 +672,7 @@ async def onboard_policy_submit(
         return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "draft_id": draft_id,
             "candidate": candidate,
             "step": 3,
@@ -701,6 +700,141 @@ async def onboard_policy_submit(
         actions_policy=actions_policy,
         backend_url=backend_url,
         backend_auth_header=effective_auth,
+        integration_mode=integration_mode,
+    )
+
+    if integration_mode == "jointly_verified":
+        return RedirectResponse(
+            url=f"/services/onboard/{draft_id}/integration", status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/services/onboard/{draft_id}/preview", status_code=303,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Onboard wizard — Step 3b: Integration Setup (JV only)
+# ---------------------------------------------------------------------------
+
+@wizard_pages_router.get(
+    "/services/onboard/{draft_id}/integration", response_class=HTMLResponse,
+)
+async def onboard_integration_page(request: Request, draft_id: str):
+    """Render the JV integration setup page (Step 3b)."""
+    company_id, redirect = _require_auth(request)
+    if redirect:
+        return redirect
+
+    db = await get_db()
+    draft = await get_draft(db, draft_id)
+    if draft is None or draft["company_id"] != company_id:
+        return RedirectResponse(url="/services/onboard", status_code=303)
+
+    if (draft.get("integration_mode") or "standard") != "jointly_verified":
+        return RedirectResponse(
+            url=f"/services/onboard/{draft_id}/preview", status_code=303,
+        )
+
+    saved_config = json.loads(draft.get("integration_config_json") or "{}")
+    company_name = await _get_company_name(company_id)
+
+    return templates.TemplateResponse(request, "wizard/onboard_integration.html", {
+        "csrf_token": _generate_csrf_token(request),
+        "company_name": company_name,
+        **_build_nav_context(request),
+        "draft_id": draft_id,
+        "saved_config": saved_config,
+        "integration_mode": "jointly_verified",
+        "step": "3b",
+        "error": None,
+    })
+
+
+@wizard_pages_router.post(
+    "/services/onboard/{draft_id}/integration", response_class=HTMLResponse,
+)
+async def onboard_integration_submit(
+    request: Request,
+    draft_id: str,
+    csrf_token: str = Form(""),
+    integration_base_url: str = Form(""),
+    integration_auth_header: str = Form(""),
+    identity_matching: str = Form("opaque_id"),
+    has_direct_signup: str = Form("false"),
+    cap_account_check: str = Form(""),
+    cap_account_create: str = Form(""),
+    cap_link_complete: str = Form(""),
+    cap_unlink: str = Form(""),
+    cap_revoke: str = Form("on"),
+    cap_grant_status: str = Form(""),
+):
+    """Save JV integration config and redirect to preview."""
+    company_id, redirect = _require_auth(request)
+    if redirect:
+        return redirect
+
+    db = await get_db()
+    draft = await get_draft(db, draft_id)
+    if draft is None or draft["company_id"] != company_id:
+        return RedirectResponse(url="/services/onboard", status_code=303)
+
+    company_name = await _get_company_name(company_id)
+
+    if not _validate_csrf_token(request, csrf_token):
+        return templates.TemplateResponse(request, "wizard/onboard_integration.html", {
+            "csrf_token": _generate_csrf_token(request),
+            "company_name": company_name,
+        **_build_nav_context(request),
+            "draft_id": draft_id,
+            "saved_config": {},
+            "integration_mode": "jointly_verified",
+            "step": "3b",
+            "error": "Invalid or expired form. Please try again.",
+        }, status_code=403)
+
+    if not integration_base_url.strip():
+        return templates.TemplateResponse(request, "wizard/onboard_integration.html", {
+            "csrf_token": _generate_csrf_token(request),
+            "company_name": company_name,
+        **_build_nav_context(request),
+            "draft_id": draft_id,
+            "saved_config": {},
+            "integration_mode": "jointly_verified",
+            "step": "3b",
+            "error": "Integration base URL is required for jointly-verified services.",
+        }, status_code=400)
+
+    config = {
+        "integration_base_url": integration_base_url.strip(),
+        "integration_auth_header": integration_auth_header,
+        "identity_matching": identity_matching,
+        "has_direct_signup": has_direct_signup == "true",
+        "cap_account_check": bool(cap_account_check),
+        "cap_account_create": bool(cap_account_create),
+        "cap_link_complete": bool(cap_link_complete),
+        "cap_unlink": bool(cap_unlink),
+        "cap_revoke": bool(cap_revoke),
+        "cap_grant_status": bool(cap_grant_status),
+        "path_revoke": None,
+    }
+
+    if not any([config["cap_account_check"], config["cap_account_create"], config["cap_link_complete"]]):
+        return templates.TemplateResponse(request, "wizard/onboard_integration.html", {
+            "csrf_token": _generate_csrf_token(request),
+            "company_name": company_name,
+        **_build_nav_context(request),
+            "draft_id": draft_id,
+            "saved_config": config,
+            "integration_mode": "jointly_verified",
+            "step": "3b",
+            "error": "At least one of account-check, account-create, or link-complete must be enabled.",
+        }, status_code=422)
+
+    await save_integration(
+        db,
+        draft_id,
+        integration_mode="jointly_verified",
+        integration_config=config,
     )
 
     return RedirectResponse(
@@ -735,18 +869,23 @@ async def onboard_preview_page(request: Request, draft_id: str):
         return templates.TemplateResponse(request, "wizard/onboard_policy.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "draft_id": draft_id,
             "candidate": json.loads(draft.get("candidate_menu_json") or "{}"),
             "step": 3,
             "error": str(exc),
         }, status_code=400)
 
+    integration_mode = draft.get("integration_mode") or "standard"
+
     return templates.TemplateResponse(request, "wizard/onboard_preview.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "draft_id": draft_id,
         "preview": preview,
         "quarantine_days": _state.quarantine_days,
+        "integration_mode": integration_mode,
         "step": 4,
         "error": None,
     })
@@ -784,6 +923,7 @@ async def onboard_publish_submit(
         return templates.TemplateResponse(request, "wizard/onboard_preview.html", {
             "csrf_token": _generate_csrf_token(request),
             "company_name": company_name,
+        **_build_nav_context(request),
             "draft_id": draft_id,
             "preview": preview,
             "quarantine_days": _state.quarantine_days,
@@ -816,6 +956,7 @@ async def onboard_success_page(request: Request, draft_id: str):
 
     return templates.TemplateResponse(request, "wizard/onboard_success.html", {
         "company_name": company_name,
+        **_build_nav_context(request),
         "service_name": final_menu.get("name", ""),
         "service_id": final_menu.get("service_id", ""),
         "actions_count": len(final_menu.get("actions", [])),
@@ -880,6 +1021,7 @@ async def services_list_page(request: Request):
     return templates.TemplateResponse(request, "wizard/services.html", {
         "csrf_token": _generate_csrf_token(request),
         "company_name": company_name,
+        **_build_nav_context(request),
         "services": services,
         "error": None,
     })

@@ -364,23 +364,24 @@
 <div class="wizard-header">
     <div class="nav-links">
         <a href="/services/onboard">+ New service</a>
-        <a href="/services">My services</a>
     </div>
-    <div class="nav-links">
-        <span class="company-name">{{ company_name }}</span>
-        <a href="/services/logout">Sign out</a>
-    </div>
+    <span class="company-name">{{ company_name }}</span>
 </div>
 {% endif %}
 
 {% if step is defined and step %}
 <div class="step-indicator">
-    {% set steps = [("1", "Spec Input"), ("2", "Review"), ("3", "Policy"), ("4", "Preview & Publish")] %}
-    {% for num, label in steps %}
-        {% if loop.index < step %}
+    {% if integration_mode is defined and integration_mode == 'jointly_verified' %}
+        {% set steps = [("1", "Spec Input", 1), ("2", "Review", 2), ("3", "Policy", 3), ("3b", "Integration", 3.5), ("4", "Preview & Publish", 4)] %}
+    {% else %}
+        {% set steps = [("1", "Spec Input", 1), ("2", "Review", 2), ("3", "Policy", 3), ("4", "Preview & Publish", 4)] %}
+    {% endif %}
+    {% set current_order = 3.5 if step == "3b" else step|float %}
+    {% for num, label, order in steps %}
+        {% if order < current_order %}
             <div class="step-dot completed">✓</div>
             <span class="step-label">{{ label }}</span>
-        {% elif loop.index == step %}
+        {% elif order == current_order %}
             <div class="step-dot active">{{ num }}</div>
             <span class="step-label active">{{ label }}</span>
         {% else %}

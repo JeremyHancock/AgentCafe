@@ -176,6 +176,44 @@ class PolicySaveRequest(BaseModel):
     actions: dict[str, PolicyAction]
     backend_url: str
     backend_auth_header: str = ""
+    integration_mode: str = "standard"
+
+    @field_validator("integration_mode")
+    @classmethod
+    def valid_integration_mode(cls, v: str) -> str:
+        if v not in ("standard", "jointly_verified"):
+            raise ValueError("integration_mode must be 'standard' or 'jointly_verified'.")
+        return v
+
+
+class IntegrationSaveRequest(BaseModel):
+    """Request body for PUT /wizard/drafts/{draft_id}/integration."""
+    integration_mode: str = "jointly_verified"
+    identity_matching: str = "opaque_id"
+    has_direct_signup: bool = False
+    integration_base_url: str = ""
+    integration_auth_header: str = ""
+    cap_account_check: bool = False
+    cap_account_create: bool = False
+    cap_link_complete: bool = False
+    cap_unlink: bool = False
+    cap_revoke: bool = True
+    cap_grant_status: bool = False
+    path_revoke: str | None = None
+
+    @field_validator("integration_mode")
+    @classmethod
+    def valid_mode(cls, v: str) -> str:
+        if v not in ("standard", "jointly_verified"):
+            raise ValueError("integration_mode must be 'standard' or 'jointly_verified'.")
+        return v
+
+    @field_validator("identity_matching")
+    @classmethod
+    def valid_identity(cls, v: str) -> str:
+        if v not in ("opaque_id", "email"):
+            raise ValueError("identity_matching must be 'opaque_id' or 'email'.")
+        return v
 
 
 class PreviewResponse(BaseModel):

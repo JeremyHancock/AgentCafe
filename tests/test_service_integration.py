@@ -826,3 +826,73 @@ class TestServiceArtifactErrorTranslation:
         assert result is not None
         assert result["status"] == 403
         assert result["error"] == "account_not_found_on_service"
+
+
+# ===========================================================================
+# Database-driven get_integration_config tests
+# ===========================================================================
+
+class TestGetIntegrationConfigDB:
+    """Tests for get_integration_config querying service_integration_configs."""
+
+    @pytest.mark.asyncio
+    async def test_returns_config_from_db(self):
+        """Config stored in DB is returned with correct structure."""
+        from agentcafe.cafe.integration import get_integration_config
+        from agentcafe.crypto import encrypt
+        db = await aiosqlite.connect(":memory:")
+        db.row_factory = aiosqlite.Row
+        now = datetime.now(timezone.utc).isoformat()
+        await db.executescript("""
+            CREATE TABLE service_integration_configs (
+                service_id TEXT PRIMARY KEY,
+                integration_base_url TEXT NOT NULL,
+                integration_auth_header TEXT NOT NULL DEFAULT '',
+                identity_matching TEXT NOT NULL DEFAULT 'opaque_id',
+                has_direct_signup INTEGER NOT NULL DEFAULT 0,
+                cap_account_check INTEGER NOT NULL DEFAULT 0,
+                cap_account_create INTEGER NOT NULL DEFAULT 0,
+                cap_link_complete INTEGER NOT NULL DEFAULT 0,
+                cap_unlink INTEGER NOT NULL DEFAULT 0,
+                cap_revoke INTEGER NOT NULL DEFAULT 1,
+                cap_grant_status INTEGER NOT NULL DEFAULT 0,
+                path_revoke TEXT,
+                configured_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+        """)
+        await db.execute(
+            """INSERT INTO service_integration_configs
+               (service_id, integration_base_url, integration_auth_header,
+                identity_matching, has_direct_signup,
+                cap_account_check, cap_account_create, cap_revoke,
+                configured_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ("test-svc", "https://test.example.com", encrypt("Bearer secret"),
+             "opaque_id", 0, 0, 1, 1, now, now),
+        )
+        await db.commit()
+
+        config = await get_integration_config("test-svc", db)
+        assert config is not None
+        assert config["service_id"] == "test-svc"
+        assert config["integration_base_url"] == "https://test.example.com"
+        assert config["capabilities"]["account_create"] is True
+        assert config["capabilities"]["revoke"] is True
+        assert config["identity_matching"] == "opaque_id"
+        await db.close()
+
+    @pytest.mark.asyncio
+    async def test_fallback_to_hm_without_db(self):
+        """Without db, returns HM fallback."""
+        from agentcafe.cafe.integration import get_integration_config
+        config = await get_integration_config("human-memory")
+        assert config is not None
+        assert config["service_id"] == "human-memory"
+
+    @pytest.mark.asyncio
+    async def test_unknown_service_returns_none(self):
+        """Unknown service returns None."""
+        from agentcafe.cafe.integration import get_integration_config
+        config = await get_integration_config("nonexistent-service")
+        assert config is None
