@@ -150,16 +150,16 @@ We can run end-to-end locally:
 
 **⚠️ HIGH PRIORITY — Production UX Flows**
 - ✅ **Company onboarding wizard UI** — Rebuilt as server-rendered Jinja2 pages (`cafe/wizard_pages.py`). Covers: company registration, login, spec upload, AI review, policy config, preview, publish, post-publish service management. 18 tests.
-- 🔜 **Human consent flow polish** — Deferred to pre-launch. Company Cards (Phase 8.1) will change consent UI; polishing now means rework.
-- 🔜 **Human policy dashboard improvements** — Deferred to pre-launch. The "Tab" view from Company Cards replaces the current dashboard concept.
+- 🔜 **Human consent flow polish** — See `docs/planning/backlog.md` M2 items 2.16–2.20.
+- 🔜 **Human policy dashboard improvements** — See `docs/planning/backlog.md` M2 items 2.16–2.20.
 - ✅ **Admin dashboard** — Rebuilt as Jinja2 page at `/admin` (API key gated, stats, services list, audit log).
-- 🔜 **Company wizard page documentation & helper content** — Deferred to pre-launch. Wizard works; help content is polish.
-- 🔜 **Landing page → sign-up funnel** — Deferred to pre-launch (intentionally absent during beta).
+- 🔜 **Company wizard page documentation & helper content** — See `docs/planning/backlog.md` M1 items 1.1–1.9, M2 items 2.8–2.14.
+- 🔜 **Landing page → sign-up funnel** — See `docs/planning/backlog.md` M2 item 2.19.
 
-**Observability (beta level)** — Deferred to pre-launch. Structured logs, dashboards, and alerting become important when real traffic arrives post-MCP adapter.
-- 🔜 Structured JSON logs with request IDs
-- 🔜 Platform-provided health, latency, and error-rate dashboard
-- 🔜 Alerting on 5xx spikes or service suspensions (email/Slack)
+**Observability (beta level)** — See `docs/planning/backlog.md` M1 items 1.14–1.15, M2 items 2.21–2.23.
+- 🔜 Structured JSON logs with request IDs — already implemented (`CAFE_LOG_FORMAT=json`)
+- 🔜 Platform-provided health, latency, and error-rate dashboard — backlog M2 item 2.22
+- 🔜 Alerting on 5xx spikes or service suspensions — backlog M2 item 2.21
 
 **Beta Success Criteria**
 - At least 1 real service onboarded through the wizard (Human Memory — see Service Integration Standard above)

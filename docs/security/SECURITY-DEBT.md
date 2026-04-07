@@ -1,6 +1,6 @@
 # Security Debt Tracker — Human Approval Bypass Risks
 
-**Purpose:** Catalog every code path where an agent could potentially bypass required human approval to access real company endpoints. Each item must be resolved before real companies onboard.
+**Purpose:** Catalog every code path where an agent could potentially bypass required human approval to access real company endpoints. Human Memory onboarded April 7, 2026 — critical items resolved, remaining items tracked in `docs/planning/backlog.md`.
 
 **Invariant:** *No agent may obtain write-scope access to a real service endpoint without a cryptographically verified human approval (passkey).*
 
@@ -37,7 +37,7 @@
 - **Risk:** When `USE_REAL_PASSPORT=false`, the string `"demo-passport"` is accepted as a valid passport with all scopes, including human authorization for write actions.
 - **Impact:** Any agent sending `passport: "demo-passport"` gets unrestricted access.
 - **Fix:** `USE_REAL_PASSPORT` must be `true` in production. Already configurable. **Verify this is set before real company onboarding.**
-- **Status:** ⚠️ OPEN (production currently uses `true`, but no enforcement prevents changing it)
+- **Status:** ⚠️ OPEN (production currently uses `true`, but no enforcement prevents changing it). See `docs/planning/backlog.md` item 1.12.
 
 ---
 
@@ -55,7 +55,7 @@
 - **Risk:** Company accounts (service publishers) use email+password with no passkey option. A compromised company account could publish malicious service definitions.
 - **Impact:** Lower priority than human account bypass (companies are not the consent gate), but still a supply-chain risk.
 - **Fix:** Add passkey support to company wizard auth. Sprint 3+ item.
-- **Status:** 🔵 DEFERRED
+- **Status:** 🔵 DEFERRED. See `docs/planning/backlog.md` item 3.1.
 
 ### SEC-8: No rate limiting on passkey challenge endpoints
 - **File:** `agentcafe/cafe/human.py` — `POST /human/passkey/register/begin`, `POST /human/passkey/login/begin`
@@ -76,7 +76,7 @@
 - **Risk:** Any agent with a valid Tier-1 passport can report arbitrary spend against any Company Card by knowing the card_id (a UUID). This could drain a card's budget and block token issuance for the legitimate agent.
 - **Impact:** Low-medium. Card IDs are UUIDs (not guessable), and in practice this endpoint is called by the Cafe system after proxied orders, not directly by agents. But the API surface is unprotected.
 - **Fix:** Verify the calling agent's passport was issued under this card (check `card_id` claim in JWT), or restrict to human session auth (card owner) / system API key.
-- **Status:** 🔵 DEFERRED (low practical risk due to UUID card IDs; no test-breaking change needed)
+- **Status:** 🔵 DEFERRED (low practical risk due to UUID card IDs; no test-breaking change needed). See `docs/planning/backlog.md` item 1.16.
 
 ---
 
