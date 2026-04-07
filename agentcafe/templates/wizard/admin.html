@@ -1,0 +1,223 @@
+{% extends "base.html" %}
+
+{% block title %}Platform Admin — AgentCafe{% endblock %}
+
+{% block extra_head %}
+<style>
+    .container { max-width: 1000px; }
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+    .stat-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+    }
+    .stat-card .label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: var(--text-muted);
+        font-weight: 600;
+    }
+    .stat-card .value {
+        font-size: 28px;
+        font-weight: 700;
+        margin-top: 4px;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th {
+        text-align: left; padding: 8px 12px; color: var(--text-muted);
+        font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+        border-bottom: 1px solid var(--border);
+    }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+    .admin-header {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--border);
+    }
+    .svc-card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px; margin-bottom: 12px;
+    }
+    .svc-card-header {
+        display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px;
+    }
+    .badge {
+        display: inline-block; padding: 3px 8px; border-radius: 6px;
+        font-size: 11px; font-weight: 600; text-transform: uppercase;
+    }
+    .badge-live { background: #064e3b; color: #6ee7b7; }
+    .badge-quarantine { background: #78350f; color: #fcd34d; }
+    .badge-suspended { background: #7f1d1d; color: #fca5a5; }
+    .badge-tier2 { background: #78350f; color: #fcd34d; }
+    .outcome-success { color: #6ee7b7; }
+    .outcome-error { color: #fca5a5; }
+    @media (prefers-color-scheme: light) {
+        .badge-live { background: #d1fae5; color: #065f46; }
+        .badge-quarantine { background: #fef3c7; color: #92400e; }
+        .badge-suspended { background: #fee2e2; color: #991b1b; }
+        .badge-tier2 { background: #fef3c7; color: #92400e; }
+        .outcome-success { color: #16a34a; }
+        .outcome-error { color: #dc2626; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if not authenticated %}
+<!-- Login gate -->
+<div class="card">
+    <h1 style="text-align: center;">AgentCafe Admin</h1>
+    <p style="text-align: center;">Platform operator access only</p>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="get" action="/admin">
+        <div class="form-group">
+            <label for="key">Admin Key</label>
+            <input type="password" id="key" name="key" required
+                   placeholder="Enter ISSUER_API_KEY" autofocus>
+        </div>
+        <button type="submit" class="btn btn-primary">Sign in</button>
+    </form>
+</div>
+{% else %}
+<!-- Admin dashboard -->
+<div class="admin-header">
+    <div>
+        <span style="font-weight: 700; font-size: 18px;">Platform Admin</span>
+    </div>
+    <div style="display: flex; gap: 12px;">
+        <a href="/admin" style="color: var(--text-muted); text-decoration: none; font-size: 14px;">Refresh</a>
+        <a href="/admin?logout=1" style="color: var(--text-muted); text-decoration: none; font-size: 14px;"
+           onclick="document.cookie='admin_key=;max-age=0;path=/';">Sign out</a>
+    </div>
+</div>
+
+<!-- Stats -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="label">Services</div>
+        <div class="value">{{ services | length }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Total Requests</div>
+        <div class="value">{{ total_requests }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Last 24h</div>
+        <div class="value">{{ recent_requests }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Active Policies</div>
+        <div class="value">{{ active_policies_count }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">Active Cards</div>
+        <div class="value">{{ active_cards_count }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">p50 Latency</div>
+        <div class="value">{{ (p50_latency | string ~ 'ms') if p50_latency is not none else '—' }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="label">p95 Latency</div>
+        <div class="value">{{ (p95_latency | string ~ 'ms') if p95_latency is not none else '—' }}</div>
+    </div>
+</div>
+
+<!-- Consent funnel -->
+<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+    <h3 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">Consent Funnel (24h)</h3>
+    <div style="display: flex; gap: 24px; font-size: 14px;">
+        <span style="color: var(--warning);">{{ consent_pending }} pending</span>
+        <span style="color: var(--success);">{{ consent_approved_24h }} approved</span>
+        <span style="color: var(--danger);">{{ consent_declined_24h }} declined</span>
+    </div>
+</div>
+
+<!-- Services -->
+<h2 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">
+    All Services
+</h2>
+
+{% for svc in services %}
+<div class="svc-card">
+    <div class="svc-card-header">
+        <span style="font-weight: 600;">{{ svc.name }}</span>
+        <code style="font-size: 12px; background: var(--bg); padding: 2px 8px; border-radius: 4px;">{{ svc.service_id }}</code>
+        {% if svc._source == 'wizard' %}
+        <span class="badge badge-{{ svc._status or 'live' }}">{{ svc._status or 'live' }}</span>
+        <span style="font-size: 11px; color: var(--text-muted);">wizard</span>
+        {% else %}
+        <span class="badge badge-live">live</span>
+        <span style="font-size: 11px; color: var(--text-muted);">seeded</span>
+        {% endif %}
+    </div>
+    <p class="meta" style="margin-bottom: 6px;">{{ svc.description or '' }}</p>
+    <span class="meta">{{ svc.actions | length }} actions</span>
+</div>
+{% endfor %}
+
+{% if services | length == 0 %}
+<p class="meta" style="text-align: center; padding: 24px;">No services on the Menu yet.</p>
+{% endif %}
+
+<!-- Audit log -->
+<div style="margin-top: 24px;">
+    <h2 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">
+        Audit Log (page {{ audit_page }})
+    </h2>
+    <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Timestamp</th>
+                    <th>Service</th>
+                    <th>Action</th>
+                    <th>Outcome</th>
+                    <th>Status</th>
+                    <th>Latency</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in audit_entries %}
+                <tr>
+                    <td style="font-family: monospace; color: var(--text-muted);">{{ entry.timestamp[:19] if entry.timestamp else '' }}</td>
+                    <td><code>{{ entry.service_id or '' }}</code></td>
+                    <td><code>{{ entry.action_id or '' }}</code></td>
+                    <td>
+                        <span class="{{ 'outcome-success' if entry.outcome == 'success' else 'outcome-error' }}">
+                            {{ entry.outcome or '' }}
+                        </span>
+                    </td>
+                    <td>{{ entry.response_code or '—' }}</td>
+                    <td>{{ (entry.latency_ms | string ~ 'ms') if entry.latency_ms is not none else '—' }}</td>
+                </tr>
+                {% endfor %}
+                {% if audit_entries | length == 0 %}
+                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 24px;">No audit entries yet.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+    <div style="display: flex; justify-content: space-between; margin-top: 12px;">
+        {% if audit_page > 1 %}
+        <a href="/admin?page={{ audit_page - 1 }}" style="color: var(--accent); text-decoration: none; font-size: 13px;">Previous</a>
+        {% else %}
+        <span></span>
+        {% endif %}
+        {% if audit_has_next %}
+        <a href="/admin?page={{ audit_page + 1 }}" style="color: var(--accent); text-decoration: none; font-size: 13px;">Next</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,172 @@
+"""Anthropic Claude tool_use agent for AgentCafe.
+
+This script shows how a Claude agent can discover services on AgentCafe,
+register for a Passport, and place orders — all via tool_use.
+
+Usage:
+    export ANTHROPIC_API_KEY=sk-ant-...
+    python examples/claude_agent.py
+
+    # Or with a custom prompt:
+    python examples/claude_agent.py "Find plumbers near 78701"
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+import anthropic
+import httpx
+
+CAFE_BASE_URL = os.getenv("AGENTCAFE_URL", "https://agentcafe.io")
+
+# --- AgentCafe tools for Claude tool_use ---
+
+TOOLS = [
+    {
+        "name": "browse_menu",
+        "description": (
+            "Browse the AgentCafe Menu to discover available services and their actions. "
+            "Returns a list of services with their capabilities, required inputs, and scopes."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "register_passport",
+        "description": (
+            "Register for a Tier-1 (read-only) Passport. This is required before "
+            "placing any orders. Returns a JWT token valid for ~1 hour."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "place_order",
+        "description": (
+            "Place an order through AgentCafe. Requires a valid Passport token. "
+            "For read actions, a Tier-1 Passport is sufficient. "
+            "For write actions, a Tier-2 Passport (with human consent) is needed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "service_id": {
+                    "type": "string",
+                    "description": "The service_id from the Menu (e.g., 'stayright-hotels')",
+                },
+                "action_id": {
+                    "type": "string",
+                    "description": "The action_id from the Menu (e.g., 'search-availability')",
+                },
+                "passport": {
+                    "type": "string",
+                    "description": "The Passport JWT token from register_passport",
+                },
+                "inputs": {
+                    "type": "object",
+                    "description": "The required inputs for this action, as defined in the Menu",
+                },
+            },
+            "required": ["service_id", "action_id", "passport", "inputs"],
+        },
+    },
+]
+
+
+# --- Tool execution ---
+
+def execute_tool(name: str, args: dict) -> str:
+    """Execute an AgentCafe tool and return the result as a string."""
+    with httpx.Client(base_url=CAFE_BASE_URL, timeout=30.0) as client:
+        if name == "browse_menu":
+            resp = client.get("/cafe/menu")
+            return json.dumps(resp.json(), indent=2)
+
+        if name == "register_passport":
+            resp = client.post(
+                "/passport/register",
+                json={"agent_tag": "claude-agent"},
+            )
+            return json.dumps(resp.json(), indent=2)
+
+        if name == "place_order":
+            resp = client.post("/cafe/order", json=args)
+            return json.dumps(resp.json(), indent=2)
+
+    return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+# --- Agent loop ---
+
+SYSTEM_PROMPT = """\
+You are a helpful assistant that can use AgentCafe to access real-world services \
+on behalf of the user.
+
+Workflow:
+1. Call browse_menu to see what services are available.
+2. Call register_passport to get a Tier-1 (read) token.
+3. Call place_order with the token and the right inputs to fulfill the user's request.
+
+Always browse the menu first to discover the exact service_id, action_id, and \
+required_inputs before placing an order. Use the Passport token from step 2.\
+"""
+
+
+def run_agent(user_message: str) -> None:
+    """Run the Claude agent loop with tool_use."""
+    client = anthropic.Anthropic()
+
+    messages = [{"role": "user", "content": user_message}]
+
+    print(f"\n{'='*60}")
+    print(f"User: {user_message}")
+    print(f"{'='*60}\n")
+
+    for _ in range(10):  # max 10 turns to prevent infinite loops
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=4096,
+            system=SYSTEM_PROMPT,
+            tools=TOOLS,
+            messages=messages,
+        )
+
+        # Collect tool results
+        tool_results = []
+        text_parts = []
+
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+            elif block.type == "tool_use":
+                print(f"  [Tool] {block.name}({json.dumps(block.input)[:100]}...)")
+                result = execute_tool(block.name, block.input)
+                print(f"  [Result] {result[:150]}...\n")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        # If there were tool calls, continue the loop
+        if tool_results:
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user", "content": tool_results})
+            continue
+
+        # Final text response
+        if text_parts:
+            print(f"Assistant: {''.join(text_parts)}\n")
+        break
+
+
+if __name__ == "__main__":
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        print("Error: Set ANTHROPIC_API_KEY environment variable")
+        sys.exit(1)
+
+    prompt = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else (
+        "Search for hotels in Austin, TX for March 15-18, 2026 for 2 guests"
+    )
+    run_agent(prompt)

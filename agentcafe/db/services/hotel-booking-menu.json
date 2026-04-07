@@ -1,0 +1,172 @@
+{
+  "service_id": "stayright-hotels",
+  "name": "StayRight Hotels",
+  "category": "hotels",
+  "capability_tags": ["travel", "booking", "accommodation"],
+  "description": "Search and book hotel rooms worldwide. Find availability by city, dates, and preferences. Book rooms, view details, and manage cancellations.",
+  "account_linking_required": false,
+  "concurrency_guidance": "One booking per agent session recommended. Avoid parallel book-room calls for the same dates.",
+  "actions": [
+    {
+      "action_id": "search-availability",
+      "description": "Search for available hotel rooms by city, dates, number of guests, and optional filters like max price and amenities. Returns a list of matching rooms with pricing.",
+      "required_inputs": [
+        {
+          "name": "city",
+          "type": "string",
+          "description": "City to search for hotels",
+          "example": "Austin"
+        },
+        {
+          "name": "check_in",
+          "type": "string",
+          "description": "Check-in date in ISO 8601 format",
+          "example": "2026-03-15"
+        },
+        {
+          "name": "check_out",
+          "type": "string",
+          "description": "Check-out date in ISO 8601 format",
+          "example": "2026-03-18"
+        },
+        {
+          "name": "guests",
+          "type": "integer",
+          "description": "Number of guests (1-10)",
+          "example": 2
+        }
+      ],
+      "risk_tier": "low",
+      "cost": {
+        "required_scopes": ["stayright-hotels:search-availability"],
+        "human_authorization_required": false,
+        "limits": {"rate_limit": "60/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "results": [
+          {
+            "room_id": "sr-austin-k420",
+            "hotel_name": "StayRight Austin Downtown",
+            "room_type": "King Suite",
+            "price_per_night": 189.00,
+            "currency": "USD",
+            "amenities": ["wifi", "pool", "gym", "breakfast"],
+            "rating": 4.5,
+            "available": true
+          }
+        ],
+        "total_results": 1
+      }
+    },
+    {
+      "action_id": "get-room-details",
+      "description": "Get full details for a specific room including description, amenities, cancellation policy, and real-time pricing.",
+      "required_inputs": [
+        {
+          "name": "room_id",
+          "type": "string",
+          "description": "Unique room identifier from search results",
+          "example": "sr-austin-k420"
+        }
+      ],
+      "risk_tier": "low",
+      "cost": {
+        "required_scopes": ["stayright-hotels:get-room-details"],
+        "human_authorization_required": false,
+        "limits": {"rate_limit": "60/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "room_id": "sr-austin-k420",
+        "hotel_name": "StayRight Austin Downtown",
+        "address": "200 Congress Ave, Austin, TX 78701",
+        "room_type": "King Suite",
+        "description": "Spacious king suite with city views, work desk, and rainfall shower.",
+        "price_per_night": 189.00,
+        "currency": "USD",
+        "amenities": ["wifi", "pool", "gym", "breakfast", "parking"],
+        "cancellation_policy": "Free cancellation up to 24 hours before check-in",
+        "rating": 4.5,
+        "review_count": 1247
+      }
+    },
+    {
+      "action_id": "book-room",
+      "description": "Book a specific hotel room. Creates a confirmed reservation with a financial commitment. Sends confirmation email to the guest.",
+      "required_inputs": [
+        {
+          "name": "room_id",
+          "type": "string",
+          "description": "Room to book (from search results)",
+          "example": "sr-austin-k420"
+        },
+        {
+          "name": "check_in",
+          "type": "string",
+          "description": "Check-in date in ISO 8601 format",
+          "example": "2026-03-15"
+        },
+        {
+          "name": "check_out",
+          "type": "string",
+          "description": "Check-out date in ISO 8601 format",
+          "example": "2026-03-18"
+        },
+        {
+          "name": "guest_name",
+          "type": "string",
+          "description": "Full name of the primary guest",
+          "example": "Jane Smith"
+        },
+        {
+          "name": "guest_email",
+          "type": "string",
+          "description": "Contact email for booking confirmation",
+          "example": "jane@example.com"
+        }
+      ],
+      "risk_tier": "medium",
+      "human_identifier_field": "guest_email",
+      "cost": {
+        "required_scopes": ["stayright-hotels:book-room"],
+        "human_authorization_required": true,
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "booking_id": "BK-2026-0315-A7X9",
+        "status": "confirmed",
+        "hotel_name": "StayRight Austin Downtown",
+        "room_type": "King Suite",
+        "check_in": "2026-03-15",
+        "check_out": "2026-03-18",
+        "total_price": 567.00,
+        "currency": "USD",
+        "cancellation_deadline": "2026-03-14T00:00:00Z",
+        "confirmation_email_sent": true
+      }
+    },
+    {
+      "action_id": "cancel-booking",
+      "description": "Cancel an existing hotel booking. Cancellation policy applies — refund amount depends on timing relative to check-in date.",
+      "required_inputs": [
+        {
+          "name": "booking_id",
+          "type": "string",
+          "description": "Booking identifier from the original booking confirmation",
+          "example": "BK-2026-0315-A7X9"
+        }
+      ],
+      "risk_tier": "high",
+      "cost": {
+        "required_scopes": ["stayright-hotels:cancel-booking"],
+        "human_authorization_required": true,
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "booking_id": "BK-2026-0315-A7X9",
+        "status": "cancelled",
+        "refund_amount": 567.00,
+        "currency": "USD"
+      }
+    }
+  ]
+}

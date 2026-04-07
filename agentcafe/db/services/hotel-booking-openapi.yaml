@@ -1,0 +1,368 @@
+# HotelBookingService — Internal Backend OpenAPI 3.1 Spec
+# This is the INTERNAL spec that the company runs behind AgentCafe's proxy.
+# Agents never see this spec, these URLs, or these implementation details.
+# AgentCafe ingests this during onboarding to generate the Menu entry and proxy config.
+
+openapi: "3.1.0"
+info:
+  title: HotelBookingService Internal API
+  version: "1.0.0"
+  description: >
+    Internal API for a hotel booking platform. Supports searching availability,
+    viewing room details, booking rooms, and cancelling bookings.
+    Registered with AgentCafe as a proxied service.
+  contact:
+    name: StayRight Hotels API Team
+    email: api@stayright-hotels.example.com
+
+servers:
+  # This URL is NEVER exposed to agents. AgentCafe proxies all calls.
+  - url: https://api.stayright-hotels.example.com/v1
+    description: Production backend (proxied by AgentCafe)
+
+paths:
+  /availability/search:
+    post:
+      operationId: searchAvailability
+      summary: Search available rooms
+      description: >
+        Search for available hotel rooms matching the given criteria.
+        Returns a list of available rooms with pricing. No booking is created.
+      tags:
+        - availability
+      # AgentCafe scoping point: this is a read-only action, low risk
+      x-agentcafe-scope: hotel:search
+      x-agentcafe-human-authorization: false
+      x-agentcafe-rate-limit: 60/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - city
+                - check_in
+                - check_out
+                - guests
+              properties:
+                city:
+                  type: string
+                  description: City name to search in
+                  example: "Austin"
+                check_in:
+                  type: string
+                  format: date
+                  description: Check-in date (ISO 8601)
+                  example: "2026-03-15"
+                check_out:
+                  type: string
+                  format: date
+                  description: Check-out date (ISO 8601)
+                  example: "2026-03-18"
+                guests:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                  description: Number of guests
+                  example: 2
+                max_price_per_night:
+                  type: number
+                  description: Maximum price per night in USD (optional filter)
+                  example: 250.00
+                amenities:
+                  type: array
+                  items:
+                    type: string
+                  description: Desired amenities (optional filter)
+                  example: ["wifi", "pool", "gym"]
+      responses:
+        "200":
+          description: List of available rooms
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/RoomResult"
+                  total_results:
+                    type: integer
+              example:
+                results:
+                  - room_id: "sr-austin-k420"
+                    hotel_name: "StayRight Austin Downtown"
+                    room_type: "King Suite"
+                    price_per_night: 189.00
+                    currency: "USD"
+                    amenities: ["wifi", "pool", "gym", "breakfast"]
+                    rating: 4.5
+                    available: true
+                  - room_id: "sr-austin-d212"
+                    hotel_name: "StayRight Austin Downtown"
+                    room_type: "Double Queen"
+                    price_per_night: 149.00
+                    currency: "USD"
+                    amenities: ["wifi", "gym"]
+                    rating: 4.5
+                    available: true
+                total_results: 2
+        "400":
+          description: Invalid search parameters
+        "429":
+          description: Rate limit exceeded
+
+  /rooms/{room_id}:
+    get:
+      operationId: getRoomDetails
+      summary: Get detailed room information
+      description: >
+        Retrieve full details for a specific room including photos, policies,
+        and real-time pricing. Read-only, no booking created.
+      tags:
+        - rooms
+      x-agentcafe-scope: hotel:search
+      x-agentcafe-human-authorization: false
+      x-agentcafe-rate-limit: 60/minute
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Unique room identifier
+          example: "sr-austin-k420"
+      responses:
+        "200":
+          description: Room details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomDetails"
+              example:
+                room_id: "sr-austin-k420"
+                hotel_name: "StayRight Austin Downtown"
+                address: "200 Congress Ave, Austin, TX 78701"
+                room_type: "King Suite"
+                description: "Spacious king suite with city views, work desk, and rainfall shower."
+                price_per_night: 189.00
+                currency: "USD"
+                amenities: ["wifi", "pool", "gym", "breakfast", "parking"]
+                cancellation_policy: "Free cancellation up to 24 hours before check-in"
+                rating: 4.5
+                review_count: 1247
+        "404":
+          description: Room not found
+
+  /bookings:
+    post:
+      operationId: bookRoom
+      summary: Book a room
+      description: >
+        Create a confirmed booking for a specific room. This is a WRITE action
+        that creates a financial commitment. Requires human authorization.
+      tags:
+        - bookings
+      # AgentCafe scoping point: this creates a financial commitment
+      x-agentcafe-scope: hotel:book
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - room_id
+                - check_in
+                - check_out
+                - guest_name
+                - guest_email
+              properties:
+                room_id:
+                  type: string
+                  description: Room to book
+                  example: "sr-austin-k420"
+                check_in:
+                  type: string
+                  format: date
+                  example: "2026-03-15"
+                check_out:
+                  type: string
+                  format: date
+                  example: "2026-03-18"
+                guest_name:
+                  type: string
+                  description: Full name of the primary guest
+                  example: "Jane Smith"
+                guest_email:
+                  type: string
+                  format: email
+                  description: Contact email for booking confirmation
+                  example: "jane@example.com"
+                special_requests:
+                  type: string
+                  description: Optional special requests
+                  example: "Late check-in around 11pm, high floor preferred"
+      responses:
+        "201":
+          description: Booking confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Booking"
+              example:
+                booking_id: "BK-2026-0315-A7X9"
+                status: "confirmed"
+                hotel_name: "StayRight Austin Downtown"
+                room_type: "King Suite"
+                check_in: "2026-03-15"
+                check_out: "2026-03-18"
+                total_price: 567.00
+                currency: "USD"
+                cancellation_deadline: "2026-03-14T00:00:00Z"
+                confirmation_email_sent: true
+        "400":
+          description: Invalid booking request
+        "409":
+          description: Room no longer available
+
+  /bookings/{booking_id}/cancel:
+    post:
+      operationId: cancelBooking
+      summary: Cancel an existing booking
+      description: >
+        Cancel a confirmed booking. Cancellation policy applies.
+        This is a WRITE action that modifies a financial commitment.
+        Requires human authorization.
+      tags:
+        - bookings
+      x-agentcafe-scope: hotel:cancel
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      parameters:
+        - name: booking_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Booking identifier
+          example: "BK-2026-0315-A7X9"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional cancellation reason
+                  example: "Plans changed, no longer traveling"
+      responses:
+        "200":
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  booking_id:
+                    type: string
+                  status:
+                    type: string
+                  refund_amount:
+                    type: number
+                  currency:
+                    type: string
+              example:
+                booking_id: "BK-2026-0315-A7X9"
+                status: "cancelled"
+                refund_amount: 567.00
+                currency: "USD"
+        "404":
+          description: Booking not found
+        "422":
+          description: Cancellation not allowed (past deadline)
+
+components:
+  schemas:
+    RoomResult:
+      type: object
+      properties:
+        room_id:
+          type: string
+        hotel_name:
+          type: string
+        room_type:
+          type: string
+        price_per_night:
+          type: number
+        currency:
+          type: string
+        amenities:
+          type: array
+          items:
+            type: string
+        rating:
+          type: number
+        available:
+          type: boolean
+
+    RoomDetails:
+      type: object
+      properties:
+        room_id:
+          type: string
+        hotel_name:
+          type: string
+        address:
+          type: string
+        room_type:
+          type: string
+        description:
+          type: string
+        price_per_night:
+          type: number
+        currency:
+          type: string
+        amenities:
+          type: array
+          items:
+            type: string
+        cancellation_policy:
+          type: string
+        rating:
+          type: number
+        review_count:
+          type: integer
+
+    Booking:
+      type: object
+      properties:
+        booking_id:
+          type: string
+        status:
+          type: string
+        hotel_name:
+          type: string
+        room_type:
+          type: string
+        check_in:
+          type: string
+          format: date
+        check_out:
+          type: string
+          format: date
+        total_price:
+          type: number
+        currency:
+          type: string
+        cancellation_deadline:
+          type: string
+          format: date-time
+        confirmation_email_sent:
+          type: boolean

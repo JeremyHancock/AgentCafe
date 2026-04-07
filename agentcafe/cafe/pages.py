@@ -1,0 +1,1830 @@
+"""Server-rendered pages — login, register, consent approval, Tab (Company Cards).
+
+Human-facing Jinja2 pages. These wrap the existing API logic and use
+session cookies (httponly) for authentication. Separate from the JSON
+API endpoints which use Authorization headers.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import os
+import secrets
+import uuid
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+
+from fastapi import APIRouter, Request, Form, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+
+import bcrypt
+import jwt
+
+from agentcafe.cafe.cards import _create_jv_grant_if_needed
+from agentcafe.cafe.consent import _fire_consent_callback, _handle_jointly_verified_consent
+from agentcafe.cafe.human import (
+    _hash_password, _verify_password, _rehash_if_legacy,
+    _create_human_session_token, validate_human_session,
+    verify_passkey_assertion, complete_passkey_registration,
+    _check_passkey_enrollment,
+)
+from agentcafe.db.engine import get_db
+
+logger = logging.getLogger("agentcafe.pages")
+
+pages_router = APIRouter(tags=["pages"])
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+
+_COOKIE_NAME = "cafe_session"
+_COOKIE_MAX_AGE = 24 * 60 * 60  # 24 hours
+_SECURE_COOKIES = os.getenv("CAFE_SECURE_COOKIES", "").lower() not in ("", "0", "false")
+
+_COMPANY_COOKIE_NAME = "company_session"
+_COMPANY_COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours
+
+# Risk-tier ceilings (must match consent.py)
+_RISK_TIER_CEILINGS = {"low": 3600, "medium": 900, "high": 300, "critical": 0}
+
+
+class _State:
+    """Module-level mutable state (avoids global statements)."""
+    signing_secret: str = ""
+    allow_password_auth: bool = True
+
+_state = _State()
+
+
+def configure_pages(signing_secret: str, *, allow_password_auth: bool = True) -> None:
+    """Set the signing secret and auth mode. Called once at startup."""
+    _state.signing_secret = signing_secret
+    _state.allow_password_auth = allow_password_auth
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_session(request: Request) -> dict | None:
+    """Extract and validate the session cookie. Returns payload or None."""
+    token = request.cookies.get(_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        return validate_human_session(token)
+    except HTTPException:
+        return None
+
+
+def _set_session_cookie(response, token: str) -> None:
+    """Set the session cookie on a response."""
+    response.set_cookie(
+        key=_COOKIE_NAME,
+        value=token,
+        max_age=_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=_SECURE_COOKIES,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Company session helpers (for unified login)
+# ---------------------------------------------------------------------------
+
+def _get_company_session(request: Request) -> dict | None:
+    """Extract and validate the company session cookie. Returns payload or None."""
+    token = request.cookies.get(_COMPANY_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        return jwt.decode(
+            token, _state.signing_secret, algorithms=["HS256"],
+            issuer="agentcafe-wizard",
+        )
+    except jwt.PyJWTError:
+        return None
+
+
+def _get_company_id(request: Request) -> str | None:
+    """Get company_id from company session cookie, or None."""
+    session = _get_company_session(request)
+    return session.get("sub") if session else None
+
+
+def _create_company_session(company_id: str) -> str:
+    """Create a JWT session token for a company."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": "agentcafe-wizard",
+        "sub": company_id,
+        "exp": now + timedelta(hours=8),
+        "iat": now,
+    }
+    return jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+
+
+def _set_company_cookie(response, token: str) -> None:
+    """Set the company session cookie on a response."""
+    response.set_cookie(
+        key=_COMPANY_COOKIE_NAME,
+        value=token,
+        max_age=_COMPANY_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=_SECURE_COOKIES,
+    )
+
+
+async def _company_landing_url(company_id: str) -> str:
+    """Return /services if the company has published services, else /services/onboard."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) as cnt FROM published_services WHERE company_id = ? AND status != 'unpublished'",
+        (company_id,),
+    )
+    row = await cursor.fetchone()
+    if row and row["cnt"] > 0:
+        return "/services"
+    return "/services/onboard"
+
+
+async def _build_nav_context(request: Request) -> dict:
+    """Build navigation context for templates, checking both session types."""
+    return {
+        "has_human_session": _get_session(request) is not None,
+        "has_company_session": _get_company_id(request) is not None,
+    }
+
+
+_CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
+
+
+def _generate_csrf_token(request: Request) -> str:
+    """Generate a CSRF token tied to the current session.
+
+    Format: nonce.timestamp.signature
+    Signature = HMAC-SHA256(signing_secret, nonce + timestamp + session_cookie)
+    """
+    session_cookie = request.cookies.get(_COOKIE_NAME, "")
+    nonce = secrets.token_hex(16)
+    ts = str(int(datetime.now(timezone.utc).timestamp()))
+    msg = f"{nonce}.{ts}.{session_cookie}"
+    sig = hmac.new(_state.signing_secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return f"{nonce}.{ts}.{sig}"
+
+
+def _validate_csrf_token(request: Request, token: str | None) -> bool:
+    """Validate a CSRF token against the current session."""
+    if not token:
+        return False
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False
+    nonce, ts, sig = parts
+    # Check timestamp freshness
+    try:
+        token_time = int(ts)
+    except ValueError:
+        return False
+    now = int(datetime.now(timezone.utc).timestamp())
+    if abs(now - token_time) > _CSRF_TOKEN_MAX_AGE:
+        return False
+    # Recompute signature
+    session_cookie = request.cookies.get(_COOKIE_NAME, "")
+    msg = f"{nonce}.{ts}.{session_cookie}"
+    expected = hmac.new(_state.signing_secret.encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig, expected)
+
+
+def _lifetime_options(risk_tier: str) -> list[dict]:
+    """Build duration selector options respecting the risk-tier ceiling."""
+    ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+    all_options = [
+        {"seconds": 300, "label": "5 minutes"},
+        {"seconds": 600, "label": "10 minutes"},
+        {"seconds": 900, "label": "15 minutes"},
+        {"seconds": 1800, "label": "30 minutes"},
+        {"seconds": 3600, "label": "1 hour"},
+    ]
+    if ceiling == 0:
+        return [{"seconds": 0, "label": "Single use", "default": True}]
+
+    options = [o for o in all_options if o["seconds"] <= ceiling]
+    if not options:
+        options = [{"seconds": ceiling, "label": f"{ceiling}s"}]
+
+    # Default to the largest allowed
+    for opt in options:
+        opt["default"] = False
+    options[-1]["default"] = True
+    return options
+
+
+def _ceiling_label(risk_tier: str) -> str:
+    """Human-readable label for the ceiling."""
+    ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+    if ceiling == 0:
+        return "single use"
+    if ceiling >= 3600:
+        return f"{ceiling // 3600} hour{'s' if ceiling >= 7200 else ''}"
+    return f"{ceiling // 60} minutes"
+
+
+def _consent_text(service_name: str, actions: list[dict]) -> str:
+    """Generate Cafe-authored plain-language consent text."""
+    count = len(actions)
+    if count == 1:
+        return (
+            f"An agent is requesting permission to perform an action "
+            f"on {service_name} on your behalf."
+        )
+    return (
+        f"An agent is requesting permission to perform {count} actions "
+        f"on {service_name} on your behalf."
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET / — landing page
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/", response_class=HTMLResponse)
+async def root_page(request: Request):
+    """Render the public landing page."""
+    session = _get_session(request)
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT service_id, name, menu_entry_json, status FROM published_services WHERE status = 'live'"
+    )
+    rows = await cursor.fetchall()
+    services = []
+    for row in rows:
+        entry = json.loads(row["menu_entry_json"])
+        services.append({
+            "name": row["name"],
+            "category": entry.get("category", "service").replace("-", " "),
+            "description": entry.get("description", ""),
+            "action_count": len(entry.get("actions", [])),
+        })
+    company_id = _get_company_id(request)
+    logged_in = session is not None or company_id is not None
+    return templates.TemplateResponse(request, "landing.html", {
+        "services": services,
+        "logged_in": logged_in,
+        "has_human_session": session is not None,
+        "has_company_session": company_id is not None,
+    })
+
+
+@pages_router.get("/logout", response_class=HTMLResponse)
+async def logout_page(request: Request):  # noqa: ARG001  pylint: disable=unused-argument
+    """Clear both session cookies and redirect to login."""
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(_COOKIE_NAME)
+    response.delete_cookie(_COMPANY_COOKIE_NAME)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# GET /dashboard — human policy dashboard
+# ---------------------------------------------------------------------------
+
+def _human_date(iso: str | None) -> str:
+    """Format an ISO timestamp as a short human-readable string."""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso)
+        return dt.strftime("%b %d, %Y")
+    except (ValueError, TypeError):
+        return iso
+
+
+def _lifetime_label(seconds: int) -> str:
+    """Human-readable label for a token lifetime in seconds."""
+    if seconds == 0:
+        return "single-use"
+    if seconds >= 3600:
+        h = seconds // 3600
+        return f"{h} hour{'s' if h != 1 else ''}"
+    return f"{seconds // 60} min"
+
+
+@pages_router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request, revoked: str = ""):
+    """Render the human policy dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/dashboard", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    # Fetch all policies for this user
+    cursor = await db.execute(
+        """SELECT p.id, p.service_id, p.allowed_action_ids, p.scopes,
+                  p.risk_tier, p.max_token_lifetime_seconds,
+                  p.expires_at, p.revoked_at, p.created_at
+           FROM policies p
+           WHERE p.cafe_user_id = ?
+           ORDER BY p.created_at DESC""",
+        (user_id,),
+    )
+    rows = await cursor.fetchall()
+
+    # Count active tokens per policy
+    token_counts: dict[str, int] = {}
+    if rows:
+        policy_ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(policy_ids))
+        tc_cursor = await db.execute(
+            f"SELECT policy_id, COUNT(*) AS cnt FROM active_tokens "
+            f"WHERE policy_id IN ({placeholders}) AND expires_at > ? "
+            f"GROUP BY policy_id",
+            (*policy_ids, datetime.now(timezone.utc).isoformat()),
+        )
+        for tc in await tc_cursor.fetchall():
+            token_counts[tc["policy_id"]] = tc["cnt"]
+
+    # Look up service names and action descriptions
+    service_names: dict[str, str] = {}
+    action_descriptions: dict[str, dict[str, str]] = {}  # service_id -> {action_id: description}
+    service_ids = list({r["service_id"] for r in rows})
+    for sid in service_ids:
+        svc_cursor = await db.execute(
+            "SELECT name, menu_entry_json FROM published_services WHERE service_id = ?", (sid,)
+        )
+        svc = await svc_cursor.fetchone()
+        service_names[sid] = svc["name"] if svc else sid
+        if svc:
+            menu = json.loads(svc["menu_entry_json"])
+            action_descriptions[sid] = {
+                a["action_id"]: a.get("description", a["action_id"])
+                for a in menu.get("actions", [])
+            }
+
+    # Look up "last used" and recent activity per policy via audit_log
+    last_used: dict[str, str] = {}  # policy_id -> timestamp
+    policy_activity: dict[str, list] = {}  # policy_id -> list of recent entries
+    for row in rows:
+        lu_cursor = await db.execute(
+            """SELECT al.timestamp, al.action_id, al.outcome, al.response_code, al.latency_ms
+               FROM audit_log al
+               WHERE al.service_id = ?
+                 AND al.timestamp >= ?
+               ORDER BY al.timestamp DESC LIMIT 5""",
+            (row["service_id"], row["created_at"]),
+        )
+        entries = await lu_cursor.fetchall()
+        if entries:
+            last_used[row["id"]] = entries[0]["timestamp"]
+            sid = row["service_id"]
+            descs = action_descriptions.get(sid, {})
+            policy_activity[row["id"]] = [
+                {
+                    "timestamp": e["timestamp"][:19].replace("T", " ") if e["timestamp"] else "",
+                    "action": descs.get(e["action_id"], e["action_id"]),
+                    "outcome": e["outcome"] or "",
+                    "latency_ms": e["latency_ms"],
+                }
+                for e in entries
+            ]
+
+    active_policies = []
+    revoked_policies = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for row in rows:
+        # Build human-readable action list from descriptions
+        raw_ids = row["allowed_action_ids"]
+        sid = row["service_id"]
+        descs = action_descriptions.get(sid, {})
+        action_list = []
+        for aid in raw_ids.split(","):
+            aid = aid.strip()
+            if aid:
+                action_list.append(descs.get(aid, aid))
+
+        lu_ts = last_used.get(row["id"])
+        entry = {
+            "id": row["id"],
+            "service_name": service_names.get(sid, sid),
+            "action_ids": raw_ids,
+            "action_descriptions": action_list,
+            "risk_tier": row["risk_tier"],
+            "max_lifetime_label": _lifetime_label(row["max_token_lifetime_seconds"]),
+            "active_token_count": token_counts.get(row["id"], 0),
+            "created_at_human": _human_date(row["created_at"]),
+            "expires_at_human": _human_date(row["expires_at"]),
+            "revoked_at_human": _human_date(row["revoked_at"]),
+            "last_used_human": _human_date(lu_ts) if lu_ts else "never used",
+            "recent_activity": policy_activity.get(row["id"], []),
+        }
+        if row["revoked_at"] or row["expires_at"] < now_iso:
+            revoked_policies.append(entry)
+        else:
+            active_policies.append(entry)
+
+    success_message = ""
+    if revoked == "1":
+        success_message = "Policy revoked successfully. All active tokens have been invalidated."
+
+    nav = await _build_nav_context(request)
+    return templates.TemplateResponse(request, "dashboard.html", {
+        "active_policies": active_policies,
+        "revoked_policies": revoked_policies,
+        "csrf_token": _generate_csrf_token(request),
+        "success_message": success_message,
+        "active_nav": "dashboard",
+        **nav,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /dashboard/revoke/<policy_id> — one-click policy revocation
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/dashboard/revoke/{policy_id}", response_class=HTMLResponse)
+async def dashboard_revoke(
+    request: Request,
+    policy_id: str,
+    csrf_token: str = Form(""),
+):
+    """Revoke a policy from the dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/dashboard", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    # Verify ownership
+    cursor = await db.execute(
+        "SELECT id FROM policies WHERE id = ? AND cafe_user_id = ?",
+        (policy_id, user_id),
+    )
+    if not await cursor.fetchone():
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE policies SET revoked_at = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL",
+        (now, now, policy_id),
+    )
+    # Invalidate active tokens for this policy
+    await db.execute(
+        "DELETE FROM active_tokens WHERE policy_id = ?", (policy_id,)
+    )
+    await db.commit()
+
+    # Push revocation to jointly-verified services (ADR-031)
+    from agentcafe.cafe.integration import queue_jv_revocation
+    await queue_jv_revocation(db, policy_id, "human_revoked")
+
+    return RedirectResponse(url="/dashboard?revoked=1", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/session — set httponly cookie after JS-based passkey auth
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/auth/session")
+async def set_session(request: Request):
+    """Accept a session_token from JS passkey flow, set httponly cookie, return redirect."""
+    body = await request.json()
+    token = body.get("session_token", "")
+    next_url = body.get("next_url", "/tab")
+    # Validate the token before setting the cookie
+    try:
+        payload = validate_human_session(token)
+    except HTTPException:
+        return JSONResponse({"error": "invalid_session"}, status_code=401)
+    response = JSONResponse({"redirect": next_url})
+    _set_session_cookie(response, token)
+    # Also set company session if the user's email matches a company account
+    sub = payload.get("sub", "")
+    if sub.startswith("user:"):
+        user_email = sub[5:]
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT id FROM companies WHERE email = ? OR email = ?",
+            (user_email, user_email.lower()),
+        )
+        company_row = await cursor.fetchone()
+        if company_row:
+            company_token = _create_company_session(company_row["id"])
+            _set_company_cookie(response, company_token)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# GET /login
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request, next_url: str = ""):
+    """Render the login page."""
+    return templates.TemplateResponse(request, "login.html", {
+        "next_url": next_url,
+        "error": None,
+        "email": None,
+        "csrf_token": _generate_csrf_token(request),
+        "allow_password_auth": _state.allow_password_auth,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /login
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/login", response_class=HTMLResponse)
+async def login_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    next_url: str = Form("", alias="next"),
+    csrf_token: str = Form(""),
+):
+    """Handle login form submission."""
+    if not _validate_csrf_token(request, csrf_token):
+        return templates.TemplateResponse(request, "login.html", {
+            "next_url": next_url,
+            "error": "Invalid or expired form submission. Please try again.",
+            "email": email,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=403)
+    db = await get_db()
+
+    # Check both human and company tables for unified login
+    cursor = await db.execute(
+        "SELECT id, password_hash FROM cafe_users WHERE email = ?", (email.lower(),)
+    )
+    human_row = await cursor.fetchone()
+    human_ok = human_row and _verify_password(password, human_row["password_hash"])
+
+    cursor = await db.execute(
+        "SELECT id, password_hash FROM companies WHERE email = ? OR email = ?",
+        (email, email.lower()),
+    )
+    company_row = await cursor.fetchone()
+    company_ok = False
+    if company_row:
+        stored = company_row["password_hash"]
+        if isinstance(stored, str):
+            stored = stored.encode()
+        company_ok = bcrypt.checkpw(password.encode(), stored)
+
+    if not human_ok and not company_ok:
+        return templates.TemplateResponse(request, "login.html", {
+            "next_url": next_url,
+            "error": "Invalid email or password.",
+            "email": email,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=401)
+
+    # Human-specific checks (passkey grace period)
+    redirect_url = next_url if next_url else None
+    session_token = None
+    if human_ok:
+        pk_status = await _check_passkey_enrollment(db, human_row["id"])
+        if pk_status["grace_expired"]:
+            # If they also have a company account, let them through for that
+            if not company_ok:
+                return templates.TemplateResponse(request, "login.html", {
+                    "next_url": next_url,
+                    "error": "Your account has a passkey enrolled. "
+                             "Password login is no longer available. Please sign in with your passkey.",
+                    "email": email,
+                    "csrf_token": _generate_csrf_token(request),
+                    "allow_password_auth": _state.allow_password_auth,
+                }, status_code=403)
+            human_ok = False  # skip setting human cookie, company login still works
+        else:
+            await _rehash_if_legacy(db, human_row["id"], password, human_row["password_hash"])
+            session_token = _create_human_session_token(human_row["id"], email.lower())
+            if not pk_status["enrolled"]:
+                enroll_next = next_url if next_url else "/tab"
+                redirect_url = f"/enroll-passkey?next={enroll_next}"
+            elif not redirect_url:
+                redirect_url = "/tab"
+
+    # Determine redirect if not yet set
+    if not redirect_url:
+        if company_ok:
+            redirect_url = await _company_landing_url(company_row["id"])
+        else:
+            redirect_url = "/tab"
+
+    response = RedirectResponse(url=redirect_url, status_code=303)
+    if human_ok and session_token:
+        _set_session_cookie(response, session_token)
+    if company_ok:
+        company_token = _create_company_session(company_row["id"])
+        _set_company_cookie(response, company_token)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# GET /enroll-passkey — prompt password users to add a passkey
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/enroll-passkey", response_class=HTMLResponse)
+async def enroll_passkey_page(request: Request, next_url: str = "/"):
+    """Render the passkey enrollment prompt for existing password users."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(
+            url=f"/login?next=/enroll-passkey%3Fnext_url%3D{next_url}", status_code=303,
+        )
+
+    # Pass the raw session cookie so JS can call enroll endpoints
+    session_token = request.cookies.get(_COOKIE_NAME, "")
+
+    from agentcafe.cafe.human import _state as human_state
+    grace_days = human_state.passkey_grace_period_days
+
+    nav = await _build_nav_context(request)
+    return templates.TemplateResponse(request, "enroll_passkey.html", {
+        "next_url": next_url,
+        "session_token": session_token,
+        "grace_days": grace_days,
+        "active_nav": "tab",
+        **nav,
+    })
+
+
+# ---------------------------------------------------------------------------
+# GET /register
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request, next_url: str = ""):
+    """Render the registration page."""
+    return templates.TemplateResponse(request, "register.html", {
+        "next_url": next_url,
+        "error": None,
+        "email": None,
+        "display_name": None,
+        "csrf_token": _generate_csrf_token(request),
+        "allow_password_auth": _state.allow_password_auth,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /register
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/register", response_class=HTMLResponse)
+async def register_submit(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    display_name: str = Form(""),
+    next_url: str = Form("", alias="next"),
+    csrf_token: str = Form(""),
+):
+    """Handle registration form submission."""
+    if not _validate_csrf_token(request, csrf_token):
+        return templates.TemplateResponse(request, "register.html", {
+            "next_url": next_url,
+            "error": "Invalid or expired form submission. Please try again.",
+            "email": email,
+            "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=403)
+    if len(password) < 8:
+        return templates.TemplateResponse(request, "register.html", {
+            "next_url": next_url,
+            "error": "Password must be at least 8 characters.",
+            "email": email,
+            "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=422)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id FROM cafe_users WHERE email = ?", (email.lower(),)
+    )
+    if await cursor.fetchone():
+        return templates.TemplateResponse(request, "register.html", {
+            "next_url": next_url,
+            "error": "An account with this email already exists.",
+            "email": email,
+            "display_name": display_name,
+            "csrf_token": _generate_csrf_token(request),
+            "allow_password_auth": _state.allow_password_auth,
+        }, status_code=409)
+
+    user_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    await db.execute(
+        """INSERT INTO cafe_users (id, email, display_name, password_hash, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (user_id, email.lower(), display_name or None, _hash_password(password), now, now),
+    )
+    await db.commit()
+
+    session_token = _create_human_session_token(user_id, email.lower())
+    redirect_url = next_url if next_url else "/tab"
+    response = RedirectResponse(url=redirect_url, status_code=303)
+    _set_session_cookie(response, session_token)
+    return response
+
+
+# ---------------------------------------------------------------------------
+# GET /consent/<consent_id>
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/authorize/{consent_id}", response_class=HTMLResponse)
+async def consent_page(request: Request, consent_id: str):
+    """Render the authorization approval page."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url=f"/register?next_url=/authorize/{consent_id}", status_code=303)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE id = ?", (consent_id,)
+    )
+    consent = await cursor.fetchone()
+    if not consent:
+        return templates.TemplateResponse(request, "consent_done.html", {
+            "status": "error",
+            "title": "Not Found",
+            "message": "This consent request does not exist.",
+            "service_name": "",
+            "policy_id": "",
+        }, status_code=404)
+
+    # Check expiry
+    if consent["expires_at"] < datetime.now(timezone.utc).isoformat():
+        return templates.TemplateResponse(request, "consent_done.html", {
+            "status": "expired",
+            "title": "Request Expired",
+            "message": "",
+            "service_name": "",
+            "policy_id": "",
+        })
+
+    # Already approved
+    if consent["status"] == "approved":
+        return templates.TemplateResponse(request, "consent_done.html", {
+            "status": "approved",
+            "title": "Already Approved",
+            "message": "This consent has already been approved.",
+            "service_name": consent["service_id"],
+            "policy_id": consent["policy_id"] or "",
+        })
+
+    # Already declined
+    if consent["status"] == "declined":
+        return templates.TemplateResponse(request, "consent_done.html", {
+            "status": "declined",
+            "title": "Declined",
+            "message": "",
+            "service_name": "",
+            "policy_id": "",
+        })
+
+    # Look up service details for display
+    svc_cursor = await db.execute(
+        "SELECT name, menu_entry_json FROM published_services WHERE service_id = ?",
+        (consent["service_id"],),
+    )
+    svc_row = await svc_cursor.fetchone()
+    service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+    # Parse action details from menu
+    actions = []
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+    risk_tier = "medium"
+    if svc_row and svc_row["menu_entry_json"]:
+        menu = json.loads(svc_row["menu_entry_json"])
+        for action in menu.get("actions", []):
+            if action["action_id"] in action_ids:
+                actions.append(action)
+                risk_tier = action.get("risk_tier", risk_tier)
+    if not actions:
+        for aid in action_ids:
+            actions.append({"action_id": aid, "description": aid})
+
+    # Look up risk tier from proxy config
+    proxy_cursor = await db.execute(
+        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+        (consent["service_id"], action_ids[0] if action_ids else ""),
+    )
+    proxy_row = await proxy_cursor.fetchone()
+    if proxy_row:
+        risk_tier = proxy_row["risk_tier"]
+
+    expires_dt = datetime.fromisoformat(consent["expires_at"])
+    expires_human = expires_dt.strftime("%b %d, %Y at %I:%M %p UTC")
+
+    return templates.TemplateResponse(request, "consent.html", {
+        "consent_id": consent_id,
+        "service_name": service_name,
+        "consent_text": _consent_text(service_name, actions),
+        "task_summary": consent["task_summary"],
+        "actions": actions,
+        "risk_tier": risk_tier,
+        "lifetime_options": _lifetime_options(risk_tier),
+        "max_lifetime_label": _ceiling_label(risk_tier),
+        "expires_at_human": expires_human,
+        "error": None,
+        "csrf_token": _generate_csrf_token(request),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /consent/<consent_id>/approve
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/authorize/{consent_id}/approve", response_class=HTMLResponse)
+async def consent_approve_submit(
+    request: Request,
+    consent_id: str,
+    token_lifetime_seconds: int = Form(900),
+    csrf_token: str = Form(""),
+    passkey_challenge_id: str = Form(""),
+    passkey_credential: str = Form(""),
+):
+    """Handle consent approval form submission."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+    # Verify passkey assertion — cryptographic human-presence proof
+    if not passkey_challenge_id or not passkey_credential:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+    try:
+        credential_dict = json.loads(passkey_credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+    try:
+        passkey_user = await verify_passkey_assertion(passkey_challenge_id, credential_dict)
+    except HTTPException:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+    if passkey_user["user_id"] != session["user_id"]:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+    try:
+        db = await get_db()
+
+        cursor = await db.execute("SELECT * FROM consents WHERE id = ?", (consent_id,))
+        consent = await cursor.fetchone()
+        if not consent:
+            raise HTTPException(status_code=404, detail="Consent not found")
+
+        if consent["status"] != "pending":
+            return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+        user_id = session["user_id"]
+        now = datetime.now(timezone.utc)
+
+        # Look up risk tier
+        action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+        proxy_cursor = await db.execute(
+            "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (consent["service_id"], action_ids[0] if action_ids else ""),
+        )
+        proxy_row = await proxy_cursor.fetchone()
+        risk_tier = proxy_row["risk_tier"] if proxy_row else "medium"
+
+        # Apply ceiling
+        ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+        if ceiling > 0:
+            lifetime = min(token_lifetime_seconds, ceiling)
+        else:
+            lifetime = 0  # single-use
+
+        # Create policy
+        policy_id = str(uuid.uuid4())
+        policy_expires = now + timedelta(days=90)
+
+        await db.execute(
+            """INSERT INTO policies
+               (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+                risk_tier, max_token_lifetime_seconds, expires_at,
+                revoked_at, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+            (
+                policy_id, user_id, consent["service_id"],
+                consent["action_ids"], consent["requested_scopes"],
+                risk_tier, lifetime,
+                policy_expires.isoformat(), now.isoformat(), now.isoformat(),
+            ),
+        )
+
+        # Handle jointly-verified service binding (ADR-031)
+        email = session["sub"].removeprefix("user:")
+        await _handle_jointly_verified_consent(
+            db, user_id, email, consent["service_id"], policy_id, action_ids,
+        )
+
+        # Update consent
+        await db.execute(
+            """UPDATE consents SET status = 'approved', cafe_user_id = ?,
+               policy_id = ?, updated_at = ? WHERE id = ?""",
+            (user_id, policy_id, now.isoformat(), consent_id),
+        )
+        await db.commit()
+
+        # Look up service name
+        svc_cursor = await db.execute(
+            "SELECT name FROM published_services WHERE service_id = ?",
+            (consent["service_id"],),
+        )
+        svc_row = await svc_cursor.fetchone()
+        service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+        # Fire webhook callback (best-effort)
+        await _fire_consent_callback(consent["callback_url"], consent_id, "approved", policy_id)
+
+        return templates.TemplateResponse(request, "consent_done.html", {
+            "status": "approved",
+            "title": "Authorization Approved",
+            "message": "",
+            "service_name": service_name,
+            "policy_id": policy_id,
+        })
+
+    except HTTPException:
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /consent/<consent_id>/decline
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/authorize/{consent_id}/decline", response_class=HTMLResponse)
+async def consent_decline(
+    request: Request,
+    consent_id: str,
+    csrf_token: str = Form(""),
+):
+    """Decline an authorization request (POST with CSRF protection)."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url=f"/login?next=/authorize/{consent_id}", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/authorize/{consent_id}", status_code=303)
+
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Look up callback_url before updating
+    cursor = await db.execute(
+        "SELECT callback_url FROM consents WHERE id = ? AND status = 'pending'",
+        (consent_id,),
+    )
+    consent_row = await cursor.fetchone()
+    callback_url = consent_row["callback_url"] if consent_row else None
+
+    await db.execute(
+        "UPDATE consents SET status = 'declined', updated_at = ? WHERE id = ? AND status = 'pending'",
+        (now, consent_id),
+    )
+    await db.commit()
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(callback_url, consent_id, "declined")
+
+    return templates.TemplateResponse(request, "consent_done.html", {
+        "status": "declined",
+        "title": "Authorization Declined",
+        "message": "",
+        "service_name": "",
+        "policy_id": "",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Activation code flow — cold-start UX (Sprint 3)
+# ---------------------------------------------------------------------------
+
+# Rate limit: max 10 activation code lookups per IP per 5 minutes
+_activate_hits: dict[str, list[float]] = {}
+_ACTIVATE_RATE_WINDOW = 300  # seconds
+_ACTIVATE_RATE_LIMIT = 10
+
+
+def _activate_rate_ok(ip: str) -> bool:
+    """Return True if this IP is within the activation code rate limit."""
+    now = __import__("time").time()
+    hits = _activate_hits.setdefault(ip, [])
+    # Prune old entries
+    _activate_hits[ip] = hits = [t for t in hits if now - t < _ACTIVATE_RATE_WINDOW]
+    if len(hits) >= _ACTIVATE_RATE_LIMIT:
+        return False
+    hits.append(now)
+    return True
+
+
+async def _lookup_consent_details(db, consent):
+    """Extract display info from a consent row. Returns (service_name, actions, risk_tier)."""
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+
+    svc_cursor = await db.execute(
+        "SELECT name, menu_entry_json FROM published_services WHERE service_id = ?",
+        (consent["service_id"],),
+    )
+    svc_row = await svc_cursor.fetchone()
+    service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+    actions = []
+    risk_tier = "medium"
+    if svc_row and svc_row["menu_entry_json"]:
+        menu = json.loads(svc_row["menu_entry_json"])
+        for action in menu.get("actions", []):
+            if action["action_id"] in action_ids:
+                actions.append(action)
+                risk_tier = action.get("risk_tier", risk_tier)
+    if not actions:
+        for aid in action_ids:
+            actions.append({"action_id": aid, "label": aid, "description": aid})
+
+    proxy_cursor = await db.execute(
+        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+        (consent["service_id"], action_ids[0] if action_ids else ""),
+    )
+    proxy_row = await proxy_cursor.fetchone()
+    if proxy_row:
+        risk_tier = proxy_row["risk_tier"]
+
+    return service_name, actions, risk_tier
+
+
+@pages_router.get("/activate", response_class=HTMLResponse)
+async def activate_page(request: Request, code: str = ""):
+    """GET /activate — show activation code entry form."""
+    return templates.TemplateResponse(request, "activate.html", {
+        "step": "enter_code",
+        "code": code,
+        "error": None,
+        "csrf_token": _generate_csrf_token(request),
+    })
+
+
+@pages_router.post("/activate", response_class=HTMLResponse)
+async def activate_lookup(
+    request: Request,
+    code: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    """POST /activate — validate code and show consent + registration form."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    ip = request.client.host if request.client else "unknown"
+    if not _activate_rate_ok(ip):
+        return templates.TemplateResponse(request, "activate.html", {
+            "step": "enter_code",
+            "code": code,
+            "error": "Too many attempts. Please wait a few minutes and try again.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=429)
+
+    code = code.strip().upper()
+    if not code or len(code) != 8:
+        return templates.TemplateResponse(request, "activate.html", {
+            "step": "enter_code",
+            "code": code,
+            "error": "Please enter a valid 8-character activation code.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=400)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (code,),
+    )
+    consent = await cursor.fetchone()
+
+    if not consent:
+        return templates.TemplateResponse(request, "activate.html", {
+            "step": "enter_code",
+            "code": code,
+            "error": "Code not found or already used. Check the code and try again.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=404)
+
+    # Check expiry
+    expires_at = datetime.fromisoformat(consent["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return templates.TemplateResponse(request, "activate.html", {
+            "step": "enter_code",
+            "code": code,
+            "error": "This activation code has expired. Ask the agent for a new one.",
+            "csrf_token": _generate_csrf_token(request),
+        }, status_code=410)
+
+    # If user already logged in, redirect to normal consent page
+    session = _get_session(request)
+    if session:
+        return RedirectResponse(url=f"/authorize/{consent['id']}", status_code=303)
+
+    service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
+
+    return templates.TemplateResponse(request, "activate.html", {
+        "step": "register_approve",
+        "code": code,
+        "service_name": service_name,
+        "consent_text": _consent_text(service_name, actions),
+        "task_summary": consent["task_summary"],
+        "actions": actions,
+        "risk_tier": risk_tier,
+        "lifetime_options": _lifetime_options(risk_tier),
+        "max_lifetime_label": _ceiling_label(risk_tier),
+        "error": None,
+        "csrf_token": _generate_csrf_token(request),
+    })
+
+
+@pages_router.post("/activate/complete", response_class=HTMLResponse)
+async def activate_complete(
+    request: Request,
+    activation_code: str = Form(""),
+    email: str = Form(""),
+    challenge_id: str = Form(""),
+    credential: str = Form(""),
+    token_lifetime_seconds: int = Form(900),
+    csrf_token: str = Form(""),
+):
+    """POST /activate/complete — register account + approve consent in one step."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    activation_code = activation_code.strip().upper()
+
+    # Validate inputs
+    if not activation_code or not email or not challenge_id or not credential:
+        return RedirectResponse(url=f"/activate?code={activation_code}", status_code=303)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (activation_code,),
+    )
+    consent = await cursor.fetchone()
+    if not consent:
+        return RedirectResponse(url="/activate", status_code=303)
+
+    # Check expiry (consent may be technically expired but status not yet updated)
+    expires_at = datetime.fromisoformat(consent["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        return RedirectResponse(url="/activate", status_code=303)
+
+    # Parse credential JSON
+    try:
+        credential_dict = json.loads(credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/activate?code={activation_code}", status_code=303)
+
+    # Step 1: Complete passkey registration (creates account)
+    try:
+        reg_result = await complete_passkey_registration(challenge_id, credential_dict)
+    except HTTPException:
+        service_name, actions, risk_tier = await _lookup_consent_details(db, consent)
+        return templates.TemplateResponse(request, "activate.html", {
+            "step": "register_approve",
+            "code": activation_code,
+            "service_name": service_name,
+            "consent_text": _consent_text(service_name, actions),
+            "task_summary": consent["task_summary"],
+            "actions": actions,
+            "risk_tier": risk_tier,
+            "lifetime_options": _lifetime_options(risk_tier),
+            "max_lifetime_label": _ceiling_label(risk_tier),
+            "error": "Passkey registration failed. Please try again.",
+            "csrf_token": _generate_csrf_token(request),
+        })
+
+    user_id = reg_result["user_id"]
+    consent_id = consent["id"]
+
+    # Step 2: Approve the consent (same logic as consent_approve_submit)
+    now = datetime.now(timezone.utc)
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+
+    proxy_cursor = await db.execute(
+        "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+        (consent["service_id"], action_ids[0] if action_ids else ""),
+    )
+    proxy_row = await proxy_cursor.fetchone()
+    risk_tier = proxy_row["risk_tier"] if proxy_row else "medium"
+
+    ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+    if ceiling > 0:
+        lifetime = min(token_lifetime_seconds, ceiling)
+    else:
+        lifetime = 0
+
+    policy_id = str(uuid.uuid4())
+    policy_expires = now + timedelta(days=90)
+
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            risk_tier, max_token_lifetime_seconds, expires_at,
+            revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+        (
+            policy_id, user_id, consent["service_id"],
+            consent["action_ids"], consent["requested_scopes"],
+            risk_tier, lifetime,
+            policy_expires.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+
+    await db.execute(
+        """UPDATE consents SET status = 'approved', cafe_user_id = ?,
+           policy_id = ?, updated_at = ? WHERE id = ?""",
+        (user_id, policy_id, now.isoformat(), consent_id),
+    )
+    await db.commit()
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(
+        consent["callback_url"], consent_id, "approved", policy_id,
+    )
+
+    # Set session cookie
+    svc_cursor = await db.execute(
+        "SELECT name FROM published_services WHERE service_id = ?",
+        (consent["service_id"],),
+    )
+    svc_row = await svc_cursor.fetchone()
+    service_name = svc_row["name"] if svc_row else consent["service_id"]
+
+    response = templates.TemplateResponse(request, "activate.html", {
+        "step": "success",
+        "service_name": service_name,
+    })
+    response.set_cookie(
+        key="cafe_session",
+        value=reg_result["session_token"],
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=86400,
+    )
+    return response
+
+
+@pages_router.post("/activate/decline", response_class=HTMLResponse)
+async def activate_decline(
+    request: Request,
+    activation_code: str = Form(""),
+    csrf_token: str = Form(""),
+):
+    """POST /activate/decline — decline the consent via activation code."""
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    ip = request.client.host if request.client else "unknown"
+    if not _activate_rate_ok(ip):
+        return RedirectResponse(url="/activate", status_code=303)
+
+    activation_code = activation_code.strip().upper()
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    cursor = await db.execute(
+        "SELECT id, callback_url FROM consents WHERE activation_code = ? AND status = 'pending'",
+        (activation_code,),
+    )
+    consent = await cursor.fetchone()
+    if consent:
+        await db.execute(
+            "UPDATE consents SET status = 'declined', updated_at = ? WHERE id = ?",
+            (now, consent["id"]),
+        )
+        await db.commit()
+        await _fire_consent_callback(consent["callback_url"], consent["id"], "declined")
+
+    return templates.TemplateResponse(request, "activate.html", {
+        "step": "declined",
+    })
+
+
+# ---------------------------------------------------------------------------
+# GET /tab — Company Cards dashboard ("Your Tab")
+# ---------------------------------------------------------------------------
+
+async def _lookup_service_name(db, service_id: str) -> str:
+    """Look up service name from published_services or menu_entries."""
+    cursor = await db.execute(
+        "SELECT name FROM published_services WHERE service_id = ?", (service_id,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        return row["name"]
+    cursor = await db.execute(
+        "SELECT menu_entry_json FROM menu_entries WHERE id = ?", (service_id,),
+    )
+    row = await cursor.fetchone()
+    if row:
+        entry = json.loads(row["menu_entry_json"])
+        return entry.get("name", service_id)
+    return service_id
+
+
+@pages_router.get("/tab", response_class=HTMLResponse)
+async def tab_page(request: Request, action: str = ""):
+    """Render the Company Cards tab dashboard."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        """SELECT * FROM company_cards
+           WHERE cafe_user_id = ? OR (cafe_user_id IS NULL AND status = 'pending')
+           ORDER BY created_at DESC""",
+        (user_id,),
+    )
+    rows = await cursor.fetchall()
+
+    # Count active tokens per card's policy
+    token_counts: dict[str, int] = {}
+    policy_ids = [r["policy_id"] for r in rows if r["policy_id"]]
+    if policy_ids:
+        placeholders = ",".join("?" * len(policy_ids))
+        tc_cursor = await db.execute(
+            f"SELECT policy_id, COUNT(*) AS cnt FROM active_tokens "
+            f"WHERE policy_id IN ({placeholders}) AND expires_at > ? "
+            f"GROUP BY policy_id",
+            (*policy_ids, datetime.now(timezone.utc).isoformat()),
+        )
+        for tc in await tc_cursor.fetchall():
+            token_counts[tc["policy_id"]] = tc["cnt"]
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    pending_cards = []
+    active_cards = []
+    revoked_cards = []
+
+    # Preload action descriptions per service
+    svc_action_descs: dict[str, dict[str, str]] = {}
+
+    for row in rows:
+        svc_name = await _lookup_service_name(db, row["service_id"])
+        sid = row["service_id"]
+
+        # Load action descriptions once per service
+        if sid not in svc_action_descs:
+            svc_cursor = await db.execute(
+                "SELECT menu_entry_json FROM published_services WHERE service_id = ?", (sid,),
+            )
+            svc_row = await svc_cursor.fetchone()
+            if svc_row:
+                menu = json.loads(svc_row["menu_entry_json"])
+                svc_action_descs[sid] = {
+                    a["action_id"]: a.get("description", a["action_id"])
+                    for a in menu.get("actions", [])
+                }
+            else:
+                svc_action_descs[sid] = {}
+
+        descs = svc_action_descs[sid]
+        # Build human-readable action list (all actions minus excluded)
+        excluded = set((row["excluded_action_ids"] or "").split(","))
+        action_list = [d for aid, d in descs.items() if aid not in excluded]
+
+        # Last used from audit_log
+        last_used_human = "never used"
+        if row["policy_id"]:
+            lu_cursor = await db.execute(
+                """SELECT MAX(al.timestamp) AS last_ts
+                   FROM audit_log al
+                   WHERE al.service_id = ?
+                     AND al.timestamp >= ?""",
+                (sid, row["created_at"]),
+            )
+            lu = await lu_cursor.fetchone()
+            if lu and lu["last_ts"]:
+                last_used_human = _human_date(lu["last_ts"])
+
+        # Budget progress percentage
+        budget_limit = row["budget_limit_cents"] or 0
+        budget_spent = row["budget_spent_cents"] or 0
+        budget_pct = min(int(budget_spent / budget_limit * 100), 100) if budget_limit else 0
+
+        entry = {
+            "card_id": row["id"],
+            "service_name": svc_name,
+            "status": row["status"],
+            "activation_code": row["activation_code"],
+            "excluded_action_ids": row["excluded_action_ids"] or "",
+            "action_descriptions": action_list,
+            "budget_limit_cents": budget_limit,
+            "budget_spent_cents": budget_spent,
+            "budget_period": row["budget_period"] or "",
+            "budget_pct": budget_pct,
+            "first_use_confirmation": row["first_use_confirmation"],
+            "first_use_confirmed_at": row["first_use_confirmed_at"],
+            "active_token_count": token_counts.get(row["policy_id"], 0) if row["policy_id"] else 0,
+            "created_at_human": _human_date(row["created_at"]),
+            "expires_at_human": _human_date(row["expires_at"]),
+            "revoked_at_human": _human_date(row["revoked_at"]),
+            "last_used_human": last_used_human,
+        }
+
+        if row["status"] == "pending":
+            pending_cards.append(entry)
+        elif row["status"] == "active" and row["expires_at"] > now_iso:
+            active_cards.append(entry)
+        else:
+            revoked_cards.append(entry)
+
+    # Recent activity: last 20 audit entries for services this user has cards for
+    recent_activity = []
+    user_service_ids = list({r["service_id"] for r in rows})
+    if user_service_ids:
+        ph = ",".join("?" * len(user_service_ids))
+        act_cursor = await db.execute(
+            f"""SELECT al.timestamp, al.service_id, al.action_id, al.outcome,
+                       al.response_code, al.latency_ms
+                FROM audit_log al
+                WHERE al.service_id IN ({ph})
+                ORDER BY al.timestamp DESC LIMIT 20""",
+            tuple(user_service_ids),
+        )
+        for a in await act_cursor.fetchall():
+            sid = a["service_id"]
+            svc_descs = svc_action_descs.get(sid, {})
+            recent_activity.append({
+                "timestamp": a["timestamp"][:19].replace("T", " ") if a["timestamp"] else "",
+                "service_name": await _lookup_service_name(db, sid),
+                "action": svc_descs.get(a["action_id"], a["action_id"]),
+                "outcome": a["outcome"] or "",
+                "status_code": a["response_code"] or "",
+                "latency_ms": a["latency_ms"],
+            })
+
+    success_message = ""
+    error_message = ""
+    if action == "revoked":
+        success_message = "Card revoked. The agent will lose access to this service."
+    elif action == "confirmed":
+        success_message = "First use confirmed. The agent can now use this card."
+    elif action == "approved":
+        success_message = "Card approved. The agent can now request tokens."
+    elif action == "declined":
+        success_message = "Card request declined. The agent has been denied access."
+
+    nav = await _build_nav_context(request)
+    return templates.TemplateResponse(request, "tab.html", {
+        "pending_cards": pending_cards,
+        "active_cards": active_cards,
+        "revoked_cards": revoked_cards,
+        "recent_activity": recent_activity,
+        "csrf_token": _generate_csrf_token(request),
+        "success_message": success_message,
+        "error_message": error_message,
+        "active_nav": "tab",
+        **nav,
+    })
+
+
+# ---------------------------------------------------------------------------
+# GET /tab/approve/{card_id} — Card approval review page
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/tab/approve/{card_id}", response_class=HTMLResponse)
+async def tab_approve_page(request: Request, card_id: str):
+    """Render the card approval page with action list and constraint controls."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url=f"/login?next=/tab/approve/{card_id}", status_code=303)
+
+    db = await get_db()
+    cursor = await db.execute("SELECT * FROM company_cards WHERE id = ?", (card_id,))
+    card = await cursor.fetchone()
+    if not card or card["status"] != "pending":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    service_name = await _lookup_service_name(db, card["service_id"])
+
+    # Get all actions for this service
+    cursor = await db.execute(
+        "SELECT action_id, risk_tier FROM proxy_configs WHERE service_id = ?",
+        (card["service_id"],),
+    )
+    action_rows = await cursor.fetchall()
+    actions = [{"action_id": r["action_id"], "risk_tier": r["risk_tier"] or "medium"} for r in action_rows]
+
+    nav = await _build_nav_context(request)
+    return templates.TemplateResponse(request, "card_approve.html", {
+        "card_id": card_id,
+        "service_name": service_name,
+        "actions": actions,
+        "excluded_actions": [],
+        "csrf_token": _generate_csrf_token(request),
+        "error": None,
+        "active_nav": "tab",
+        **nav,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/approve/{card_id}/submit — Submit card approval
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/approve/{card_id}/submit", response_class=HTMLResponse)
+async def tab_approve_submit(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+    duration_days: int = Form(30),
+    budget_limit: str = Form(""),
+    budget_period: str = Form(""),
+    first_use_confirmation: str = Form(""),
+    passkey_challenge_id: str = Form(""),
+    passkey_credential: str = Form(""),
+):
+    """Process card approval from the page form."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+
+    # Verify passkey assertion — cryptographic human-presence proof
+    if not passkey_challenge_id or not passkey_credential:
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    try:
+        credential_dict = json.loads(passkey_credential)
+    except (json.JSONDecodeError, TypeError):
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    try:
+        passkey_user = await verify_passkey_assertion(passkey_challenge_id, credential_dict)
+    except HTTPException:
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+    if passkey_user["user_id"] != session["user_id"]:
+        return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute("SELECT * FROM company_cards WHERE id = ?", (card_id,))
+    card = await cursor.fetchone()
+    if not card or card["status"] != "pending":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    # Parse form data
+    form_data = await request.form()
+    included_actions = form_data.getlist("include_action")
+
+    # Get all actions for the service
+    cursor = await db.execute(
+        "SELECT action_id, risk_tier FROM proxy_configs WHERE service_id = ?",
+        (card["service_id"],),
+    )
+    action_rows = await cursor.fetchall()
+    all_action_ids = [r["action_id"] for r in action_rows]
+
+    # Excluded = all actions minus included (only low/medium)
+    excluded_action_ids = [
+        a for a in all_action_ids
+        if a not in included_actions
+        and any(r["action_id"] == a and (r["risk_tier"] or "medium") in ("low", "medium") for r in action_rows)
+    ]
+
+    # Build policy scopes from included actions
+    action_ids_for_policy = [a for a in all_action_ids if a not in excluded_action_ids]
+    # Filter to only low/medium risk for the card
+    action_ids_for_policy = [
+        a for a in action_ids_for_policy
+        if any(
+            r["action_id"] == a and (r["risk_tier"] or "medium") in ("low", "medium")
+            for r in action_rows
+        )
+    ]
+
+    scopes_csv = ",".join(f"{card['service_id']}:{a}" for a in action_ids_for_policy)
+    action_ids_csv = ",".join(action_ids_for_policy)
+
+    # Determine risk tier
+    risk_tier = "low"
+    risk_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+    for a in action_ids_for_policy:
+        for r in action_rows:
+            if r["action_id"] == a:
+                rt = r["risk_tier"] or "medium"
+                if risk_order.get(rt, 1) > risk_order.get(risk_tier, 0):
+                    risk_tier = rt
+
+    # Create policy
+    now = datetime.now(timezone.utc)
+    card_expires = now + timedelta(days=duration_days)
+    policy_id = str(uuid.uuid4())
+
+    default_lifetimes = {"low": 3600, "medium": 600, "high": 300, "critical": 0}
+    default_lifetime = default_lifetimes.get(risk_tier, 600)
+
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            constraints_json, risk_tier, max_token_lifetime_seconds,
+            expires_at, revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?)""",
+        (
+            policy_id, user_id, card["service_id"],
+            action_ids_csv, scopes_csv,
+            risk_tier, default_lifetime,
+            card_expires.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+
+    # Parse budget
+    budget_limit_cents = None
+    if budget_limit and budget_period:
+        try:
+            budget_limit_cents = round(float(budget_limit) * 100)
+        except ValueError:
+            budget_limit_cents = None
+
+    # Activate card
+    await db.execute(
+        """UPDATE company_cards
+           SET cafe_user_id = ?, status = 'active',
+               allowed_action_ids = ?, excluded_action_ids = ?,
+               budget_limit_cents = ?, budget_period = ?,
+               budget_period_start = ?,
+               first_use_confirmation = ?,
+               policy_id = ?,
+               expires_at = ?, updated_at = ?
+           WHERE id = ?""",
+        (
+            user_id,
+            action_ids_csv if action_ids_for_policy else None,
+            ",".join(excluded_action_ids) if excluded_action_ids else None,
+            budget_limit_cents, budget_period if budget_limit_cents else None,
+            now.isoformat() if budget_limit_cents else None,
+            1 if first_use_confirmation == "1" else 0,
+            policy_id,
+            card_expires.isoformat(), now.isoformat(),
+            card_id,
+        ),
+    )
+
+    # Create authorization grant for jointly-verified services (ADR-031)
+    await _create_jv_grant_if_needed(db, user_id, card["service_id"], card_id)
+
+    await db.commit()
+
+    logger.info("Card %s approved via page by user %s", card_id, user_id)
+    return RedirectResponse(url="/tab?action=approved", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/revoke — Revoke a card from the Tab
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/revoke", response_class=HTMLResponse)
+async def tab_revoke(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Revoke a Company Card from the Tab page."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND cafe_user_id = ?",
+        (card_id, user_id),
+    )
+    card = await cursor.fetchone()
+    if not card or card["status"] != "active":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+
+    # Also revoke the underlying policy
+    if card["policy_id"]:
+        await db.execute(
+            "UPDATE policies SET revoked_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, card["policy_id"]),
+        )
+        await db.execute(
+            "DELETE FROM active_tokens WHERE policy_id = ?", (card["policy_id"],),
+        )
+
+    await db.commit()
+
+    # Push revocation to jointly-verified services (ADR-031)
+    from agentcafe.cafe.integration import queue_jv_revocation
+    await queue_jv_revocation(db, card_id, "human_revoked")
+
+    return RedirectResponse(url="/tab?action=revoked", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/decline — Decline a pending card request
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/decline", response_class=HTMLResponse)
+async def tab_decline(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Decline a pending Company Card request."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND status = 'pending'",
+        (card_id,),
+    )
+    card = await cursor.fetchone()
+    if not card:
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET status = 'declined', revoked_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+    await db.commit()
+
+    return RedirectResponse(url="/tab?action=declined", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# POST /tab/{card_id}/confirm — Confirm first use
+# ---------------------------------------------------------------------------
+
+@pages_router.post("/tab/{card_id}/confirm", response_class=HTMLResponse)
+async def tab_confirm_first_use(
+    request: Request,
+    card_id: str,
+    csrf_token: str = Form(""),
+):
+    """Confirm first use of a Company Card from the Tab page."""
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(url="/login?next=/tab", status_code=303)
+    if not _validate_csrf_token(request, csrf_token):
+        return RedirectResponse(url="/tab", status_code=303)
+
+    user_id = session["user_id"]
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT * FROM company_cards WHERE id = ? AND cafe_user_id = ?",
+        (card_id, user_id),
+    )
+    card = await cursor.fetchone()
+    if not card or card["status"] != "active":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    if card["first_use_confirmed_at"]:
+        return RedirectResponse(url="/tab", status_code=303)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET first_use_confirmed_at = ?, updated_at = ? WHERE id = ?",
+        (now, now, card_id),
+    )
+    await db.commit()
+
+    return RedirectResponse(url="/tab?action=confirmed", status_code=303)

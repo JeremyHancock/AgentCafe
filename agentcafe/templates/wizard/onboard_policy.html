@@ -1,0 +1,167 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Configure Policy — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+<form method="post" action="/services/onboard/{{ draft_id }}/policy" id="policy-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="policy_json" id="policy-json" value="">
+    <input type="hidden" name="integration_mode" id="integration-mode" value="{{ saved_integration_mode or 'standard' }}">
+
+    <div class="section-card">
+        <h2>Integration mode</h2>
+        <p class="subtitle">Choose how AgentCafe connects to your service.</p>
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="integration_mode_radio" value="standard"
+                       {{ 'checked' if not saved_integration_mode or saved_integration_mode == 'standard' }}
+                       onchange="document.getElementById('integration-mode').value='standard'"
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Standard</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — AgentCafe proxies requests with simple authentication. Best for most services.</span>
+                </div>
+            </label>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="integration_mode_radio" value="jointly_verified"
+                       {{ 'checked' if saved_integration_mode == 'jointly_verified' }}
+                       onchange="document.getElementById('integration-mode').value='jointly_verified'"
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Jointly verified</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — Per-request RS256 artifact signing, identity binding, and account lifecycle. Required for services that manage user accounts.</span>
+                </div>
+            </label>
+        </div>
+    </div>
+
+    <div class="section-card">
+        <h2>Configure policies &amp; backend</h2>
+        <p class="subtitle">Set access policies for each action and provide your backend URL where the Cafe will proxy requests.</p>
+
+        <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+            <strong style="color: var(--text);">Policy quick reference</strong>
+            <ul style="margin: 6px 0 0 16px; padding: 0;">
+                <li><strong>Rate limit</strong> — How many requests per minute an agent can make. Start lower for write operations.</li>
+                <li><strong>Human consent</strong> — "Yes" means the human must approve before each use (Tier-2 Passport). "No" means the agent can act with just its own token (Tier-1).</li>
+                <li><strong>Scope</strong> — The permission string checked at request time (usually <code>service:action</code>).</li>
+            </ul>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="backend_url">Backend URL <span style="color: var(--danger);">*</span></label>
+                <input type="url" id="backend_url" name="backend_url" required
+                       value="{{ saved_backend_url or '' }}"
+                       placeholder="https://api.yourcompany.com">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">The Cafe proxies agent requests to this URL</p>
+            </div>
+            <div class="form-group">
+                <label for="backend_auth_header">Auth header <span style="color: var(--text-muted);">(optional, encrypted at rest)</span></label>
+                <input type="password" id="backend_auth_header" name="backend_auth_header"
+                       placeholder="{{ '••••••••  (saved — leave blank to keep)' if has_saved_auth else 'Bearer sk-...' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Sent as Authorization header to your backend</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Per-action policies -->
+    <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">Action policies</h3>
+
+    {% for action in candidate.actions or [] %}
+    <div class="action-card" data-action-id="{{ action.action_id }}">
+        <div class="action-header">
+            <div class="left">
+                <span class="badge {{ 'badge-write' if action.is_write else 'badge-read' }}">
+                    {{ 'WRITE' if action.is_write else 'READ' }}
+                </span>
+                <code>{{ action.action_id }}</code>
+                {% if action.suggested_risk_tier %}
+                <span class="badge badge-{{ 'high' if action.suggested_risk_tier in ['high', 'critical'] else action.suggested_risk_tier }}">
+                    {{ action.suggested_risk_tier }} risk
+                </span>
+                <span style="font-size: 11px; color: var(--text-muted);">
+                    {% if action.suggested_risk_tier == 'low' %}read-only, no side effects
+                    {% elif action.suggested_risk_tier == 'medium' %}modifies data, reversible
+                    {% elif action.suggested_risk_tier == 'high' %}significant side effects, hard to reverse
+                    {% elif action.suggested_risk_tier == 'critical' %}irreversible or financial impact
+                    {% endif %}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% set sp = saved_policy.get(action.action_id, {}) if saved_policy else {} %}
+        {% set eff_scope = sp.get('scope', '') or action.suggested_scope or (candidate.service_id ~ ':' ~ action.action_id) %}
+        {% set eff_rate = sp.get('rate_limit', '') or action.suggested_rate_limit or '60/minute' %}
+        {% set eff_human = sp.get('human_auth', action.suggested_human_auth) if sp else action.suggested_human_auth %}
+        <div class="form-row" style="grid-template-columns: 1fr 1fr 1fr; margin-top: 12px;">
+            <div class="form-group" style="margin-bottom: 0;">
+                <label style="font-size: 12px; color: var(--text-muted);">Scope</label>
+                <input type="text" data-field="scope"
+                       value="{{ eff_scope }}"
+                       style="padding: 6px 10px; font-size: 13px; font-family: monospace;">
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <label style="font-size: 12px; color: var(--text-muted);">Rate limit</label>
+                <select data-field="rate_limit" style="padding: 6px 10px; font-size: 13px;">
+                    <option value="60/minute" {{ 'selected' if eff_rate == '60/minute' }}>60/minute (default read)</option>
+                    <option value="10/minute" {{ 'selected' if eff_rate == '10/minute' }}>10/minute (default write)</option>
+                    <option value="5/minute" {{ 'selected' if eff_rate == '5/minute' }}>5/minute (restrictive)</option>
+                    <option value="1/minute" {{ 'selected' if eff_rate == '1/minute' }}>1/minute (very restrictive)</option>
+                    <option value="100/minute" {{ 'selected' if eff_rate == '100/minute' }}>100/minute (generous)</option>
+                </select>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <label style="font-size: 12px; color: var(--text-muted);">Human consent required</label>
+                <button type="button" data-field="human_auth"
+                        data-value="{{ 'true' if eff_human else 'false' }}"
+                        class="btn-sm {{ 'btn-pause' if eff_human }}"
+                        style="width: 100%; padding: 8px; text-align: center;"
+                        onclick="toggleHumanAuth(this)">
+                    {{ 'Yes — Tier-2 required' if eff_human else 'No — Tier-1 sufficient' }}
+                </button>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="btn-row">
+        <a href="/services/onboard/{{ draft_id }}/review" class="btn btn-outline">Back</a>
+        <button type="submit" class="btn btn-primary" style="width: auto; padding: 12px 32px;">Save & preview</button>
+    </div>
+</form>
+
+<script>
+function toggleHumanAuth(btn) {
+    var current = btn.getAttribute('data-value') === 'true';
+    var next = !current;
+    btn.setAttribute('data-value', next ? 'true' : 'false');
+    btn.textContent = next ? 'Yes \u2014 Tier-2 required' : 'No \u2014 Tier-1 sufficient';
+    if (next) {
+        btn.classList.add('btn-pause');
+    } else {
+        btn.classList.remove('btn-pause');
+    }
+}
+
+document.getElementById('policy-form').addEventListener('submit', function() {
+    var cards = document.querySelectorAll('.action-card');
+    var policy = {};
+    for (var i = 0; i < cards.length; i++) {
+        var actionId = cards[i].getAttribute('data-action-id');
+        var scope = cards[i].querySelector('[data-field="scope"]').value;
+        var rateLimit = cards[i].querySelector('[data-field="rate_limit"]').value;
+        var humanAuth = cards[i].querySelector('[data-field="human_auth"]').getAttribute('data-value') === 'true';
+        policy[actionId] = {
+            scope: scope,
+            rate_limit: rateLimit,
+            human_auth: humanAuth
+        };
+    }
+    document.getElementById('policy-json').value = JSON.stringify(policy);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,106 @@
+openapi: "3.1.0"
+info:
+  title: BookShelf API
+  version: "1.0.0"
+  description: A simple book catalog and lending service for AI agents.
+paths:
+  /books:
+    get:
+      operationId: searchBooks
+      summary: Search the book catalog
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search term (title, author, or ISBN)
+        - name: genre
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by genre
+      responses:
+        "200":
+          description: List of matching books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    book_id:
+                      type: string
+                    title:
+                      type: string
+                    author:
+                      type: string
+                    available:
+                      type: boolean
+  /books/{book_id}:
+    get:
+      operationId: bookDetails
+      summary: Get details for a specific book
+      parameters:
+        - name: book_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Book details
+  /loans:
+    post:
+      operationId: borrowBook
+      summary: Borrow a book from the library
+      x-agentcafe-risk-tier: medium
+      x-agentcafe-human-identifier-field: borrower_email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - book_id
+                - borrower_email
+              properties:
+                book_id:
+                  type: string
+                  description: ID of the book to borrow
+                borrower_email:
+                  type: string
+                  description: Email of the person borrowing
+                duration_days:
+                  type: integer
+                  description: Loan duration in days (default 14)
+      responses:
+        "201":
+          description: Loan created
+  /loans/{loan_id}/return:
+    post:
+      operationId: returnBook
+      summary: Return a borrowed book
+      x-agentcafe-risk-tier: low
+      parameters:
+        - name: loan_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                condition:
+                  type: string
+                  description: Condition of the book on return
+      responses:
+        "200":
+          description: Book returned successfully

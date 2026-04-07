@@ -1,0 +1,753 @@
+"""Consent flow — agent-initiated consent, human approval, token exchange/refresh.
+
+Implements v2-spec.md §4 (Consent Flow), §5 (Consent Lifecycle),
+§6 (Token Lifecycle), and §11 (API Endpoints).
+"""
+
+from __future__ import annotations
+
+import logging
+import secrets
+import string
+import uuid
+from datetime import datetime, timezone, timedelta
+
+import httpx
+import jwt
+from fastapi import APIRouter, HTTPException, Header
+from pydantic import BaseModel, Field
+
+from agentcafe.cafe.human import validate_human_session, verify_passkey_assertion
+from agentcafe.db.engine import get_db
+from agentcafe.keys import sign_passport_token, decode_passport_token
+
+logger = logging.getLogger("agentcafe.consent")
+
+_CALLBACK_TIMEOUT = 10  # seconds
+
+
+async def _fire_consent_callback(
+    callback_url: str | None,
+    consent_id: str,
+    status: str,
+    policy_id: str | None = None,
+) -> None:
+    """POST a status update to the agent's callback_url (fire-and-forget).
+
+    Silently logs failures — callback delivery is best-effort and must not
+    block or fail the consent flow.
+    """
+    if not callback_url:
+        return
+    payload = {
+        "consent_id": consent_id,
+        "status": status,
+    }
+    if policy_id:
+        payload["policy_id"] = policy_id
+    try:
+        async with httpx.AsyncClient(timeout=_CALLBACK_TIMEOUT) as client:
+            resp = await client.post(callback_url, json=payload)
+            logger.info(
+                "Consent callback %s → %s (HTTP %d)",
+                consent_id, callback_url, resp.status_code,
+            )
+    except Exception:  # pylint: disable=broad-except
+        logger.warning(
+            "Consent callback failed for %s → %s", consent_id, callback_url,
+            exc_info=True,
+        )
+
+consent_router = APIRouter(tags=["consent"])
+
+_DEFAULT_CONSENT_TTL_HOURS = 72
+_MAX_CONSENT_TTL_HOURS = 168  # 7 days
+_MAX_ACTIVE_TOKENS_PER_POLICY = 20
+
+# Risk-tier token lifetime ceilings (v2-spec.md §6.2)
+_RISK_TIER_CEILINGS = {
+    "low": 3600,       # 60 minutes
+    "medium": 900,     # 15 minutes
+    "high": 300,       # 5 minutes
+    "critical": 0,     # single-use (0 = one request only)
+}
+_RISK_TIER_DEFAULTS = {
+    "low": 1800,       # 30 minutes
+    "medium": 600,     # 10 minutes
+    "high": 0,         # single-use
+    "critical": 0,     # single-use
+}
+
+
+class _State:
+    """Module-level mutable state (avoids global statements)."""
+    signing_secret: str = ""
+
+_state = _State()
+
+
+def configure_consent(signing_secret: str) -> None:
+    """Set the signing secret for Tier-2 token issuance. Called once at startup."""
+    _state.signing_secret = signing_secret
+
+
+# ---------------------------------------------------------------------------
+# Request / response models
+# ---------------------------------------------------------------------------
+
+class InitiateRequest(BaseModel):
+    """Request body for POST /consents/initiate.
+
+    Supports multi-action consent: pass `action_ids` (list) for multiple actions,
+    or `action_id` (str) for backward compatibility with single-action requests.
+    """
+    service_id: str
+    action_id: str | None = None
+    action_ids: list[str] | None = None
+    requested_constraints: dict | None = None
+    task_summary: str | None = None
+    callback_url: str | None = None
+    ttl_hours: float = Field(default=_DEFAULT_CONSENT_TTL_HOURS, gt=0, le=_MAX_CONSENT_TTL_HOURS)
+
+
+class InitiateResponse(BaseModel):
+    """Response body for POST /consents/initiate."""
+    consent_id: str
+    consent_url: str
+    activation_code: str
+    activation_url: str
+    status: str = "pending"
+    expires_at: str
+
+
+class ConsentStatusResponse(BaseModel):
+    """Response body for GET /consents/{consent_id}/status."""
+    consent_id: str
+    status: str
+    policy_id: str | None = None
+    expires_at: str
+
+
+class ApproveRequest(BaseModel):
+    """Request body for POST /consents/{consent_id}/approve."""
+    token_lifetime_seconds: int | None = None
+    passkey_challenge_id: str = Field(..., description="Challenge ID from /human/passkey/login/begin")
+    passkey_credential: dict = Field(..., description="WebAuthn assertion credential from navigator.credentials.get()")
+
+
+class ApproveResponse(BaseModel):
+    """Response body for POST /consents/{consent_id}/approve."""
+    consent_id: str
+    status: str
+    policy_id: str
+
+
+class ExchangeRequest(BaseModel):
+    """Request body for POST /tokens/exchange."""
+    consent_id: str
+
+
+class PolicyLimits(BaseModel):
+    """Snapshot of policy usage limits, returned with token responses."""
+    active_tokens: int
+    max_active_tokens: int = _MAX_ACTIVE_TOKENS_PER_POLICY
+
+
+class TokenResponse(BaseModel):
+    """Response body for POST /tokens/exchange and POST /tokens/refresh."""
+    token: str
+    expires_at: str
+    policy_id: str
+    tier: str = "write"
+    scopes: list[str]
+    policy_limits: PolicyLimits | None = None
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_ACTIVATION_CODE_CHARS = string.ascii_uppercase + string.digits
+
+
+def _generate_activation_code() -> str:
+    """Generate an 8-char alphanumeric activation code (e.g. 'ABCD1234')."""
+    return "".join(secrets.choice(_ACTIVATION_CODE_CHARS) for _ in range(8))
+
+
+def _validate_agent_passport(authorization: str) -> dict:
+    """Extract and validate the agent's Passport from the Authorization header."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"error": "missing_passport"})
+    token = authorization[7:]
+    try:
+        return decode_passport_token(token)
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail={"error": "passport_expired"}) from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail={"error": "passport_invalid"}) from exc
+
+
+async def _count_active_tokens(db, policy_id: str) -> int:
+    """Count non-expired active tokens for a policy."""
+    now = datetime.now(timezone.utc).isoformat()
+    # Clean up expired tokens while we're at it
+    await db.execute(
+        "DELETE FROM active_tokens WHERE expires_at < ?", (now,)
+    )
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM active_tokens WHERE policy_id = ?", (policy_id,)
+    )
+    row = await cursor.fetchone()
+    return row[0]
+
+
+def _issue_tier2_token(
+    policy_id: str,
+    email: str,
+    scopes: list[str],
+    risk_tier: str,
+    lifetime_seconds: int,
+    agent_tag: str | None = None,
+) -> tuple[str, str, str]:
+    """Issue a Tier-2 write token. Returns (token, expires_at_iso, jti)."""
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(seconds=lifetime_seconds) if lifetime_seconds > 0 else now + timedelta(seconds=30)
+    jti = str(uuid.uuid4())
+
+    # Derive authorizations from scopes (format: "service_id:action_id")
+    authorizations = []
+    for scope in scopes:
+        parts = scope.split(":", 1)
+        if len(parts) == 2:
+            authorizations.append({"service_id": parts[0], "action_id": parts[1]})
+
+    payload = {
+        "iss": "agentcafe",
+        "sub": f"user:{email}",
+        "aud": "agentcafe",
+        "exp": exp,
+        "iat": now,
+        "jti": jti,
+        "tier": "write",
+        "granted_by": "human_consent",
+        "policy_id": policy_id,
+        "scopes": scopes,
+        "authorizations": authorizations,
+        "risk_tier": risk_tier,
+        "agent_tag": agent_tag,
+    }
+
+    token = sign_passport_token(payload)
+    return token, exp.isoformat(), jti
+
+
+# ---------------------------------------------------------------------------
+# POST /consents/initiate — Agent requests consent
+# ---------------------------------------------------------------------------
+
+# Risk tier ordering for multi-action consent (highest wins)
+_RISK_TIER_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+@consent_router.post("/consents/initiate", response_model=InitiateResponse)
+async def initiate_consent(
+    req: InitiateRequest,
+    authorization: str = Header(default=""),
+):
+    """Agent initiates a consent request for one or more service actions.
+
+    Requires a valid Passport (Tier-1 or Tier-2) in the Authorization header.
+    Returns a consent_id and consent_url for the human to approve.
+
+    Accepts either `action_id` (single, backward compat) or `action_ids` (list).
+    """
+    _validate_agent_passport(authorization)
+
+    # Resolve action list (support both single and multi-action)
+    actions = req.action_ids or ([req.action_id] if req.action_id else [])
+    if not actions:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "missing_actions", "message": "Provide action_id or action_ids."},
+        )
+    # Deduplicate while preserving order
+    seen = set()
+    actions = [a for a in actions if not (a in seen or seen.add(a))]
+
+    db = await get_db()
+
+    # Verify ALL actions exist for this service
+    missing = []
+    for action_id in actions:
+        cursor = await db.execute(
+            "SELECT 1 FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (req.service_id, action_id),
+        )
+        if not await cursor.fetchone():
+            missing.append(action_id)
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "action_not_found", "message": f"Unknown action(s) for service '{req.service_id}': {', '.join(missing)}"},
+        )
+
+    consent_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=req.ttl_hours)
+    action_ids_csv = ",".join(actions)
+    scopes = ",".join(f"{req.service_id}:{a}" for a in actions)
+
+    activation_code = _generate_activation_code()
+
+    await db.execute(
+        """INSERT INTO consents
+           (id, service_id, action_ids, requested_scopes, requested_constraints_json,
+            task_summary, callback_url, activation_code, status, expires_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)""",
+        (
+            consent_id, req.service_id, action_ids_csv, scopes,
+            str(req.requested_constraints) if req.requested_constraints else None,
+            req.task_summary, req.callback_url, activation_code,
+            expires_at.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+    await db.commit()
+
+    consent_url = f"/authorize/{consent_id}"
+
+    return InitiateResponse(
+        consent_id=consent_id,
+        consent_url=consent_url,
+        activation_code=activation_code,
+        activation_url=f"/activate?code={activation_code}",
+        expires_at=expires_at.isoformat(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /consents/{consent_id}/status — Agent polls consent status
+# ---------------------------------------------------------------------------
+
+@consent_router.get("/consents/{consent_id}/status", response_model=ConsentStatusResponse)
+async def get_consent_status(consent_id: str):
+    """Check the status of a consent request."""
+    db = await get_db()
+
+    cursor = await db.execute(
+        "SELECT id, status, policy_id, expires_at FROM consents WHERE id = ?",
+        (consent_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail={"error": "consent_not_found"})
+
+    # Check if expired
+    if row["status"] == "pending":
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            await db.execute(
+                "UPDATE consents SET status = 'expired', updated_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), consent_id),
+            )
+            await db.commit()
+            raise HTTPException(status_code=410, detail={"error": "consent_expired"})
+
+    return ConsentStatusResponse(
+        consent_id=row["id"],
+        status=row["status"],
+        policy_id=row["policy_id"],
+        expires_at=row["expires_at"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /consents/{consent_id}/approve — Human approves consent
+# ---------------------------------------------------------------------------
+
+async def _handle_jointly_verified_consent(
+    db,
+    user_id: str,
+    email: str,
+    service_id: str,
+    consent_ref: str,
+    action_ids: list[str],
+) -> None:
+    """Create identity binding and authorization grant for jointly-verified services.
+
+    Called during consent approval. For standard-mode services, this is a no-op.
+    For jointly-verified services, establishes the human→service account binding
+    and creates an authorization_grants row.
+    """
+    # Check if any of the consented actions are jointly-verified
+    is_jointly_verified = False
+    for aid in action_ids:
+        cursor = await db.execute(
+            "SELECT integration_mode FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (service_id, aid),
+        )
+        pc_row = await cursor.fetchone()
+        if pc_row and pc_row["integration_mode"] == "jointly_verified":
+            is_jointly_verified = True
+            break
+
+    if not is_jointly_verified:
+        return
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Check if binding already exists
+    cursor = await db.execute(
+        "SELECT id, binding_status FROM human_service_accounts "
+        "WHERE ac_human_id = ? AND service_id = ?",
+        (user_id, service_id),
+    )
+    binding_row = await cursor.fetchone()
+
+    if not binding_row:
+        # Create new binding — for MVS, AC creates the service-side account
+        # using the human's AC user ID as the service account ID.
+        # A real implementation would call POST /integration/account-check
+        # and POST /integration/account-create on the service.
+        binding_id = str(uuid.uuid4())
+        service_account_id = user_id  # MVS: AC user ID as service account ID
+        await db.execute(
+            """INSERT INTO human_service_accounts
+               (id, ac_human_id, service_id, service_account_id,
+                binding_method, binding_status, identity_binding,
+                linked_at, updated_at)
+               VALUES (?, ?, ?, ?, 'broker_delegated', 'active', 'broker_delegated', ?, ?)""",
+            (binding_id, user_id, service_id, service_account_id, now, now),
+        )
+        logger.info("Created service binding: user=%s service=%s account=%s",
+                     email, service_id, service_account_id)
+    elif binding_row["binding_status"] != "active":
+        # Reactivate an existing but inactive binding
+        await db.execute(
+            "UPDATE human_service_accounts SET binding_status = 'active', updated_at = ? "
+            "WHERE id = ?",
+            (now, binding_row["id"]),
+        )
+
+    # Create authorization grant
+    grant_id = str(uuid.uuid4())
+    await db.execute(
+        """INSERT OR IGNORE INTO authorization_grants
+           (id, ac_human_id, service_id, consent_ref, grant_status,
+            granted_at, updated_at)
+           VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+        (grant_id, user_id, service_id, consent_ref, now, now),
+    )
+    logger.info("Created authorization grant: user=%s service=%s consent_ref=%s",
+                 email, service_id, consent_ref)
+
+
+@consent_router.post("/consents/{consent_id}/approve", response_model=ApproveResponse)
+async def approve_consent(
+    consent_id: str,
+    req: ApproveRequest,
+    authorization: str = Header(default=""),
+):
+    """Human approves a consent request, creating a policy.
+
+    Requires a valid human session token AND a fresh passkey assertion.
+    The passkey assertion cryptographically proves a human is present.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"error": "missing_session"})
+    human_payload = validate_human_session(authorization[7:])
+    user_id = human_payload["user_id"]
+    email = human_payload["sub"].removeprefix("user:")
+
+    # Verify passkey assertion — this is the cryptographic human-presence proof
+    passkey_user = await verify_passkey_assertion(
+        req.passkey_challenge_id, req.passkey_credential,
+    )
+    if passkey_user["user_id"] != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "passkey_user_mismatch",
+                    "message": "Passkey does not belong to the session user."},
+        )
+
+    db = await get_db()
+
+    # Load consent
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE id = ?", (consent_id,),
+    )
+    consent = await cursor.fetchone()
+    if not consent:
+        raise HTTPException(status_code=404, detail={"error": "consent_not_found"})
+
+    if consent["status"] != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "consent_not_pending", "message": f"Consent is '{consent['status']}', not 'pending'."},
+        )
+
+    # Check expiry
+    expires_at = datetime.fromisoformat(consent["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        await db.execute(
+            "UPDATE consents SET status = 'expired', updated_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), consent_id),
+        )
+        await db.commit()
+        raise HTTPException(status_code=410, detail={"error": "consent_expired"})
+
+    # Look up risk tier from proxy config — use highest among all requested actions
+    action_ids = consent["action_ids"].split(",") if consent["action_ids"] else []
+    risk_tier = "medium"
+    for aid in action_ids:
+        cursor = await db.execute(
+            "SELECT risk_tier FROM proxy_configs WHERE service_id = ? AND action_id = ?",
+            (consent["service_id"], aid),
+        )
+        proxy_row = await cursor.fetchone()
+        if proxy_row:
+            candidate = proxy_row["risk_tier"]
+            if _RISK_TIER_ORDER.get(candidate, 1) > _RISK_TIER_ORDER.get(risk_tier, 1):
+                risk_tier = candidate
+
+    # Determine token lifetime
+    ceiling = _RISK_TIER_CEILINGS.get(risk_tier, 900)
+    default = _RISK_TIER_DEFAULTS.get(risk_tier, 600)
+    lifetime = req.token_lifetime_seconds if req.token_lifetime_seconds is not None else default
+    if ceiling > 0 and lifetime > ceiling:
+        lifetime = ceiling
+
+    # Create policy
+    policy_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    policy_expires = now + timedelta(days=30)
+
+    await db.execute(
+        """INSERT INTO policies
+           (id, cafe_user_id, service_id, allowed_action_ids, scopes,
+            risk_tier, max_token_lifetime_seconds, expires_at,
+            revoked_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)""",
+        (
+            policy_id, user_id, consent["service_id"],
+            consent["action_ids"], consent["requested_scopes"],
+            risk_tier, lifetime,
+            policy_expires.isoformat(), now.isoformat(), now.isoformat(),
+        ),
+    )
+
+    # Handle jointly-verified service binding (ADR-031)
+    await _handle_jointly_verified_consent(
+        db, user_id, email, consent["service_id"], policy_id, action_ids,
+    )
+
+    # Update consent with approval
+    await db.execute(
+        """UPDATE consents
+           SET status = 'approved', cafe_user_id = ?, policy_id = ?, updated_at = ?
+           WHERE id = ?""",
+        (user_id, policy_id, now.isoformat(), consent_id),
+    )
+    await db.commit()
+
+    logger.info("Consent %s approved by user %s → policy %s", consent_id, email, policy_id)
+
+    # Fire webhook callback (best-effort)
+    await _fire_consent_callback(consent["callback_url"], consent_id, "approved", policy_id)
+
+    return ApproveResponse(
+        consent_id=consent_id,
+        status="approved",
+        policy_id=policy_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /tokens/exchange — Agent exchanges approved consent for Tier-2 token
+# ---------------------------------------------------------------------------
+
+@consent_router.post("/tokens/exchange", response_model=TokenResponse)
+async def exchange_token(
+    req: ExchangeRequest,
+    authorization: str = Header(default=""),
+):
+    """Exchange an approved consent_id for a short-lived Tier-2 write token.
+
+    Requires a valid agent Passport in the Authorization header.
+    """
+    agent_payload = _validate_agent_passport(authorization)
+    agent_tag = agent_payload.get("agent_tag")
+
+    db = await get_db()
+
+    # Load consent
+    cursor = await db.execute(
+        "SELECT * FROM consents WHERE id = ?", (req.consent_id,),
+    )
+    consent = await cursor.fetchone()
+    if not consent:
+        raise HTTPException(status_code=404, detail={"error": "consent_not_found"})
+
+    if consent["status"] == "expired":
+        raise HTTPException(status_code=410, detail={"error": "consent_expired"})
+    if consent["status"] != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "consent_not_approved", "message": f"Consent is '{consent['status']}', not 'approved'."},
+        )
+
+    policy_id = consent["policy_id"]
+
+    # Load policy
+    cursor = await db.execute(
+        "SELECT * FROM policies WHERE id = ?", (policy_id,),
+    )
+    policy = await cursor.fetchone()
+    if not policy:
+        raise HTTPException(status_code=500, detail={"error": "policy_missing"})
+
+    if policy["revoked_at"] is not None:
+        raise HTTPException(status_code=401, detail={"error": "policy_revoked"})
+
+    # Enforce concurrent token cap
+    active_count = await _count_active_tokens(db, policy_id)
+    if active_count >= _MAX_ACTIVE_TOKENS_PER_POLICY:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "policy_token_limit_reached", "message": f"Maximum {_MAX_ACTIVE_TOKENS_PER_POLICY} active tokens per policy."},
+        )
+
+    # Issue Tier-2 token
+    scopes = policy["scopes"].split(",") if "," in policy["scopes"] else [policy["scopes"]]
+    email = policy["cafe_user_id"]
+
+    # Look up the actual email from cafe_users
+    cursor = await db.execute(
+        "SELECT email FROM cafe_users WHERE id = ?", (email,)
+    )
+    user_row = await cursor.fetchone()
+    user_email = user_row["email"] if user_row else email
+
+    lifetime = policy["max_token_lifetime_seconds"]
+    risk_tier = policy["risk_tier"]
+
+    token, expires_at, jti = _issue_tier2_token(
+        policy_id=policy_id,
+        email=user_email,
+        scopes=scopes,
+        risk_tier=risk_tier,
+        lifetime_seconds=lifetime,
+        agent_tag=agent_tag,
+    )
+
+    # Track active token
+    await db.execute(
+        "INSERT INTO active_tokens (jti, policy_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+        (jti, policy_id, expires_at, datetime.now(timezone.utc).isoformat()),
+    )
+    await db.commit()
+
+    # +1 because we just inserted a new active token above
+    return TokenResponse(
+        token=token,
+        expires_at=expires_at,
+        policy_id=policy_id,
+        scopes=scopes,
+        policy_limits=PolicyLimits(active_tokens=active_count + 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /tokens/refresh — Agent refreshes a Tier-2 token
+# ---------------------------------------------------------------------------
+
+@consent_router.post("/tokens/refresh", response_model=TokenResponse)
+async def refresh_token(authorization: str = Header(default="")):
+    """Refresh a Tier-2 token under the same policy. Non-consuming.
+
+    The old token is NOT invalidated — it dies at expiry.
+    Returns a new token under the same policy.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"error": "missing_passport"})
+
+    token_str = authorization[7:]
+    try:
+        payload = decode_passport_token(token_str)
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail={"error": "passport_expired"}) from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail={"error": "passport_invalid"}) from exc
+
+    if payload.get("tier") != "write":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "tier_insufficient", "message": "Only Tier-2 (write) tokens can be refreshed."},
+        )
+
+    policy_id = payload.get("policy_id")
+    if not policy_id:
+        raise HTTPException(status_code=400, detail={"error": "no_policy_id"})
+
+    db = await get_db()
+
+    # Check policy is still active
+    cursor = await db.execute(
+        "SELECT * FROM policies WHERE id = ?", (policy_id,),
+    )
+    policy = await cursor.fetchone()
+    if not policy:
+        raise HTTPException(status_code=404, detail={"error": "policy_not_found"})
+
+    if policy["revoked_at"] is not None:
+        raise HTTPException(status_code=401, detail={"error": "policy_revoked"})
+
+    # Check policy expiry
+    policy_expires = datetime.fromisoformat(policy["expires_at"])
+    if policy_expires.tzinfo is None:
+        policy_expires = policy_expires.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > policy_expires:
+        raise HTTPException(status_code=401, detail={"error": "policy_expired"})
+
+    # Enforce concurrent token cap
+    active_count = await _count_active_tokens(db, policy_id)
+    if active_count >= _MAX_ACTIVE_TOKENS_PER_POLICY:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "policy_token_limit_reached", "message": f"Maximum {_MAX_ACTIVE_TOKENS_PER_POLICY} active tokens per policy."},
+        )
+
+    # Issue new token
+    scopes = payload.get("scopes", [])
+    email = payload["sub"].removeprefix("user:")
+    agent_tag = payload.get("agent_tag")
+    risk_tier = policy["risk_tier"]
+    lifetime = policy["max_token_lifetime_seconds"]
+
+    new_token, expires_at, jti = _issue_tier2_token(
+        policy_id=policy_id,
+        email=email,
+        scopes=scopes,
+        risk_tier=risk_tier,
+        lifetime_seconds=lifetime,
+        agent_tag=agent_tag,
+    )
+
+    # Track active token
+    await db.execute(
+        "INSERT INTO active_tokens (jti, policy_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+        (jti, policy_id, expires_at, datetime.now(timezone.utc).isoformat()),
+    )
+    await db.commit()
+
+    return TokenResponse(
+        token=new_token,
+        expires_at=expires_at,
+        policy_id=policy_id,
+        scopes=scopes,
+        policy_limits=PolicyLimits(active_tokens=active_count + 1),
+    )

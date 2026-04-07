@@ -1,0 +1,497 @@
+{
+  "cafe": "AgentCafe",
+  "version": "1.0.0",
+  "description": "The Menu. Browse freely. When you find what you need, present your Passport and order.",
+  "order_endpoint": "POST /cafe/order",
+  "order_format": {
+    "service_id": "<slug>",
+    "action_id": "<slug>",
+    "passport": "<valid_passport_token>",
+    "inputs": {}
+  },
+  "services": [
+    {
+      "service_id": "stayright-hotels",
+      "name": "StayRight Hotels",
+      "category": "hotels",
+      "capability_tags": ["travel", "booking", "accommodation"],
+      "description": "Search and book hotel rooms worldwide. Find availability by city, dates, and preferences. Book rooms, view details, and manage cancellations.",
+      "actions": [
+        {
+          "action_id": "search-availability",
+          "description": "Search for available hotel rooms by city, dates, number of guests, and optional filters like max price and amenities. Returns a list of matching rooms with pricing.",
+          "required_inputs": [
+            {
+              "name": "city",
+              "type": "string",
+              "description": "City to search for hotels",
+              "example": "Austin"
+            },
+            {
+              "name": "check_in",
+              "type": "string",
+              "description": "Check-in date in ISO 8601 format",
+              "example": "2026-03-15"
+            },
+            {
+              "name": "check_out",
+              "type": "string",
+              "description": "Check-out date in ISO 8601 format",
+              "example": "2026-03-18"
+            },
+            {
+              "name": "guests",
+              "type": "integer",
+              "description": "Number of guests (1-10)",
+              "example": 2
+            }
+          ],
+          "cost": {
+            "required_scopes": ["stayright-hotels:search-availability"],
+            "human_authorization_required": false,
+            "limits": {"rate_limit": "60/minute"}
+          },
+          "example_response": {
+            "results": [
+              {
+                "room_id": "sr-austin-k420",
+                "hotel_name": "StayRight Austin Downtown",
+                "room_type": "King Suite",
+                "price_per_night": 189.00,
+                "currency": "USD",
+                "amenities": ["wifi", "pool", "gym", "breakfast"],
+                "rating": 4.5,
+                "available": true
+              }
+            ],
+            "total_results": 1
+          }
+        },
+        {
+          "action_id": "get-room-details",
+          "description": "Get full details for a specific room including description, amenities, cancellation policy, and real-time pricing.",
+          "required_inputs": [
+            {
+              "name": "room_id",
+              "type": "string",
+              "description": "Unique room identifier from search results",
+              "example": "sr-austin-k420"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["stayright-hotels:get-room-details"],
+            "human_authorization_required": false,
+            "limits": {"rate_limit": "60/minute"}
+          },
+          "example_response": {
+            "room_id": "sr-austin-k420",
+            "hotel_name": "StayRight Austin Downtown",
+            "address": "200 Congress Ave, Austin, TX 78701",
+            "room_type": "King Suite",
+            "description": "Spacious king suite with city views, work desk, and rainfall shower.",
+            "price_per_night": 189.00,
+            "currency": "USD",
+            "amenities": ["wifi", "pool", "gym", "breakfast", "parking"],
+            "cancellation_policy": "Free cancellation up to 24 hours before check-in",
+            "rating": 4.5,
+            "review_count": 1247
+          }
+        },
+        {
+          "action_id": "book-room",
+          "description": "Book a specific hotel room. Creates a confirmed reservation with a financial commitment. Sends confirmation email to the guest.",
+          "required_inputs": [
+            {
+              "name": "room_id",
+              "type": "string",
+              "description": "Room to book (from search results)",
+              "example": "sr-austin-k420"
+            },
+            {
+              "name": "check_in",
+              "type": "string",
+              "description": "Check-in date in ISO 8601 format",
+              "example": "2026-03-15"
+            },
+            {
+              "name": "check_out",
+              "type": "string",
+              "description": "Check-out date in ISO 8601 format",
+              "example": "2026-03-18"
+            },
+            {
+              "name": "guest_name",
+              "type": "string",
+              "description": "Full name of the primary guest",
+              "example": "Jane Smith"
+            },
+            {
+              "name": "guest_email",
+              "type": "string",
+              "description": "Contact email for booking confirmation",
+              "example": "jane@example.com"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["stayright-hotels:book-room"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "booking_id": "BK-2026-0315-A7X9",
+            "status": "confirmed",
+            "hotel_name": "StayRight Austin Downtown",
+            "room_type": "King Suite",
+            "check_in": "2026-03-15",
+            "check_out": "2026-03-18",
+            "total_price": 567.00,
+            "currency": "USD",
+            "cancellation_deadline": "2026-03-14T00:00:00Z",
+            "confirmation_email_sent": true
+          }
+        },
+        {
+          "action_id": "cancel-booking",
+          "description": "Cancel an existing hotel booking. Cancellation policy applies — refund amount depends on timing relative to check-in date.",
+          "required_inputs": [
+            {
+              "name": "booking_id",
+              "type": "string",
+              "description": "Booking identifier from the original booking confirmation",
+              "example": "BK-2026-0315-A7X9"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["stayright-hotels:cancel-booking"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "booking_id": "BK-2026-0315-A7X9",
+            "status": "cancelled",
+            "refund_amount": 567.00,
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "service_id": "quickbite-delivery",
+      "name": "QuickBite Delivery",
+      "category": "food-delivery",
+      "capability_tags": ["food", "delivery", "restaurants", "lunch"],
+      "description": "Order food delivery from nearby restaurants. Browse menus, place orders, track deliveries, and manage cancellations. Delivers within 30 minutes in supported areas.",
+      "actions": [
+        {
+          "action_id": "browse-menu",
+          "description": "Search available lunch options from nearby restaurants. Filter by cuisine, dietary preferences, price range, and delivery time. Returns menu items with pricing and estimated delivery.",
+          "required_inputs": [
+            {
+              "name": "delivery_address",
+              "type": "string",
+              "description": "Delivery address to find nearby restaurants",
+              "example": "200 Congress Ave, Austin, TX 78701"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["quickbite-delivery:browse-menu"],
+            "human_authorization_required": false,
+            "limits": {"rate_limit": "60/minute"}
+          },
+          "example_response": {
+            "items": [
+              {
+                "item_id": "qb-ceasar-lg-001",
+                "restaurant_name": "Green Fork Kitchen",
+                "item_name": "Chicken Caesar Salad",
+                "description": "Grilled chicken breast, romaine, parmesan, house-made Caesar dressing, croutons",
+                "price": 13.50,
+                "currency": "USD",
+                "estimated_delivery_minutes": 25,
+                "dietary_tags": ["high-protein"],
+                "rating": 4.7
+              }
+            ],
+            "total_results": 1
+          }
+        },
+        {
+          "action_id": "place-order",
+          "description": "Place a food delivery order. Creates a real order with financial commitment. Includes subtotal, delivery fee, tax, and optional tip.",
+          "required_inputs": [
+            {
+              "name": "items",
+              "type": "array",
+              "description": "Array of items to order, each with item_id and quantity",
+              "example": [{"item_id": "qb-ceasar-lg-001", "quantity": 1}]
+            },
+            {
+              "name": "delivery_address",
+              "type": "string",
+              "description": "Full delivery address",
+              "example": "200 Congress Ave, Suite 400, Austin, TX 78701"
+            },
+            {
+              "name": "contact_name",
+              "type": "string",
+              "description": "Name for the delivery",
+              "example": "Jane Smith"
+            },
+            {
+              "name": "contact_phone",
+              "type": "string",
+              "description": "Phone number for delivery updates",
+              "example": "+1-512-555-0199"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["quickbite-delivery:place-order"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "order_id": "QB-20260315-H8K2",
+            "status": "confirmed",
+            "restaurant_name": "Green Fork Kitchen",
+            "items": [
+              {
+                "item_name": "Chicken Caesar Salad",
+                "quantity": 1,
+                "price": 13.50
+              }
+            ],
+            "subtotal": 13.50,
+            "delivery_fee": 2.99,
+            "tip": 3.00,
+            "tax": 1.11,
+            "total": 20.60,
+            "currency": "USD",
+            "estimated_delivery": "2026-03-15T12:25:00Z",
+            "tracking_available": true
+          }
+        },
+        {
+          "action_id": "track-order",
+          "description": "Get the current status and estimated arrival time for an active delivery order. Includes driver info and real-time status updates.",
+          "required_inputs": [
+            {
+              "name": "order_id",
+              "type": "string",
+              "description": "Order identifier from the order confirmation",
+              "example": "QB-20260315-H8K2"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["quickbite-delivery:track-order"],
+            "human_authorization_required": false,
+            "limits": {"rate_limit": "30/minute"}
+          },
+          "example_response": {
+            "order_id": "QB-20260315-H8K2",
+            "status": "in_transit",
+            "status_message": "Your driver is on the way",
+            "estimated_arrival": "2026-03-15T12:25:00Z",
+            "driver_name": "Carlos M.",
+            "last_updated": "2026-03-15T12:15:00Z"
+          }
+        },
+        {
+          "action_id": "cancel-order",
+          "description": "Cancel a pending order that hasn't started preparation. Full refund if cancelled before preparation begins.",
+          "required_inputs": [
+            {
+              "name": "order_id",
+              "type": "string",
+              "description": "Order identifier from the order confirmation",
+              "example": "QB-20260315-H8K2"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["quickbite-delivery:cancel-order"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "order_id": "QB-20260315-H8K2",
+            "status": "cancelled",
+            "refund_amount": 20.60,
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "service_id": "fixright-home",
+      "name": "FixRight Home",
+      "category": "home-services",
+      "capability_tags": ["home", "repair", "maintenance", "cleaning", "appointments"],
+      "description": "Find and book home service professionals — plumbing, electrical, cleaning, HVAC, handyman, painting, and landscaping. Search available providers, book appointments, reschedule, or cancel.",
+      "actions": [
+        {
+          "action_id": "search-providers",
+          "description": "Search for available home service providers by service type, location, urgency, and budget. Returns providers with ratings, pricing, and available time slots.",
+          "required_inputs": [
+            {
+              "name": "service_type",
+              "type": "string",
+              "description": "Type of service needed: plumbing, electrical, cleaning, hvac, handyman, painting, or landscaping",
+              "example": "plumbing"
+            },
+            {
+              "name": "address",
+              "type": "string",
+              "description": "Address where the service is needed",
+              "example": "742 Evergreen Terrace, Austin, TX 78704"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["fixright-home:search-providers"],
+            "human_authorization_required": false,
+            "limits": {"rate_limit": "60/minute"}
+          },
+          "example_response": {
+            "providers": [
+              {
+                "provider_id": "fr-plumb-austin-047",
+                "provider_name": "Mike's Reliable Plumbing",
+                "service_type": "plumbing",
+                "rating": 4.8,
+                "review_count": 342,
+                "service_fee": 89.00,
+                "currency": "USD",
+                "next_available": "2026-03-15T14:00:00Z",
+                "available_slots": [
+                  "2026-03-15T14:00:00Z",
+                  "2026-03-15T16:00:00Z"
+                ],
+                "estimated_duration_minutes": 60,
+                "license_verified": true,
+                "insured": true
+              }
+            ],
+            "total_results": 1
+          }
+        },
+        {
+          "action_id": "book-appointment",
+          "description": "Book an appointment with a specific service provider at a selected time slot. Creates a confirmed service commitment with a service fee.",
+          "required_inputs": [
+            {
+              "name": "provider_id",
+              "type": "string",
+              "description": "Provider to book (from search results)",
+              "example": "fr-plumb-austin-047"
+            },
+            {
+              "name": "appointment_time",
+              "type": "string",
+              "description": "Selected time slot in ISO 8601 format (from provider's available_slots)",
+              "example": "2026-03-15T14:00:00Z"
+            },
+            {
+              "name": "service_address",
+              "type": "string",
+              "description": "Address where the service is needed",
+              "example": "742 Evergreen Terrace, Austin, TX 78704"
+            },
+            {
+              "name": "contact_name",
+              "type": "string",
+              "description": "Name of the person at the service location",
+              "example": "Jane Smith"
+            },
+            {
+              "name": "contact_phone",
+              "type": "string",
+              "description": "Phone number for the provider to call",
+              "example": "+1-512-555-0199"
+            },
+            {
+              "name": "problem_description",
+              "type": "string",
+              "description": "Description of the issue to be addressed",
+              "example": "Kitchen faucet leaking from the base, constant drip"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["fixright-home:book-appointment"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "appointment_id": "FR-20260315-P7R2",
+            "status": "confirmed",
+            "provider_name": "Mike's Reliable Plumbing",
+            "service_type": "plumbing",
+            "appointment_time": "2026-03-15T14:00:00Z",
+            "estimated_duration_minutes": 60,
+            "service_fee": 89.00,
+            "currency": "USD",
+            "cancellation_policy": "Free cancellation up to 2 hours before appointment",
+            "provider_phone": "+1-512-555-0347",
+            "confirmation_sent": true
+          }
+        },
+        {
+          "action_id": "reschedule-appointment",
+          "description": "Move an existing appointment to a new time slot. The provider must have availability at the requested time.",
+          "required_inputs": [
+            {
+              "name": "appointment_id",
+              "type": "string",
+              "description": "Appointment identifier from the original booking",
+              "example": "FR-20260315-P7R2"
+            },
+            {
+              "name": "new_appointment_time",
+              "type": "string",
+              "description": "New desired appointment time in ISO 8601 format",
+              "example": "2026-03-16T10:00:00Z"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["fixright-home:reschedule-appointment"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "appointment_id": "FR-20260315-P7R2",
+            "status": "rescheduled",
+            "provider_name": "Mike's Reliable Plumbing",
+            "service_type": "plumbing",
+            "appointment_time": "2026-03-16T10:00:00Z",
+            "estimated_duration_minutes": 60,
+            "service_fee": 89.00,
+            "currency": "USD",
+            "cancellation_policy": "Free cancellation up to 2 hours before appointment",
+            "provider_phone": "+1-512-555-0347",
+            "confirmation_sent": true
+          }
+        },
+        {
+          "action_id": "cancel-appointment",
+          "description": "Cancel a booked appointment. Free cancellation is available up to 2 hours before the appointment time. Refund amount depends on timing.",
+          "required_inputs": [
+            {
+              "name": "appointment_id",
+              "type": "string",
+              "description": "Appointment identifier from the original booking",
+              "example": "FR-20260315-P7R2"
+            }
+          ],
+          "cost": {
+            "required_scopes": ["fixright-home:cancel-appointment"],
+            "human_authorization_required": true,
+            "limits": {"rate_limit": "10/minute"}
+          },
+          "example_response": {
+            "appointment_id": "FR-20260315-P7R2",
+            "status": "cancelled",
+            "refund_amount": 89.00,
+            "currency": "USD"
+          }
+        }
+      ]
+    }
+  ]
+}

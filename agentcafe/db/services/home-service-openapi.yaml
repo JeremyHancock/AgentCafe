@@ -1,0 +1,395 @@
+# HomeServiceAppointmentService — Internal Backend OpenAPI 3.1 Spec
+# This is the INTERNAL spec that the company runs behind AgentCafe's proxy.
+# Agents never see this spec, these URLs, or these implementation details.
+# AgentCafe ingests this during onboarding to generate the Menu entry and proxy config.
+
+openapi: "3.1.0"
+info:
+  title: HomeServiceAppointmentService Internal API
+  version: "1.0.0"
+  description: >
+    Internal API for a home services marketplace. Supports searching for
+    available service providers (plumbing, electrical, cleaning, HVAC),
+    booking appointments, rescheduling, and cancelling.
+    Registered with AgentCafe as a proxied service.
+  contact:
+    name: FixRight API Team
+    email: api@fixright-services.example.com
+
+servers:
+  # This URL is NEVER exposed to agents. AgentCafe proxies all calls.
+  - url: https://api.fixright-services.example.com/v1
+    description: Production backend (proxied by AgentCafe)
+
+paths:
+  /providers/search:
+    post:
+      operationId: searchProviders
+      summary: Search available service providers
+      description: >
+        Search for available home service providers by service type, location,
+        and desired date. Returns matching providers with ratings, pricing,
+        and availability windows.
+      tags:
+        - providers
+      x-agentcafe-scope: home:search
+      x-agentcafe-human-authorization: false
+      x-agentcafe-rate-limit: 60/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - service_type
+                - address
+              properties:
+                service_type:
+                  type: string
+                  enum:
+                    - plumbing
+                    - electrical
+                    - cleaning
+                    - hvac
+                    - handyman
+                    - painting
+                    - landscaping
+                  description: Type of home service needed
+                  example: "plumbing"
+                address:
+                  type: string
+                  description: Service address
+                  example: "742 Evergreen Terrace, Austin, TX 78704"
+                preferred_date:
+                  type: string
+                  format: date
+                  description: Preferred appointment date (optional, defaults to today)
+                  example: "2026-03-15"
+                urgency:
+                  type: string
+                  enum: ["same_day", "this_week", "flexible"]
+                  description: How urgent the service need is (optional)
+                  example: "same_day"
+                max_service_fee:
+                  type: number
+                  description: Maximum service call fee in USD (optional filter)
+                  example: 150.00
+                problem_description:
+                  type: string
+                  description: Brief description of the issue (helps match the right provider)
+                  example: "Kitchen faucet is leaking from the base"
+      responses:
+        "200":
+          description: Available service providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Provider"
+                  total_results:
+                    type: integer
+              example:
+                providers:
+                  - provider_id: "fr-plumb-austin-047"
+                    provider_name: "Mike's Reliable Plumbing"
+                    service_type: "plumbing"
+                    rating: 4.8
+                    review_count: 342
+                    service_fee: 89.00
+                    currency: "USD"
+                    next_available: "2026-03-15T14:00:00Z"
+                    available_slots:
+                      - "2026-03-15T14:00:00Z"
+                      - "2026-03-15T16:00:00Z"
+                    estimated_duration_minutes: 60
+                    license_verified: true
+                    insured: true
+                  - provider_id: "fr-plumb-austin-112"
+                    provider_name: "Austin Premier Plumbing"
+                    service_type: "plumbing"
+                    rating: 4.6
+                    review_count: 198
+                    service_fee: 120.00
+                    currency: "USD"
+                    next_available: "2026-03-15T10:00:00Z"
+                    available_slots:
+                      - "2026-03-15T10:00:00Z"
+                      - "2026-03-15T13:00:00Z"
+                      - "2026-03-15T15:00:00Z"
+                    estimated_duration_minutes: 45
+                    license_verified: true
+                    insured: true
+                total_results: 2
+        "400":
+          description: Invalid search parameters
+        "429":
+          description: Rate limit exceeded
+
+  /appointments:
+    post:
+      operationId: bookAppointment
+      summary: Book a service appointment
+      description: >
+        Book an appointment with a specific service provider for a given time slot.
+        This is a WRITE action that creates a service commitment.
+        Requires human authorization.
+      tags:
+        - appointments
+      x-agentcafe-scope: home:book
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - provider_id
+                - appointment_time
+                - service_address
+                - contact_name
+                - contact_phone
+                - problem_description
+              properties:
+                provider_id:
+                  type: string
+                  description: Provider to book (from search results)
+                  example: "fr-plumb-austin-047"
+                appointment_time:
+                  type: string
+                  format: date-time
+                  description: Selected time slot (from provider's available_slots)
+                  example: "2026-03-15T14:00:00Z"
+                service_address:
+                  type: string
+                  description: Address where service is needed
+                  example: "742 Evergreen Terrace, Austin, TX 78704"
+                contact_name:
+                  type: string
+                  description: Name of the person at the service location
+                  example: "Jane Smith"
+                contact_phone:
+                  type: string
+                  description: Phone number for the service provider to call
+                  example: "+1-512-555-0199"
+                problem_description:
+                  type: string
+                  description: Description of the issue to be addressed
+                  example: "Kitchen faucet leaking from the base, constant drip"
+                access_instructions:
+                  type: string
+                  description: How to access the property (optional)
+                  example: "Ring doorbell, side gate code is 4521"
+      responses:
+        "201":
+          description: Appointment booked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Appointment"
+              example:
+                appointment_id: "FR-20260315-P7R2"
+                status: "confirmed"
+                provider_name: "Mike's Reliable Plumbing"
+                service_type: "plumbing"
+                appointment_time: "2026-03-15T14:00:00Z"
+                estimated_duration_minutes: 60
+                service_fee: 89.00
+                currency: "USD"
+                cancellation_policy: "Free cancellation up to 2 hours before appointment"
+                provider_phone: "+1-512-555-0347"
+                confirmation_sent: true
+        "400":
+          description: Invalid booking request
+        "409":
+          description: Time slot no longer available
+
+  /appointments/{appointment_id}/reschedule:
+    post:
+      operationId: rescheduleAppointment
+      summary: Reschedule an existing appointment
+      description: >
+        Move an existing appointment to a new time slot. The provider must
+        have availability at the requested time. Requires human authorization.
+      tags:
+        - appointments
+      x-agentcafe-scope: home:reschedule
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      parameters:
+        - name: appointment_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Appointment identifier
+          example: "FR-20260315-P7R2"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - new_appointment_time
+              properties:
+                new_appointment_time:
+                  type: string
+                  format: date-time
+                  description: New desired appointment time
+                  example: "2026-03-16T10:00:00Z"
+                reason:
+                  type: string
+                  description: Optional reason for rescheduling
+                  example: "Conflict with another appointment"
+      responses:
+        "200":
+          description: Appointment rescheduled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Appointment"
+              example:
+                appointment_id: "FR-20260315-P7R2"
+                status: "rescheduled"
+                provider_name: "Mike's Reliable Plumbing"
+                service_type: "plumbing"
+                appointment_time: "2026-03-16T10:00:00Z"
+                estimated_duration_minutes: 60
+                service_fee: 89.00
+                currency: "USD"
+                cancellation_policy: "Free cancellation up to 2 hours before appointment"
+                provider_phone: "+1-512-555-0347"
+                confirmation_sent: true
+        "404":
+          description: Appointment not found
+        "409":
+          description: Requested time slot not available
+        "422":
+          description: Too late to reschedule
+
+  /appointments/{appointment_id}/cancel:
+    post:
+      operationId: cancelAppointment
+      summary: Cancel an existing appointment
+      description: >
+        Cancel a booked appointment. Cancellation policy applies — free cancellation
+        is typically available up to 2 hours before the appointment time.
+        Requires human authorization.
+      tags:
+        - appointments
+      x-agentcafe-scope: home:cancel
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      parameters:
+        - name: appointment_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Appointment identifier
+          example: "FR-20260315-P7R2"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional cancellation reason
+                  example: "Issue resolved on my own"
+      responses:
+        "200":
+          description: Appointment cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appointment_id:
+                    type: string
+                  status:
+                    type: string
+                  refund_amount:
+                    type: number
+                  currency:
+                    type: string
+              example:
+                appointment_id: "FR-20260315-P7R2"
+                status: "cancelled"
+                refund_amount: 89.00
+                currency: "USD"
+        "404":
+          description: Appointment not found
+        "422":
+          description: Too late to cancel (within cancellation window)
+
+components:
+  schemas:
+    Provider:
+      type: object
+      properties:
+        provider_id:
+          type: string
+        provider_name:
+          type: string
+        service_type:
+          type: string
+        rating:
+          type: number
+        review_count:
+          type: integer
+        service_fee:
+          type: number
+        currency:
+          type: string
+        next_available:
+          type: string
+          format: date-time
+        available_slots:
+          type: array
+          items:
+            type: string
+            format: date-time
+        estimated_duration_minutes:
+          type: integer
+        license_verified:
+          type: boolean
+        insured:
+          type: boolean
+
+    Appointment:
+      type: object
+      properties:
+        appointment_id:
+          type: string
+        status:
+          type: string
+          enum: ["confirmed", "rescheduled", "in_progress", "completed", "cancelled"]
+        provider_name:
+          type: string
+        service_type:
+          type: string
+        appointment_time:
+          type: string
+          format: date-time
+        estimated_duration_minutes:
+          type: integer
+        service_fee:
+          type: number
+        currency:
+          type: string
+        cancellation_policy:
+          type: string
+        provider_phone:
+          type: string
+        confirmation_sent:
+          type: boolean

@@ -1,0 +1,37 @@
+[project]
+name = "agentcafe"
+version = "0.1.0"
+description = "The Cafe for Agents — services register on the Menu, agents browse and order."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "starlette>=0.36.0,<1.0.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "aiosqlite>=0.20.0",
+    "httpx>=0.28.0",
+    "PyJWT>=2.9.0",
+    "bcrypt>=4.0.0",
+    "pyyaml>=6.0.0",
+    "jinja2>=3.1.0",
+    "python-multipart>=0.0.9",
+    "cryptography>=42.0.0",
+    "webauthn>=2.0.0",
+    "mcp>=1.8.0",
+    "python-json-logger>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+]
+wizard = [
+    "litellm>=1.55.0",
+    "jsonschema>=4.23.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

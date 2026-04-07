@@ -1,0 +1,103 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Preview — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+{% set menu = preview.final_menu_entry if preview.final_menu_entry is defined else preview.get('final_menu_entry', {}) %}
+{% set actions = menu.actions if menu.actions is defined else [] %}
+
+<div class="section-card">
+    <h2>Preview your Menu entry</h2>
+    <p class="subtitle">This is exactly what agents will see when they browse the AgentCafe Menu.</p>
+
+    <!-- Service header -->
+    <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+            <h3 style="font-size: 18px; font-weight: 700; margin-bottom: 0;">{{ menu.name or '' }}</h3>
+            <code style="font-size: 12px; background: var(--surface-hover); padding: 2px 8px; border-radius: 4px;">{{ menu.service_id or '' }}</code>
+        </div>
+        <p style="margin-bottom: 8px;">{{ menu.description or '' }}</p>
+        {% if menu.capability_tags %}
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+            {% for tag in menu.capability_tags %}
+            <span style="padding: 2px 8px; border-radius: 12px; background: var(--surface); font-size: 12px;">{{ tag }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Actions -->
+    <h4 style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); font-weight: 600; margin-bottom: 12px;">
+        Actions ({{ actions | length }})
+    </h4>
+
+    {% for action in actions %}
+    <div style="border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 8px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <code style="font-size: 13px; font-weight: 600;">{{ action.action_id }}</code>
+                {% if action.cost and action.cost.human_authorization_required %}
+                <span class="badge badge-tier2">Tier-2 required</span>
+                {% endif %}
+            </div>
+            {% if action.cost and action.cost.limits and action.cost.limits.rate_limit %}
+            <span style="font-size: 12px; color: var(--text-muted);">{{ action.cost.limits.rate_limit }}</span>
+            {% endif %}
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">{{ action.description or '' }}</p>
+        {% if action.required_inputs %}
+        <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+            {% for inp in action.required_inputs %}
+            <span class="input-tag">
+                <code>{{ inp.name }}</code>
+                {% if inp.type %}<span class="type">({{ inp.type }})</span>{% endif %}
+            </span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Raw JSON preview -->
+<details class="section-card" style="cursor: pointer;">
+    <summary style="font-weight: 500; font-size: 14px;">View raw JSON</summary>
+    <pre class="json-preview" style="margin-top: 12px;">{{ preview | tojson(indent=2) }}</pre>
+</details>
+
+<!-- Quarantine notice -->
+<div class="notice notice-warning">
+    <h3>{{ quarantine_days }}-day quarantine period</h3>
+    <p>New services start in quarantine mode. All actions will require human consent (Tier-2 Passport)
+       for {{ quarantine_days }} days, regardless of your policy settings. This protects users while
+       your service builds trust.</p>
+</div>
+
+<!-- What happens next -->
+<div class="section-card">
+    <h4 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">What happens after you publish?</h4>
+    <ol style="margin: 0 0 0 18px; padding: 0; font-size: 13px; color: var(--text-muted); line-height: 1.8;">
+        <li>Your service appears on the AgentCafe Menu immediately</li>
+        <li>Agents can discover and request access to your actions</li>
+        <li>During the {{ quarantine_days }}-day quarantine, every request requires human approval</li>
+        <li>After quarantine, your policy settings (Tier-1 vs Tier-2) take effect</li>
+        <li>You can pause or unpublish your service at any time from the services dashboard</li>
+    </ol>
+</div>
+
+<!-- Publish -->
+<div class="btn-row">
+    {% if integration_mode is defined and integration_mode == 'jointly_verified' %}
+    <a href="/services/onboard/{{ draft_id }}/integration" class="btn btn-outline">Back</a>
+    {% else %}
+    <a href="/services/onboard/{{ draft_id }}/policy" class="btn btn-outline">Back</a>
+    {% endif %}
+    <form method="post" action="/services/onboard/{{ draft_id }}/publish" style="margin: 0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="btn" style="background: var(--success); color: white; width: auto; padding: 12px 32px;"
+                onclick="this.disabled=true; this.textContent='Publishing...'; this.form.submit();">
+            Publish to AgentCafe
+        </button>
+    </form>
+</div>
+{% endblock %}

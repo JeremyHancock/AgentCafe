@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block title %}Activate — AgentCafe{% endblock %}
+
+{% block extra_head %}
+<script src="/static/webauthn.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+
+    {% if step == "enter_code" %}
+    {# ── Step 1: Enter activation code ── #}
+    <h1>Enter your activation code</h1>
+    <p>An agent gave you a code to authorize an action on your behalf.
+       Enter it below to create your account and review the request.</p>
+
+    <div id="error-box" class="alert alert-error" style="display:none;"></div>
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/activate">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label for="code">Activation Code</label>
+            <input type="text" id="code" name="code" required autofocus
+                   maxlength="8" pattern="[A-Z0-9]{8}"
+                   placeholder="e.g. ABCD1234"
+                   style="text-transform:uppercase; letter-spacing:2px; font-size:1.2em; text-align:center;"
+                   value="{{ code or '' }}">
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;">Look Up Code</button>
+    </form>
+
+    {% elif step == "register_approve" %}
+    {# ── Step 2: Show consent details + registration form ── #}
+    <div class="consent-header">
+        <h1>Register &amp; Approve</h1>
+        <span class="badge badge-{{ risk_tier }}">{{ risk_tier }} risk</span>
+    </div>
+
+    <p>{{ consent_text }}</p>
+
+    {% if task_summary %}
+    <div class="alert" style="background:var(--bg); border:1px solid var(--border);">
+        <strong style="color:var(--text);">Agent's stated purpose:</strong>
+        <span class="meta"> {{ task_summary }}</span>
+        <br><span class="meta" style="font-size:12px;">(This is self-reported by the agent and has not been verified.)</span>
+    </div>
+    {% endif %}
+
+    <hr class="divider">
+
+    <h2>What you're approving</h2>
+    <p>This agent will be able to perform the following actions on <strong>{{ service_name }}</strong>:</p>
+    <ul>
+        {% for action in actions %}
+        <li><strong>{{ action.label }}</strong> — {{ action.description }}</li>
+        {% endfor %}
+    </ul>
+
+    <hr class="divider">
+
+    <noscript>
+        <div class="alert alert-error">
+            JavaScript is required to create your account securely. Please enable JavaScript and reload this page.
+        </div>
+    </noscript>
+
+    <div id="error-box" class="alert alert-error" style="display:none;"></div>
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+
+    <h2>Create your account</h2>
+    <p>You'll register with a passkey — no password needed. Your device's fingerprint, face, or PIN secures your account.</p>
+
+    <form id="activate-form" method="post" action="/activate/complete">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="activation_code" value="{{ code }}">
+        <input type="hidden" name="challenge_id" id="challenge-id" value="">
+        <input type="hidden" name="credential" id="credential" value="">
+        <input type="hidden" name="token_lifetime_seconds" value="900">
+
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required
+                   placeholder="you@example.com">
+        </div>
+
+        <div class="form-group">
+            <label for="display_name">Display Name</label>
+            <input type="text" id="display_name" name="display_name"
+                   placeholder="How agents will refer to you">
+        </div>
+
+        <div class="form-group">
+            <label for="token_lifetime_sel">How long should this authorization last?</label>
+            <select id="token_lifetime_sel" name="token_lifetime_seconds">
+                {% for opt in lifetime_options %}
+                <option value="{{ opt.seconds }}" {% if opt.default %}selected{% endif %}>{{ opt.label }}</option>
+                {% endfor %}
+            </select>
+            <span class="meta" style="display:block; margin-top:4px;">
+                Maximum for {{ risk_tier }}-risk actions: {{ max_lifetime_label }}.
+            </span>
+        </div>
+
+        <div class="btn-row">
+            <button type="button" id="activate-btn" class="btn btn-primary"
+                    onclick="doActivate()" style="width:100%;">
+                Register &amp; Approve with Passkey
+            </button>
+        </div>
+    </form>
+
+    <form method="post" action="/activate/decline" style="margin-top:12px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="activation_code" value="{{ code }}">
+        <button type="submit" class="btn" style="width:100%; background:var(--bg); color:var(--muted); border:1px solid var(--border);">
+            Decline
+        </button>
+    </form>
+
+    {% elif step == "success" %}
+    {# ── Step 3: Success ── #}
+    <h1>You're all set!</h1>
+    <div class="alert" style="background:var(--bg); border:1px solid var(--success, #22c55e);">
+        <strong style="color:var(--success, #22c55e);">Account created &amp; consent approved.</strong>
+        The agent can now proceed.
+    </div>
+    <p>Service: <strong>{{ service_name }}</strong></p>
+    <p class="meta">You can close this window and return to your agent, or manage your policies below.</p>
+    <p><a href="/tab" class="btn btn-primary" style="display:inline-block; margin-top:8px;">Go to your Tab</a></p>
+
+    {% elif step == "declined" %}
+    <h1>Request declined</h1>
+    <div class="alert" style="background:var(--bg); border:1px solid var(--border);">
+        The consent request has been declined. The agent will be notified.
+    </div>
+
+    {% endif %}
+
+</div>
+
+<script>
+    function showError(msg) {
+        var box = document.getElementById('error-box');
+        if (box) { box.textContent = msg; box.style.display = 'block'; }
+    }
+    function hideError() {
+        var box = document.getElementById('error-box');
+        if (box) { box.style.display = 'none'; }
+    }
+
+    // SEC-3: Block when browser lacks passkey support
+    if (typeof isPasskeySupported === 'function' && !isPasskeySupported()) {
+        var btn = document.getElementById('activate-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Passkey Required';
+            showError('Your browser does not support passkeys. Please use a modern browser (Chrome, Safari, Firefox, Edge).');
+        }
+    }
+
+    async function doActivate() {
+        var btn = document.getElementById('activate-btn');
+        btn.disabled = true;
+        btn.textContent = 'Creating passkey...';
+        hideError();
+
+        var email = document.getElementById('email').value.trim();
+        var displayName = document.getElementById('display_name').value.trim() || email;
+
+        if (!email) {
+            showError('Please enter your email address.');
+            btn.disabled = false;
+            btn.textContent = 'Register & Approve with Passkey';
+            return;
+        }
+
+        try {
+            // Step 1: Start passkey registration
+            var beginResp = await fetch('/human/passkey/register/begin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email, display_name: displayName }),
+            });
+            if (!beginResp.ok) {
+                var err = await beginResp.json();
+                throw new Error(err.detail?.message || err.detail?.error || 'Registration failed.');
+            }
+            var options = await beginResp.json();
+            var challengeId = options.challenge_id;
+
+            // Step 2: Browser creates credential
+            var publicKey = prepareRegistrationOptions(options);
+            var credential = await navigator.credentials.create({ publicKey: publicKey });
+
+            // Step 3: Put data in hidden fields and submit
+            document.getElementById('challenge-id').value = challengeId;
+            document.getElementById('credential').value = JSON.stringify(serializeRegistrationCredential(credential));
+
+            // Copy selected lifetime
+            var sel = document.getElementById('token_lifetime_sel');
+            var hiddenLifetime = document.querySelector('input[name="token_lifetime_seconds"]');
+            if (sel && hiddenLifetime) hiddenLifetime.value = sel.value;
+
+            document.getElementById('activate-form').submit();
+
+        } catch (e) {
+            if (e.name === 'NotAllowedError') {
+                showError('Passkey creation was cancelled.');
+            } else {
+                showError(e.message || 'An unexpected error occurred.');
+            }
+            btn.disabled = false;
+            btn.textContent = 'Register & Approve with Passkey';
+        }
+    }
+</script>
+{% endblock %}
+

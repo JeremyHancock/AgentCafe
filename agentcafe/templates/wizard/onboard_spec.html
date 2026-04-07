@@ -1,0 +1,88 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Upload Spec — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+<div class="section-card">
+    <h2>Upload your OpenAPI spec</h2>
+    <p class="subtitle">Paste JSON/YAML, upload a file, or provide a URL. We'll parse it and generate an agent-friendly Menu entry.</p>
+
+    <div style="background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px; font-size: 13px; color: var(--text-muted); line-height: 1.6;">
+        <strong style="color: var(--text);">What makes a good spec?</strong>
+        <ul style="margin: 6px 0 0 16px; padding: 0;">
+            <li>OpenAPI 3.0 or 3.1, in JSON or YAML</li>
+            <li>Clear <code>operationId</code> on each endpoint (these become action names)</li>
+            <li>Descriptions on endpoints and parameters (these help agents understand your API)</li>
+            <li>Response schemas with examples when possible</li>
+        </ul>
+    </div>
+
+    <div class="tab-bar">
+        <button class="tab-btn active" onclick="showTab('paste')" id="tab-paste">Paste</button>
+        <button class="tab-btn" onclick="showTab('upload')" id="tab-upload">Upload file</button>
+        <button class="tab-btn" onclick="showTab('url')" id="tab-url">Fetch URL</button>
+    </div>
+
+    <!-- Paste mode -->
+    <form method="post" action="/services/onboard" id="form-paste" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <textarea name="raw_spec" id="spec-textarea" rows="14"
+                      placeholder='{"openapi": "3.1.0", "info": {"title": "My API", ...}}'>{{ raw_spec or '' }}</textarea>
+        </div>
+        <div style="display: flex; gap: 12px; align-items: center;">
+            <button type="submit" class="btn btn-primary" style="flex: 1;">Parse spec</button>
+            <button type="button" class="btn btn-outline" style="flex: 0; white-space: nowrap; padding: 12px 16px;"
+                    onclick="loadSample()">Try a sample</button>
+        </div>
+    </form>
+
+    <!-- Upload mode -->
+    <form method="post" action="/services/onboard" id="form-upload" enctype="multipart/form-data" style="display:none;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <div style="border: 2px dashed var(--border); border-radius: 8px; padding: 48px; text-align: center; cursor: pointer;"
+                 onclick="document.getElementById('file-input').click()">
+                <p style="font-weight: 500; margin-bottom: 4px;">Click to select a file</p>
+                <p class="meta">JSON or YAML, up to 2 MB</p>
+                <span id="file-name" style="color: var(--accent); font-size: 13px;"></span>
+            </div>
+            <input type="file" id="file-input" name="spec_file" accept=".json,.yaml,.yml"
+                   style="display:none;" onchange="document.getElementById('file-name').textContent = this.files[0]?.name || ''">
+        </div>
+        <button type="submit" class="btn btn-primary">Upload & parse</button>
+    </form>
+
+    <!-- URL mode -->
+    <form method="post" action="/services/onboard" id="form-url" enctype="multipart/form-data" style="display:none;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <input type="url" name="spec_url" placeholder="https://api.example.com/openapi.json">
+        </div>
+        <button type="submit" class="btn btn-primary">Fetch & parse</button>
+    </form>
+</div>
+
+<script>
+var sampleSpec = {{ sample_spec | tojson }};
+function loadSample() {
+    var ta = document.getElementById('spec-textarea');
+    if (ta) {
+        ta.value = sampleSpec;
+        showTab('paste');
+    }
+}
+function showTab(mode) {
+    var modes = ['paste', 'upload', 'url'];
+    for (var i = 0; i < modes.length; i++) {
+        document.getElementById('form-' + modes[i]).style.display = modes[i] === mode ? 'block' : 'none';
+        var tab = document.getElementById('tab-' + modes[i]);
+        if (modes[i] === mode) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    }
+}
+</script>
+{% endblock %}

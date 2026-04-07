@@ -1,0 +1,180 @@
+{
+  "service_id": "fixright-home",
+  "name": "FixRight Home",
+  "category": "home-services",
+  "capability_tags": ["home", "repair", "maintenance", "cleaning", "appointments"],
+  "description": "Find and book home service professionals — plumbing, electrical, cleaning, HVAC, handyman, painting, and landscaping. Search available providers, book appointments, reschedule, or cancel.",
+  "account_linking_required": false,
+  "concurrency_guidance": "One appointment per provider per time slot. Avoid overlapping bookings.",
+  "actions": [
+    {
+      "action_id": "search-providers",
+      "description": "Search for available home service providers by service type, location, urgency, and budget. Returns providers with ratings, pricing, and available time slots.",
+      "required_inputs": [
+        {
+          "name": "service_type",
+          "type": "string",
+          "description": "Type of service needed: plumbing, electrical, cleaning, hvac, handyman, painting, or landscaping",
+          "example": "plumbing"
+        },
+        {
+          "name": "address",
+          "type": "string",
+          "description": "Address where the service is needed",
+          "example": "742 Evergreen Terrace, Austin, TX 78704"
+        }
+      ],
+      "risk_tier": "low",
+      "cost": {
+        "required_scopes": ["fixright-home:search-providers"],
+        "human_authorization_required": false,
+        "limits": {"rate_limit": "60/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "providers": [
+          {
+            "provider_id": "fr-plumb-austin-047",
+            "provider_name": "Mike's Reliable Plumbing",
+            "service_type": "plumbing",
+            "rating": 4.8,
+            "review_count": 342,
+            "service_fee": 89.00,
+            "currency": "USD",
+            "next_available": "2026-03-15T14:00:00Z",
+            "available_slots": [
+              "2026-03-15T14:00:00Z",
+              "2026-03-15T16:00:00Z"
+            ],
+            "estimated_duration_minutes": 60,
+            "license_verified": true,
+            "insured": true
+          }
+        ],
+        "total_results": 1
+      }
+    },
+    {
+      "action_id": "book-appointment",
+      "description": "Book an appointment with a specific service provider at a selected time slot. Creates a confirmed service commitment with a service fee.",
+      "required_inputs": [
+        {
+          "name": "provider_id",
+          "type": "string",
+          "description": "Provider to book (from search results)",
+          "example": "fr-plumb-austin-047"
+        },
+        {
+          "name": "appointment_time",
+          "type": "string",
+          "description": "Selected time slot in ISO 8601 format (from provider's available_slots)",
+          "example": "2026-03-15T14:00:00Z"
+        },
+        {
+          "name": "service_address",
+          "type": "string",
+          "description": "Address where the service is needed",
+          "example": "742 Evergreen Terrace, Austin, TX 78704"
+        },
+        {
+          "name": "contact_name",
+          "type": "string",
+          "description": "Name of the person at the service location",
+          "example": "Jane Smith"
+        },
+        {
+          "name": "contact_phone",
+          "type": "string",
+          "description": "Phone number for the provider to call",
+          "example": "+1-512-555-0199"
+        },
+        {
+          "name": "problem_description",
+          "type": "string",
+          "description": "Description of the issue to be addressed",
+          "example": "Kitchen faucet leaking from the base, constant drip"
+        }
+      ],
+      "risk_tier": "medium",
+      "human_identifier_field": "contact_name",
+      "cost": {
+        "required_scopes": ["fixright-home:book-appointment"],
+        "human_authorization_required": true,
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "appointment_id": "FR-20260315-P7R2",
+        "status": "confirmed",
+        "provider_name": "Mike's Reliable Plumbing",
+        "service_type": "plumbing",
+        "appointment_time": "2026-03-15T14:00:00Z",
+        "estimated_duration_minutes": 60,
+        "service_fee": 89.00,
+        "currency": "USD",
+        "cancellation_policy": "Free cancellation up to 2 hours before appointment",
+        "provider_phone": "+1-512-555-0347",
+        "confirmation_sent": true
+      }
+    },
+    {
+      "action_id": "reschedule-appointment",
+      "description": "Move an existing appointment to a new time slot. The provider must have availability at the requested time.",
+      "required_inputs": [
+        {
+          "name": "appointment_id",
+          "type": "string",
+          "description": "Appointment identifier from the original booking",
+          "example": "FR-20260315-P7R2"
+        },
+        {
+          "name": "new_appointment_time",
+          "type": "string",
+          "description": "New desired appointment time in ISO 8601 format",
+          "example": "2026-03-16T10:00:00Z"
+        }
+      ],
+      "risk_tier": "medium",
+      "cost": {
+        "required_scopes": ["fixright-home:reschedule-appointment"],
+        "human_authorization_required": true,
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "appointment_id": "FR-20260315-P7R2",
+        "status": "rescheduled",
+        "provider_name": "Mike's Reliable Plumbing",
+        "service_type": "plumbing",
+        "appointment_time": "2026-03-16T10:00:00Z",
+        "estimated_duration_minutes": 60,
+        "service_fee": 89.00,
+        "currency": "USD",
+        "cancellation_policy": "Free cancellation up to 2 hours before appointment",
+        "provider_phone": "+1-512-555-0347",
+        "confirmation_sent": true
+      }
+    },
+    {
+      "action_id": "cancel-appointment",
+      "description": "Cancel a booked appointment. Free cancellation is available up to 2 hours before the appointment time. Refund amount depends on timing.",
+      "required_inputs": [
+        {
+          "name": "appointment_id",
+          "type": "string",
+          "description": "Appointment identifier from the original booking",
+          "example": "FR-20260315-P7R2"
+        }
+      ],
+      "risk_tier": "high",
+      "cost": {
+        "required_scopes": ["fixright-home:cancel-appointment"],
+        "human_authorization_required": true,
+        "limits": {"rate_limit": "10/minute", "rate_limit_scope": "per_policy"}
+      },
+      "example_response": {
+        "appointment_id": "FR-20260315-P7R2",
+        "status": "cancelled",
+        "refund_amount": 89.00,
+        "currency": "USD"
+      }
+    }
+  ]
+}

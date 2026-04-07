@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} — AgentCafe{% endblock %}
+
+{% block content %}
+<div class="card" style="text-align:center;">
+    {% if status == "approved" %}
+    <div style="font-size:48px; margin-bottom:16px;">✓</div>
+    <h1>You're all set</h1>
+    <p>You've approved the agent's request for <strong>{{ service_name }}</strong>. It can now get to work.</p>
+    <p class="meta" style="margin-bottom:24px;">Policy ID: <code style="color:var(--text);">{{ policy_id[:8] }}…</code></p>
+    <p class="meta" style="margin-bottom:24px;">You can monitor or revoke this policy from your dashboard at any time.</p>
+    <a href="/dashboard" class="btn btn-primary" style="display:inline-block; width:auto;">Go to your Dashboard</a>
+    {% elif status == "declined" %}
+    <div style="font-size:48px; margin-bottom:16px;">✕</div>
+    <h1>Request declined</h1>
+    <p>No worries — nothing was granted. The agent has been notified and no action was taken.</p>
+    <a href="/tab" class="btn btn-outline" style="display:inline-block; width:auto; margin-top:16px;">Go to your Tab</a>
+    {% elif status == "expired" %}
+    <div style="font-size:48px; margin-bottom:16px;">⏱</div>
+    <h1>This request expired</h1>
+    <p>It sat too long without a response. The agent will need to start a new request.</p>
+    <a href="/tab" class="btn btn-outline" style="display:inline-block; width:auto; margin-top:16px;">Go to your Tab</a>
+    {% else %}
+    <div style="font-size:48px; margin-bottom:16px;">?</div>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,94 @@
+# AgentCafe — Docker Compose (Phase 6 hardened)
+#
+# Runs the Cafe and 3 demo backends as separate containers on a shared network.
+# The Cafe proxies requests to backends by service name (real HTTP, not in-process).
+#
+# Usage:
+#   docker compose up --build
+#   curl http://localhost:8000/cafe/menu
+#   docker compose down
+#
+# Production notes:
+#   - Set PASSPORT_SIGNING_SECRET to a strong random value (≥32 bytes)
+#   - Set OPENAI_API_KEY for the wizard AI enrichment (LiteLLM)
+#   - SQLite DB persists in the cafe_data volume across restarts
+#   - RS256 passport signing auto-generates keys in dev; set PASSPORT_RSA_PRIVATE_KEY for production
+
+services:
+  cafe:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - CAFE_HOST=0.0.0.0
+      - CAFE_PORT=8000
+      - HOTEL_BACKEND_HOST=hotel
+      - HOTEL_BACKEND_PORT=8001
+      - LUNCH_BACKEND_HOST=lunch
+      - LUNCH_BACKEND_PORT=8002
+      - HOME_SERVICE_BACKEND_HOST=home-service
+      - HOME_SERVICE_BACKEND_PORT=8003
+      - CAFE_DB_PATH=/app/data/agentcafe.db
+      - PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!!  # DEV ONLY — generate a real secret for production
+      - ISSUER_API_KEY=admin123  # DEV ONLY — use a strong random value in production
+      - USE_REAL_PASSPORT=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    volumes:
+      - cafe_data:/app/data
+    depends_on:
+      hotel:
+        condition: service_healthy
+      lunch:
+        condition: service_healthy
+      home-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
+  hotel:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.hotel:app", "--host", "0.0.0.0", "--port", "8001"]
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  lunch:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.lunch:app", "--host", "0.0.0.0", "--port", "8002"]
+    expose:
+      - "8002"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  home-service:
+    build: .
+    command: ["uvicorn", "agentcafe.demo_backends.home_service:app", "--host", "0.0.0.0", "--port", "8003"]
+    expose:
+      - "8003"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  cafe_data:
+    driver: local

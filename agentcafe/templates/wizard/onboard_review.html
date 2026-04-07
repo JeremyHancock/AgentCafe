@@ -1,0 +1,157 @@
+{% extends "wizard/base_wizard.html" %}
+
+{% block title %}Review — AgentCafe{% endblock %}
+
+{% block wizard_content %}
+<form method="post" action="/services/onboard/{{ draft_id }}/review" id="review-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="actions_json" id="actions-json" value="">
+    <input type="hidden" name="excluded_actions" id="excluded-actions" value="">
+
+    <div class="section-card">
+        <h2>Review AI-generated Menu entry</h2>
+        <p class="subtitle">Edit any field below. The AI generated these values from your spec — adjust anything that looks wrong.</p>
+
+        <div class="notice notice-warning" style="margin-bottom: 16px;">
+            <p style="margin-bottom: 0;">These values were <strong>AI-generated</strong> from your spec. Please verify them before continuing.</p>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="service_id">Service ID</label>
+                <input type="text" id="service_id" name="service_id"
+                       value="{{ candidate.service_id or '' }}" style="font-family: monospace;">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Unique identifier agents use to call your service (e.g. <code>bookshelf</code>)</p>
+            </div>
+            <div class="form-group">
+                <label for="name">Display name</label>
+                <input type="text" id="name" name="name"
+                       value="{{ candidate.name or '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Human-readable name shown on the Menu</p>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="category">Category</label>
+                <input type="text" id="category" name="category"
+                       value="{{ candidate.category or '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Helps agents find your service (e.g. <code>travel</code>, <code>food-delivery</code>)</p>
+            </div>
+            <div class="form-group">
+                <label for="capability_tags">Tags <span style="color:var(--text-muted);">(comma-separated)</span></label>
+                <input type="text" id="capability_tags" name="capability_tags"
+                       value="{{ candidate.capability_tags | join(', ') if candidate.capability_tags else '' }}">
+                <p class="meta" style="margin-top: 4px; margin-bottom: 0;">Keywords for discovery (e.g. <code>books, lending, catalog</code>)</p>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="description">Description</label>
+            <textarea id="description" name="description" rows="2"
+                      style="font-family: inherit;">{{ candidate.description or '' }}</textarea>
+            <p class="meta" style="margin-top: 4px; margin-bottom: 0;">One or two sentences explaining what your service does — this is what agents read first</p>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <h3 style="font-size: 18px; font-weight: 600; margin-bottom: 16px;">
+        Actions ({{ candidate.actions | length if candidate.actions else 0 }})
+    </h3>
+
+    {% for action in candidate.actions or [] %}
+    <div class="action-card" id="action-{{ loop.index0 }}" data-index="{{ loop.index0 }}">
+        <div class="action-header">
+            <div class="left">
+                <span class="badge {{ 'badge-write' if action.is_write else 'badge-read' }}">
+                    {{ 'WRITE' if action.is_write else 'READ' }}
+                </span>
+                <code>{{ action.action_id }}</code>
+                {% if action.source_method %}
+                <span style="font-size: 12px; color: var(--text-muted);">
+                    {{ action.source_method }} {{ action.source_path }}
+                </span>
+                {% endif %}
+            </div>
+            <button type="button" class="btn-sm" onclick="toggleExclude({{ loop.index0 }}, '{{ action.action_id }}')">
+                Exclude
+            </button>
+        </div>
+        <div class="action-fields">
+            <div class="form-group" style="margin-bottom: 8px;">
+                <label style="font-size: 12px; color: var(--text-muted);">Description</label>
+                <input type="text" data-field="description" value="{{ action.description or '' }}"
+                       style="padding: 6px 10px; font-size: 13px;">
+            </div>
+            {% if action.required_inputs %}
+            <div style="margin-top: 8px;">
+                <label style="font-size: 12px; color: var(--text-muted);">Required inputs</label>
+                <div style="margin-top: 4px;">
+                    {% for inp in action.required_inputs %}
+                    <span class="input-tag">
+                        <code>{{ inp.name }}</code>
+                        <span class="type">({{ inp.type }})</span>
+                    </span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="btn-row">
+        <a href="/services/onboard/{{ draft_id }}" class="btn btn-outline">Back</a>
+        <button type="submit" class="btn btn-primary" style="width: auto; padding: 12px 32px;">Save & continue</button>
+    </div>
+</form>
+
+<script>
+var actions = {{ candidate.actions | tojson }};
+var excludedList = {{ excluded_list | default([]) | tojson }};
+var excluded = {};
+
+// Restore excluded state from server
+for (var e = 0; e < excludedList.length; e++) {
+    excluded[excludedList[e]] = true;
+}
+
+function toggleExclude(idx, actionId) {
+    var card = document.getElementById('action-' + idx);
+    var btn = card.querySelector('.btn-sm');
+    if (excluded[actionId]) {
+        delete excluded[actionId];
+        card.style.opacity = '1';
+        btn.textContent = 'Exclude';
+    } else {
+        excluded[actionId] = true;
+        card.style.opacity = '0.3';
+        btn.textContent = 'Include';
+    }
+}
+
+// Apply initial excluded visual state
+for (var i = 0; i < actions.length; i++) {
+    if (excluded[actions[i].action_id]) {
+        var card = document.getElementById('action-' + i);
+        if (card) {
+            card.style.opacity = '0.3';
+            card.querySelector('.btn-sm').textContent = 'Include';
+        }
+    }
+}
+
+document.getElementById('review-form').addEventListener('submit', function() {
+    // Update action descriptions from inputs
+    var cards = document.querySelectorAll('.action-card');
+    for (var i = 0; i < cards.length; i++) {
+        var descInput = cards[i].querySelector('[data-field="description"]');
+        if (descInput && actions[i]) {
+            actions[i].description = descInput.value;
+        }
+    }
+    document.getElementById('actions-json').value = JSON.stringify(actions);
+    document.getElementById('excluded-actions').value = Object.keys(excluded).join(',');
+});
+</script>
+{% endblock %}

@@ -1,0 +1,372 @@
+# LunchDeliveryService — Internal Backend OpenAPI 3.1 Spec
+# This is the INTERNAL spec that the company runs behind AgentCafe's proxy.
+# Agents never see this spec, these URLs, or these implementation details.
+# AgentCafe ingests this during onboarding to generate the Menu entry and proxy config.
+
+openapi: "3.1.0"
+info:
+  title: LunchDeliveryService Internal API
+  version: "1.0.0"
+  description: >
+    Internal API for a lunch/food delivery platform. Supports browsing restaurant
+    menus, placing delivery orders, tracking order status, and cancelling orders.
+    Registered with AgentCafe as a proxied service.
+  contact:
+    name: QuickBite API Team
+    email: api@quickbite-delivery.example.com
+
+servers:
+  # This URL is NEVER exposed to agents. AgentCafe proxies all calls.
+  - url: https://api.quickbite-delivery.example.com/v1
+    description: Production backend (proxied by AgentCafe)
+
+paths:
+  /menu/search:
+    post:
+      operationId: browseMenu
+      summary: Browse available lunch options
+      description: >
+        Search available menu items from nearby restaurants. Filter by cuisine,
+        dietary preferences, price range, and delivery time. Returns available
+        items with pricing and estimated delivery times.
+      tags:
+        - menu
+      x-agentcafe-scope: food:browse
+      x-agentcafe-human-authorization: false
+      x-agentcafe-rate-limit: 60/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - delivery_address
+              properties:
+                delivery_address:
+                  type: string
+                  description: Delivery address to find nearby restaurants
+                  example: "200 Congress Ave, Austin, TX 78701"
+                cuisine:
+                  type: string
+                  description: Preferred cuisine type (optional filter)
+                  example: "salads"
+                dietary:
+                  type: array
+                  items:
+                    type: string
+                  description: Dietary preferences (optional filter)
+                  example: ["vegetarian", "gluten-free"]
+                max_price:
+                  type: number
+                  description: Maximum price in USD (optional filter)
+                  example: 15.00
+                max_delivery_minutes:
+                  type: integer
+                  description: Maximum acceptable delivery time in minutes (optional)
+                  example: 30
+      responses:
+        "200":
+          description: Available menu items
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MenuItem"
+                  total_results:
+                    type: integer
+              example:
+                items:
+                  - item_id: "qb-ceasar-lg-001"
+                    restaurant_name: "Green Fork Kitchen"
+                    item_name: "Chicken Caesar Salad"
+                    description: "Grilled chicken breast, romaine, parmesan, house-made Caesar dressing, croutons"
+                    price: 13.50
+                    currency: "USD"
+                    estimated_delivery_minutes: 25
+                    dietary_tags: ["high-protein"]
+                    rating: 4.7
+                  - item_id: "qb-wrap-med-044"
+                    restaurant_name: "Green Fork Kitchen"
+                    item_name: "Mediterranean Veggie Wrap"
+                    description: "Hummus, falafel, mixed greens, tomato, cucumber, tahini sauce"
+                    price: 11.00
+                    currency: "USD"
+                    estimated_delivery_minutes: 25
+                    dietary_tags: ["vegetarian", "vegan-option"]
+                    rating: 4.5
+                total_results: 2
+        "400":
+          description: Invalid search parameters
+        "429":
+          description: Rate limit exceeded
+
+  /orders:
+    post:
+      operationId: placeOrder
+      summary: Place a delivery order
+      description: >
+        Place a food delivery order for one or more menu items. Creates a real
+        order with financial commitment. Requires human authorization.
+      tags:
+        - orders
+      x-agentcafe-scope: food:order
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - items
+                - delivery_address
+                - contact_name
+                - contact_phone
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - item_id
+                      - quantity
+                    properties:
+                      item_id:
+                        type: string
+                      quantity:
+                        type: integer
+                        minimum: 1
+                  description: Items to order with quantities
+                  example:
+                    - item_id: "qb-ceasar-lg-001"
+                      quantity: 1
+                delivery_address:
+                  type: string
+                  description: Full delivery address
+                  example: "200 Congress Ave, Suite 400, Austin, TX 78701"
+                contact_name:
+                  type: string
+                  description: Name for the delivery
+                  example: "Jane Smith"
+                contact_phone:
+                  type: string
+                  description: Phone number for delivery updates
+                  example: "+1-512-555-0199"
+                delivery_instructions:
+                  type: string
+                  description: Special delivery instructions (optional)
+                  example: "Leave at front desk, Suite 400"
+                tip_amount:
+                  type: number
+                  description: Tip amount in USD (optional)
+                  example: 3.00
+      responses:
+        "201":
+          description: Order placed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+              example:
+                order_id: "QB-20260315-H8K2"
+                status: "confirmed"
+                restaurant_name: "Green Fork Kitchen"
+                items:
+                  - item_name: "Chicken Caesar Salad"
+                    quantity: 1
+                    price: 13.50
+                subtotal: 13.50
+                delivery_fee: 2.99
+                tip: 3.00
+                tax: 1.11
+                total: 20.60
+                currency: "USD"
+                estimated_delivery: "2026-03-15T12:25:00Z"
+                tracking_available: true
+        "400":
+          description: Invalid order request
+        "409":
+          description: Item no longer available
+
+  /orders/{order_id}/status:
+    get:
+      operationId: trackOrder
+      summary: Track order status
+      description: >
+        Get the current status and location of an active delivery order.
+        Read-only action — no human authorization required.
+      tags:
+        - orders
+      x-agentcafe-scope: food:track
+      x-agentcafe-human-authorization: false
+      x-agentcafe-rate-limit: 30/minute
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Order identifier
+          example: "QB-20260315-H8K2"
+      responses:
+        "200":
+          description: Current order status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrderStatus"
+              example:
+                order_id: "QB-20260315-H8K2"
+                status: "in_transit"
+                status_message: "Your driver is on the way"
+                estimated_arrival: "2026-03-15T12:25:00Z"
+                driver_name: "Carlos M."
+                last_updated: "2026-03-15T12:15:00Z"
+        "404":
+          description: Order not found
+
+  /orders/{order_id}/cancel:
+    post:
+      operationId: cancelOrder
+      summary: Cancel a pending order
+      description: >
+        Cancel an order that hasn't started preparation yet. Once preparation
+        begins, cancellation is no longer possible. Requires human authorization.
+      tags:
+        - orders
+      x-agentcafe-scope: food:cancel
+      x-agentcafe-human-authorization: true
+      x-agentcafe-rate-limit: 10/minute
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Order identifier
+          example: "QB-20260315-H8K2"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  description: Optional cancellation reason
+                  example: "Meeting moved, no longer need delivery"
+      responses:
+        "200":
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id:
+                    type: string
+                  status:
+                    type: string
+                  refund_amount:
+                    type: number
+                  currency:
+                    type: string
+              example:
+                order_id: "QB-20260315-H8K2"
+                status: "cancelled"
+                refund_amount: 20.60
+                currency: "USD"
+        "404":
+          description: Order not found
+        "422":
+          description: Order already in preparation — cannot cancel
+
+components:
+  schemas:
+    MenuItem:
+      type: object
+      properties:
+        item_id:
+          type: string
+        restaurant_name:
+          type: string
+        item_name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        currency:
+          type: string
+        estimated_delivery_minutes:
+          type: integer
+        dietary_tags:
+          type: array
+          items:
+            type: string
+        rating:
+          type: number
+
+    Order:
+      type: object
+      properties:
+        order_id:
+          type: string
+        status:
+          type: string
+        restaurant_name:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              item_name:
+                type: string
+              quantity:
+                type: integer
+              price:
+                type: number
+        subtotal:
+          type: number
+        delivery_fee:
+          type: number
+        tip:
+          type: number
+        tax:
+          type: number
+        total:
+          type: number
+        currency:
+          type: string
+        estimated_delivery:
+          type: string
+          format: date-time
+        tracking_available:
+          type: boolean
+
+    OrderStatus:
+      type: object
+      properties:
+        order_id:
+          type: string
+        status:
+          type: string
+          enum: ["confirmed", "preparing", "in_transit", "delivered", "cancelled"]
+        status_message:
+          type: string
+        estimated_arrival:
+          type: string
+          format: date-time
+        driver_name:
+          type: string
+        last_updated:
+          type: string
+          format: date-time
