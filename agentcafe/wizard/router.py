@@ -118,8 +118,10 @@ async def create_company(req: CompanyCreateRequest):
     db = await get_db()
 
     # Check for existing email
+    email = req.email.strip().lower()
+
     cursor = await db.execute(
-        "SELECT id FROM companies WHERE email = ?", (req.email,)
+        "SELECT id FROM companies WHERE email = ?", (email,)
     )
     if await cursor.fetchone():
         raise HTTPException(
@@ -134,13 +136,13 @@ async def create_company(req: CompanyCreateRequest):
     await db.execute(
         """INSERT INTO companies (id, name, email, password_hash, website, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (company_id, req.name, req.email, password_hash, req.website, now, now),
+        (company_id, req.name, email, password_hash, req.website, now, now),
     )
     await db.commit()
 
     session_token = _create_session_token(company_id)
-    logger.info("Created company account: %s (%s)", req.name, req.email)
-    return CompanyCreateResponse(company_id=company_id, name=req.name, email=req.email, session_token=session_token)
+    logger.info("Created company account: %s (%s)", req.name, email)
+    return CompanyCreateResponse(company_id=company_id, name=req.name, email=email, session_token=session_token)
 
 
 @wizard_router.post("/companies/login", response_model=CompanyLoginResponse)
@@ -148,9 +150,11 @@ async def login_company(req: CompanyLoginRequest):
     """Sign in to a company account."""
     db = await get_db()
 
+    email = req.email.strip().lower()
+
     cursor = await db.execute(
         "SELECT id, name, password_hash FROM companies WHERE email = ?",
-        (req.email,),
+        (email,),
     )
     row = await cursor.fetchone()
     if row is None:

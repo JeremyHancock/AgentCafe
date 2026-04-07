@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -56,6 +57,7 @@ def _load_sample_spec() -> str:
 
 _COOKIE_NAME = "company_session"
 _COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours (matches wizard JWT expiry)
+_SECURE_COOKIES = os.getenv("CAFE_SECURE_COOKIES", "").lower() not in ("", "0", "false")
 
 
 class _State:
@@ -127,6 +129,7 @@ def _set_company_cookie(response, token: str) -> None:
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=_SECURE_COOKIES,
     )
 
 
@@ -159,7 +162,7 @@ def _validate_csrf_token(request: Request, token: str | None) -> bool:
     except ValueError:
         return False
     now = int(datetime.now(timezone.utc).timestamp())
-    if now - token_time > _CSRF_TOKEN_MAX_AGE:
+    if abs(now - token_time) > _CSRF_TOKEN_MAX_AGE:
         return False
     session_cookie = request.cookies.get(_COOKIE_NAME, "")
     msg = f"{nonce}.{ts}.{session_cookie}"
@@ -1251,7 +1254,7 @@ async def admin_page(request: Request):
     if admin_key:
         response.set_cookie(
             key="admin_key", value=admin_key,
-            max_age=3600, httponly=True, samesite="lax",
+            max_age=3600, httponly=True, samesite="lax", secure=_SECURE_COOKIES,
         )
 
     return response

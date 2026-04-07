@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -42,6 +43,7 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _COOKIE_NAME = "cafe_session"
 _COOKIE_MAX_AGE = 24 * 60 * 60  # 24 hours
+_SECURE_COOKIES = os.getenv("CAFE_SECURE_COOKIES", "").lower() not in ("", "0", "false")
 
 _COMPANY_COOKIE_NAME = "company_session"
 _COMPANY_COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours
@@ -87,6 +89,7 @@ def _set_session_cookie(response, token: str) -> None:
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=_SECURE_COOKIES,
     )
 
 
@@ -134,6 +137,7 @@ def _set_company_cookie(response, token: str) -> None:
         max_age=_COMPANY_COOKIE_MAX_AGE,
         httponly=True,
         samesite="lax",
+        secure=_SECURE_COOKIES,
     )
 
 
@@ -1280,6 +1284,7 @@ async def activate_complete(
         value=reg_result["session_token"],
         httponly=True,
         samesite="lax",
+        secure=True,
         max_age=86400,
     )
     return response

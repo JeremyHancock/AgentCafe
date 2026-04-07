@@ -29,8 +29,8 @@ services:
       - HOME_SERVICE_BACKEND_HOST=home-service
       - HOME_SERVICE_BACKEND_PORT=8003
       - CAFE_DB_PATH=/app/data/agentcafe.db
-      - PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!!
-      - ISSUER_API_KEY=admin123
+      - PASSPORT_SIGNING_SECRET=dev-secret-minimum-32-bytes!!  # DEV ONLY — generate a real secret for production
+      - ISSUER_API_KEY=admin123  # DEV ONLY — use a strong random value in production
       - USE_REAL_PASSPORT=true
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
