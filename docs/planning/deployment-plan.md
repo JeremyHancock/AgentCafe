@@ -127,7 +127,7 @@
 | **Static dashboard hosting** | When dashboard traffic grows | Next.js dashboard could be statically exported to Vercel/Cloudflare Pages ($0). Currently co-deployed or separate. |
 | **Log aggregation** | When we need search, alerting, dashboards beyond platform-native | Platform logs are fine for beta. Datadog/Grafana Cloud later. |
 | **Secrets management** | When we have >5 secrets or multiple environments | Env vars work now. Doppler/1Password/Vault later (Phase 8). |
-| **CAFE_ENCRYPTION_KEY backup** | Before the first real company publishes | This key encrypts stored backend credentials (AES-256-GCM). Losing it = can't decrypt company API keys = must ask every company to re-enter credentials. Save to a password manager or secure vault before real onboarding begins. |
+| **CAFE_ENCRYPTION_KEY backup** | **NOW — real services are live** | This key encrypts stored backend credentials (AES-256-GCM). Human Memory published April 7 2026. Losing this key = can't decrypt company API keys = must ask every company to re-enter credentials. Must be backed up in a password manager or secure vault. |
 
 ---
 

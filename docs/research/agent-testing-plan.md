@@ -2,6 +2,8 @@
 
 **Goal:** Validate AgentCafe's end-to-end agent experience with the three demo services before onboarding the first real service (Human Memory). Identify friction points in discovery, authentication, invocation, and error recovery.
 
+> **Note (2026-04-07):** Human Memory has since been onboarded as the first real service. This plan is now historical context for the pre-HM testing phase.
+
 **Date:** March 24, 2026
 **Environment:** Live production at agentcafe.io (MCP endpoint + REST API)
 
