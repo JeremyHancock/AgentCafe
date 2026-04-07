@@ -209,7 +209,7 @@ def _has_human_session(request: Request) -> bool:
     try:
         validate_human_session(token)
         return True
-    except Exception:
+    except (ValueError, KeyError):
         return False
 
 
@@ -227,13 +227,13 @@ def _build_nav_context(request: Request) -> dict:
 # ---------------------------------------------------------------------------
 
 @wizard_pages_router.get("/services/login")
-async def company_login_page(request: Request):
+async def company_login_page(request: Request):  # pylint: disable=unused-argument
     """Redirect to unified login page."""
     return RedirectResponse(url="/login", status_code=303)
 
 
 @wizard_pages_router.post("/services/login")
-async def company_login_submit(request: Request):
+async def company_login_submit(request: Request):  # pylint: disable=unused-argument
     """Redirect to unified login page."""
     return RedirectResponse(url="/login", status_code=303)
 

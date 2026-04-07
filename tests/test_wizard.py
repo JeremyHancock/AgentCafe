@@ -1290,7 +1290,7 @@ async def _create_jv_draft(wizard_client, service_id="jv-test-svc", email="jv@te
 @pytest.mark.asyncio
 async def test_policy_saves_integration_mode(wizard_client):
     """PUT policy with integration_mode persists it on the draft."""
-    auth, draft_id, _ = await _create_jv_draft(
+    _, draft_id, _ = await _create_jv_draft(
         wizard_client, "jv-policy-test", "jv-policy@test.example.com",
     )
     from agentcafe.db.engine import get_db
@@ -1402,7 +1402,7 @@ async def test_publish_jv_creates_integration_config(wizard_client):
 @pytest.mark.asyncio
 async def test_publish_standard_no_integration_config(wizard_client):
     """Standard publish does not create service_integration_configs row."""
-    auth, _svc_id = await _publish_service(
+    _, _svc_id = await _publish_service(
         wizard_client, "std-nojv-test", "std-nojv@test.example.com",
     )
     from agentcafe.db.engine import get_db

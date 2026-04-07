@@ -379,7 +379,6 @@ async def test_unified_login_company_only(wp_client):
 @pytest.mark.asyncio
 async def test_unified_login_both_accounts(wp_client):
     """POST /login with same email in both tables sets both session cookies."""
-    import bcrypt
     from agentcafe.db.engine import get_db
     from agentcafe.cafe.human import _hash_password
 
