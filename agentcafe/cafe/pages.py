@@ -20,6 +20,9 @@ from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+import bcrypt
+import jwt
+
 from agentcafe.cafe.cards import _create_jv_grant_if_needed
 from agentcafe.cafe.consent import _fire_consent_callback, _handle_jointly_verified_consent
 from agentcafe.cafe.human import (
@@ -39,6 +42,9 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 _COOKIE_NAME = "cafe_session"
 _COOKIE_MAX_AGE = 24 * 60 * 60  # 24 hours
+
+_COMPANY_COOKIE_NAME = "company_session"
+_COMPANY_COOKIE_MAX_AGE = 8 * 60 * 60  # 8 hours
 
 # Risk-tier ceilings (must match consent.py)
 _RISK_TIER_CEILINGS = {"low": 3600, "medium": 900, "high": 300, "critical": 0}
@@ -82,6 +88,74 @@ def _set_session_cookie(response, token: str) -> None:
         httponly=True,
         samesite="lax",
     )
+
+
+# ---------------------------------------------------------------------------
+# Company session helpers (for unified login)
+# ---------------------------------------------------------------------------
+
+def _get_company_session(request: Request) -> dict | None:
+    """Extract and validate the company session cookie. Returns payload or None."""
+    token = request.cookies.get(_COMPANY_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        return jwt.decode(
+            token, _state.signing_secret, algorithms=["HS256"],
+            issuer="agentcafe-wizard",
+        )
+    except jwt.PyJWTError:
+        return None
+
+
+def _get_company_id(request: Request) -> str | None:
+    """Get company_id from company session cookie, or None."""
+    session = _get_company_session(request)
+    return session.get("sub") if session else None
+
+
+def _create_company_session(company_id: str) -> str:
+    """Create a JWT session token for a company."""
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": "agentcafe-wizard",
+        "sub": company_id,
+        "exp": now + timedelta(hours=8),
+        "iat": now,
+    }
+    return jwt.encode(payload, _state.signing_secret, algorithm="HS256")
+
+
+def _set_company_cookie(response, token: str) -> None:
+    """Set the company session cookie on a response."""
+    response.set_cookie(
+        key=_COMPANY_COOKIE_NAME,
+        value=token,
+        max_age=_COMPANY_COOKIE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+async def _company_landing_url(company_id: str) -> str:
+    """Return /services if the company has published services, else /services/onboard."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT COUNT(*) as cnt FROM published_services WHERE company_id = ? AND status != 'unpublished'",
+        (company_id,),
+    )
+    row = await cursor.fetchone()
+    if row and row["cnt"] > 0:
+        return "/services"
+    return "/services/onboard"
+
+
+async def _build_nav_context(request: Request) -> dict:
+    """Build navigation context for templates, checking both session types."""
+    return {
+        "has_human_session": _get_session(request) is not None,
+        "has_company_session": _get_company_id(request) is not None,
+    }
 
 
 _CSRF_TOKEN_MAX_AGE = 3600  # 1 hour
@@ -194,17 +268,22 @@ async def root_page(request: Request):
             "description": entry.get("description", ""),
             "action_count": len(entry.get("actions", [])),
         })
+    company_id = _get_company_id(request)
+    logged_in = session is not None or company_id is not None
     return templates.TemplateResponse(request, "landing.html", {
         "services": services,
-        "logged_in": session is not None,
+        "logged_in": logged_in,
+        "has_human_session": session is not None,
+        "has_company_session": company_id is not None,
     })
 
 
 @pages_router.get("/logout", response_class=HTMLResponse)
 async def logout_page(request: Request):  # noqa: ARG001  pylint: disable=unused-argument
-    """Clear the session cookie and redirect to login."""
+    """Clear both session cookies and redirect to login."""
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(_COOKIE_NAME)
+    response.delete_cookie(_COMPANY_COOKIE_NAME)
     return response
 
 
@@ -352,12 +431,14 @@ async def dashboard_page(request: Request, revoked: str = ""):
     if revoked == "1":
         success_message = "Policy revoked successfully. All active tokens have been invalidated."
 
+    nav = await _build_nav_context(request)
     return templates.TemplateResponse(request, "dashboard.html", {
         "active_policies": active_policies,
         "revoked_policies": revoked_policies,
         "csrf_token": _generate_csrf_token(request),
         "success_message": success_message,
         "active_nav": "dashboard",
+        **nav,
     })
 
 
@@ -419,11 +500,24 @@ async def set_session(request: Request):
     next_url = body.get("next_url", "/tab")
     # Validate the token before setting the cookie
     try:
-        validate_human_session(token)
+        payload = validate_human_session(token)
     except HTTPException:
         return JSONResponse({"error": "invalid_session"}, status_code=401)
     response = JSONResponse({"redirect": next_url})
     _set_session_cookie(response, token)
+    # Also set company session if the user's email matches a company account
+    sub = payload.get("sub", "")
+    if sub.startswith("user:"):
+        user_email = sub[5:]
+        db = await get_db()
+        cursor = await db.execute(
+            "SELECT id FROM companies WHERE email = ? OR email = ?",
+            (user_email, user_email.lower()),
+        )
+        company_row = await cursor.fetchone()
+        if company_row:
+            company_token = _create_company_session(company_row["id"])
+            _set_company_cookie(response, company_token)
     return response
 
 
@@ -465,11 +559,27 @@ async def login_submit(
             "allow_password_auth": _state.allow_password_auth,
         }, status_code=403)
     db = await get_db()
+
+    # Check both human and company tables for unified login
     cursor = await db.execute(
         "SELECT id, password_hash FROM cafe_users WHERE email = ?", (email.lower(),)
     )
-    row = await cursor.fetchone()
-    if not row or not _verify_password(password, row["password_hash"]):
+    human_row = await cursor.fetchone()
+    human_ok = human_row and _verify_password(password, human_row["password_hash"])
+
+    cursor = await db.execute(
+        "SELECT id, password_hash FROM companies WHERE email = ? OR email = ?",
+        (email, email.lower()),
+    )
+    company_row = await cursor.fetchone()
+    company_ok = False
+    if company_row:
+        stored = company_row["password_hash"]
+        if isinstance(stored, str):
+            stored = stored.encode()
+        company_ok = bcrypt.checkpw(password.encode(), stored)
+
+    if not human_ok and not company_ok:
         return templates.TemplateResponse(request, "login.html", {
             "next_url": next_url,
             "error": "Invalid email or password.",
@@ -478,32 +588,45 @@ async def login_submit(
             "allow_password_auth": _state.allow_password_auth,
         }, status_code=401)
 
-    # Grace period: reject password login if user has passkey enrolled > N days ago
-    pk_status = await _check_passkey_enrollment(db, row["id"])
-    if pk_status["grace_expired"]:
-        return templates.TemplateResponse(request, "login.html", {
-            "next_url": next_url,
-            "error": "Your account has a passkey enrolled. "
-                     "Password login is no longer available. Please sign in with your passkey.",
-            "email": email,
-            "csrf_token": _generate_csrf_token(request),
-            "allow_password_auth": _state.allow_password_auth,
-        }, status_code=403)
+    # Human-specific checks (passkey grace period)
+    redirect_url = next_url if next_url else None
+    session_token = None
+    if human_ok:
+        pk_status = await _check_passkey_enrollment(db, human_row["id"])
+        if pk_status["grace_expired"]:
+            # If they also have a company account, let them through for that
+            if not company_ok:
+                return templates.TemplateResponse(request, "login.html", {
+                    "next_url": next_url,
+                    "error": "Your account has a passkey enrolled. "
+                             "Password login is no longer available. Please sign in with your passkey.",
+                    "email": email,
+                    "csrf_token": _generate_csrf_token(request),
+                    "allow_password_auth": _state.allow_password_auth,
+                }, status_code=403)
+            human_ok = False  # skip setting human cookie, company login still works
+        else:
+            await _rehash_if_legacy(db, human_row["id"], password, human_row["password_hash"])
+            session_token = _create_human_session_token(human_row["id"], email.lower())
+            if not pk_status["enrolled"]:
+                enroll_next = next_url if next_url else "/tab"
+                redirect_url = f"/enroll-passkey?next={enroll_next}"
+            elif not redirect_url:
+                redirect_url = "/tab"
 
-    # Rehash legacy SHA-256 passwords to bcrypt on successful login
-    await _rehash_if_legacy(db, row["id"], password, row["password_hash"])
-
-    session_token = _create_human_session_token(row["id"], email.lower())
-
-    # If user has no passkey, redirect to enrollment prompt instead of final destination
-    if not pk_status["enrolled"]:
-        enroll_next = next_url if next_url else "/tab"
-        redirect_url = f"/enroll-passkey?next={enroll_next}"
-    else:
-        redirect_url = next_url if next_url else "/tab"
+    # Determine redirect if not yet set
+    if not redirect_url:
+        if company_ok:
+            redirect_url = await _company_landing_url(company_row["id"])
+        else:
+            redirect_url = "/tab"
 
     response = RedirectResponse(url=redirect_url, status_code=303)
-    _set_session_cookie(response, session_token)
+    if human_ok and session_token:
+        _set_session_cookie(response, session_token)
+    if company_ok:
+        company_token = _create_company_session(company_row["id"])
+        _set_company_cookie(response, company_token)
     return response
 
 
@@ -526,11 +649,13 @@ async def enroll_passkey_page(request: Request, next_url: str = "/"):
     from agentcafe.cafe.human import _state as human_state
     grace_days = human_state.passkey_grace_period_days
 
+    nav = await _build_nav_context(request)
     return templates.TemplateResponse(request, "enroll_passkey.html", {
         "next_url": next_url,
         "session_token": session_token,
         "grace_days": grace_days,
         "active_nav": "tab",
+        **nav,
     })
 
 
@@ -1364,6 +1489,7 @@ async def tab_page(request: Request, action: str = ""):
     elif action == "declined":
         success_message = "Card request declined. The agent has been denied access."
 
+    nav = await _build_nav_context(request)
     return templates.TemplateResponse(request, "tab.html", {
         "pending_cards": pending_cards,
         "active_cards": active_cards,
@@ -1373,6 +1499,7 @@ async def tab_page(request: Request, action: str = ""):
         "success_message": success_message,
         "error_message": error_message,
         "active_nav": "tab",
+        **nav,
     })
 
 
@@ -1403,6 +1530,7 @@ async def tab_approve_page(request: Request, card_id: str):
     action_rows = await cursor.fetchall()
     actions = [{"action_id": r["action_id"], "risk_tier": r["risk_tier"] or "medium"} for r in action_rows]
 
+    nav = await _build_nav_context(request)
     return templates.TemplateResponse(request, "card_approve.html", {
         "card_id": card_id,
         "service_name": service_name,
@@ -1411,6 +1539,7 @@ async def tab_approve_page(request: Request, card_id: str):
         "csrf_token": _generate_csrf_token(request),
         "error": None,
         "active_nav": "tab",
+        **nav,
     })
 
 

@@ -87,7 +87,11 @@
 
 <!-- Publish -->
 <div class="btn-row">
+    {% if integration_mode is defined and integration_mode == 'jointly_verified' %}
+    <a href="/services/onboard/{{ draft_id }}/integration" class="btn btn-outline">Back</a>
+    {% else %}
     <a href="/services/onboard/{{ draft_id }}/policy" class="btn btn-outline">Back</a>
+    {% endif %}
     <form method="post" action="/services/onboard/{{ draft_id }}/publish" style="margin: 0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="btn" style="background: var(--success); color: white; width: auto; padding: 12px 32px;"

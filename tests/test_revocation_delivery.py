@@ -96,6 +96,23 @@ async def _init_test_db() -> aiosqlite.Connection:
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS service_integration_configs (
+            service_id TEXT PRIMARY KEY,
+            integration_base_url TEXT NOT NULL,
+            integration_auth_header TEXT NOT NULL DEFAULT '',
+            identity_matching TEXT NOT NULL DEFAULT 'opaque_id',
+            has_direct_signup INTEGER NOT NULL DEFAULT 0,
+            cap_account_check INTEGER NOT NULL DEFAULT 0,
+            cap_account_create INTEGER NOT NULL DEFAULT 0,
+            cap_link_complete INTEGER NOT NULL DEFAULT 0,
+            cap_unlink INTEGER NOT NULL DEFAULT 0,
+            cap_revoke INTEGER NOT NULL DEFAULT 1,
+            cap_grant_status INTEGER NOT NULL DEFAULT 0,
+            path_revoke TEXT,
+            configured_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE UNIQUE INDEX IF NOT EXISTS idx_rd_correlation
             ON revocation_deliveries(correlation_id);
     """)
@@ -157,16 +174,18 @@ async def test_db():
 class TestIntegrationConfig:
     """Tests for get_integration_config."""
 
-    def test_returns_hm_config(self):
-        """Returns config for human-memory."""
-        config = get_integration_config("human-memory")
+    @pytest.mark.asyncio
+    async def test_returns_hm_config(self):
+        """Returns config for human-memory (fallback, no db)."""
+        config = await get_integration_config("human-memory")
         assert config is not None
         assert config["service_id"] == "human-memory"
         assert config["capabilities"]["revoke"] is True
 
-    def test_returns_none_for_unknown(self):
+    @pytest.mark.asyncio
+    async def test_returns_none_for_unknown(self):
         """Returns None for unknown service."""
-        assert get_integration_config("unknown-service") is None
+        assert await get_integration_config("unknown-service") is None
 
 
 # ---------------------------------------------------------------------------

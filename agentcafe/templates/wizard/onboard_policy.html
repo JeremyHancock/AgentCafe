@@ -6,6 +6,36 @@
 <form method="post" action="/services/onboard/{{ draft_id }}/policy" id="policy-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="policy_json" id="policy-json" value="">
+    <input type="hidden" name="integration_mode" id="integration-mode" value="{{ saved_integration_mode or 'standard' }}">
+
+    <div class="section-card">
+        <h2>Integration mode</h2>
+        <p class="subtitle">Choose how AgentCafe connects to your service.</p>
+        <div class="form-group" style="margin-bottom: 8px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="integration_mode_radio" value="standard"
+                       {{ 'checked' if not saved_integration_mode or saved_integration_mode == 'standard' }}
+                       onchange="document.getElementById('integration-mode').value='standard'"
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Standard</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — AgentCafe proxies requests with simple authentication. Best for most services.</span>
+                </div>
+            </label>
+        </div>
+        <div class="form-group" style="margin-bottom: 0;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+                <input type="radio" name="integration_mode_radio" value="jointly_verified"
+                       {{ 'checked' if saved_integration_mode == 'jointly_verified' }}
+                       onchange="document.getElementById('integration-mode').value='jointly_verified'"
+                       style="width: auto; margin-top: 3px;">
+                <div>
+                    <strong>Jointly verified</strong>
+                    <span style="color: var(--text-muted); font-size: 13px;"> — Per-request RS256 artifact signing, identity binding, and account lifecycle. Required for services that manage user accounts.</span>
+                </div>
+            </label>
+        </div>
+    </div>
 
     <div class="section-card">
         <h2>Configure policies &amp; backend</h2>

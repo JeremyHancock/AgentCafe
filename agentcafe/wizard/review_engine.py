@@ -119,6 +119,7 @@ async def save_policy(
     actions_policy: dict[str, PolicyAction],
     backend_url: str,
     backend_auth_header: str,
+    integration_mode: str = "standard",
 ) -> None:
     """Save the company's Step 4 policy settings to the draft."""
     now = datetime.now(timezone.utc).isoformat()
@@ -134,18 +135,46 @@ async def save_policy(
                policy_json = ?,
                backend_url = ?,
                backend_auth_header = ?,
+               integration_mode = ?,
                updated_at = ?
            WHERE id = ?""",
         (
             policy_json,
             backend_url,
             encrypt(backend_auth_header),
+            integration_mode,
             now,
             draft_id,
         ),
     )
     await db.commit()
-    logger.info("Saved policy for draft %s", draft_id)
+    logger.info("Saved policy for draft %s (integration_mode=%s)", draft_id, integration_mode)
+
+
+async def save_integration(
+    db: aiosqlite.Connection,
+    draft_id: str,
+    integration_mode: str,
+    integration_config: dict,
+) -> None:
+    """Save the company's JV integration settings to the draft."""
+    now = datetime.now(timezone.utc).isoformat()
+
+    await db.execute(
+        """UPDATE draft_services
+           SET integration_mode = ?,
+               integration_config_json = ?,
+               updated_at = ?
+           WHERE id = ?""",
+        (
+            integration_mode,
+            json.dumps(integration_config),
+            now,
+            draft_id,
+        ),
+    )
+    await db.commit()
+    logger.info("Saved integration config for draft %s (mode=%s)", draft_id, integration_mode)
 
 
 async def generate_preview(

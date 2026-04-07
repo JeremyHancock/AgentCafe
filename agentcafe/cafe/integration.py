@@ -42,12 +42,38 @@ _HM_CONFIG = {
 }
 
 
-def get_integration_config(service_id: str) -> dict | None:
+async def get_integration_config(service_id: str, db=None) -> dict | None:
     """Return integration config for a service, or None if not configured.
 
-    MVS: only Human Memory is configured. When the second jointly-verified
-    service is onboarded, this reads from ``service_integration_configs``.
+    Queries ``service_integration_configs`` first (wizard-onboarded services).
+    Falls back to hard-coded ``_HM_CONFIG`` for backward compatibility.
     """
+    if db is not None:
+        cursor = await db.execute(
+            "SELECT * FROM service_integration_configs WHERE service_id = ?",
+            (service_id,),
+        )
+        row = await cursor.fetchone()
+        if row:
+            from agentcafe.crypto import decrypt
+            row = dict(row)
+            return {
+                "service_id": service_id,
+                "integration_base_url": row["integration_base_url"],
+                "integration_auth_header": decrypt(row["integration_auth_header"]),
+                "capabilities": {
+                    "account_check": bool(row["cap_account_check"]),
+                    "account_create": bool(row["cap_account_create"]),
+                    "link_complete": bool(row["cap_link_complete"]),
+                    "unlink": bool(row["cap_unlink"]),
+                    "revoke": bool(row["cap_revoke"]),
+                    "grant_status": bool(row["cap_grant_status"]),
+                },
+                "identity_matching": row["identity_matching"],
+                "has_direct_signup": bool(row["has_direct_signup"]),
+            }
+
+    # Fallback for HM during transition
     if service_id == _HM_CONFIG["service_id"]:
         return _HM_CONFIG
     return None
@@ -128,7 +154,7 @@ async def deliver_revocation(
         return False
 
     service_id = row["service_id"]
-    config = get_integration_config(service_id)
+    config = await get_integration_config(service_id, db)
     if not config or not config["capabilities"].get("revoke"):
         logger.warning("No revoke capability for service: %s", service_id)
         return False
@@ -277,7 +303,7 @@ async def queue_jv_revocation(
     grants = await cursor.fetchall()
 
     for grant in grants:
-        config = get_integration_config(grant["service_id"])
+        config = await get_integration_config(grant["service_id"], db)
         if not config or not config["capabilities"].get("revoke"):
             continue
 

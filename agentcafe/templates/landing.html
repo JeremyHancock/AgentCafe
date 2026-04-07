@@ -342,8 +342,14 @@
         <a href="/" class="logo">☕ AgentCafe</a>
         <div class="header-links">
             {% if logged_in %}
+            {% if has_human_session %}
             <a href="/tab">My Tab</a>
             <a href="/dashboard">Policies</a>
+            {% endif %}
+            {% if has_company_session %}
+            <a href="/services">My Services</a>
+            {% endif %}
+            <a href="/logout">Sign out</a>
             {% else %}
             <a href="/login">Sign in</a>
             <a href="/services/register">List your service</a>
@@ -360,7 +366,12 @@
         </p>
         <div class="hero-actions">
             {% if logged_in %}
+            {% if has_human_session %}
             <a href="/tab" class="btn btn-primary">Go to your Tab</a>
+            {% endif %}
+            {% if has_company_session %}
+            <a href="/services" class="btn {% if has_human_session %}btn-outline{% else %}btn-primary{% endif %}">My Services</a>
+            {% endif %}
             {% else %}
             <a href="/login" class="btn btn-primary">Sign in</a>
             <a href="/services/register" class="btn btn-outline">List your service</a>

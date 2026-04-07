@@ -27,6 +27,7 @@ from agentcafe.wizard.models import (
     DryRunResponse,
     DryRunResult,
     EditServiceResponse,
+    IntegrationSaveRequest,
     PolicySaveRequest,
     PreviewResponse,
     PublishResponse,
@@ -44,6 +45,7 @@ from agentcafe.wizard.review_engine import (
     create_draft,
     generate_preview,
     get_draft,
+    save_integration,
     save_policy,
     save_review,
 )
@@ -408,9 +410,57 @@ async def policy_draft(
         actions_policy=req.actions,
         backend_url=req.backend_url,
         backend_auth_header=req.backend_auth_header,
+        integration_mode=req.integration_mode,
     )
 
     return {"status": "saved", "draft_id": draft_id, "wizard_step": 4}
+
+
+# ---------------------------------------------------------------------------
+# Step 4b: Integration Setup (JV services only)
+# ---------------------------------------------------------------------------
+
+@wizard_router.put("/drafts/{draft_id}/integration")
+async def integration_draft(
+    draft_id: str,
+    req: IntegrationSaveRequest,
+    authorization: str | None = Header(default=None),
+):
+    """Save JV integration settings (Step 4b). Only for jointly_verified services."""
+    company_id = _get_company_id_from_token(authorization)
+    db = await get_db()
+
+    draft = await get_draft(db, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail={"error": "draft_not_found"})
+    if draft["company_id"] != company_id:
+        raise HTTPException(status_code=403, detail={"error": "not_owner", "message": "You do not own this draft."})
+
+    if req.integration_mode != "jointly_verified":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "not_jv", "message": "Integration setup is only for jointly_verified services."},
+        )
+
+    if not any([req.cap_account_check, req.cap_account_create, req.cap_link_complete]):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "no_account_capability",
+                "message": "A jointly-verified service must implement at least one of: account-check, account-create, or link-complete.",
+            },
+        )
+
+    config = req.model_dump(exclude={"integration_mode"})
+
+    await save_integration(
+        db,
+        draft_id,
+        integration_mode=req.integration_mode,
+        integration_config=config,
+    )
+
+    return {"status": "saved", "draft_id": draft_id, "wizard_step": "4b"}
 
 
 # ---------------------------------------------------------------------------
@@ -630,17 +680,44 @@ async def edit_published_service(
     policy_data = {}
     backend_url = ""
     backend_auth_header = ""
+    edit_integration_mode = None
     for row in proxy_rows:
         row = dict(row)
         action_id = row["action_id"]
         if not backend_url:
             backend_url = row.get("backend_url", "")
             backend_auth_header = row.get("backend_auth_header", "")
+        if not edit_integration_mode and row.get("integration_mode"):
+            edit_integration_mode = row["integration_mode"]
         policy_data[action_id] = {
             "scope": row["scope"],
             "human_auth": bool(row["human_auth_required"]),
             "rate_limit": row["rate_limit"],
         }
+
+    # Load service_integration_configs if JV
+    edit_integration_config = None
+    if edit_integration_mode == "jointly_verified":
+        sic_cursor = await db.execute(
+            "SELECT * FROM service_integration_configs WHERE service_id = ?",
+            (service_id,),
+        )
+        sic_row = await sic_cursor.fetchone()
+        if sic_row:
+            sic = dict(sic_row)
+            edit_integration_config = json.dumps({
+                "integration_base_url": sic["integration_base_url"],
+                "integration_auth_header": "",
+                "identity_matching": sic["identity_matching"],
+                "has_direct_signup": bool(sic["has_direct_signup"]),
+                "cap_account_check": bool(sic["cap_account_check"]),
+                "cap_account_create": bool(sic["cap_account_create"]),
+                "cap_link_complete": bool(sic["cap_link_complete"]),
+                "cap_unlink": bool(sic["cap_unlink"]),
+                "cap_revoke": bool(sic["cap_revoke"]),
+                "cap_grant_status": bool(sic["cap_grant_status"]),
+                "path_revoke": sic.get("path_revoke"),
+            })
 
     # Create the draft at wizard_step=3 (review), pre-populated
     draft_id = str(uuid.uuid4())
@@ -650,8 +727,9 @@ async def edit_published_service(
         """INSERT INTO draft_services
            (id, company_id, wizard_step, raw_spec_text, parsed_spec_json,
             candidate_menu_json, policy_json, backend_url, backend_auth_header,
+            integration_mode, integration_config_json,
             created_at, updated_at)
-           VALUES (?, ?, 3, '', '{}', ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, 3, '', '{}', ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             draft_id,
             company_id,
@@ -659,6 +737,8 @@ async def edit_published_service(
             json.dumps(policy_data),
             backend_url,
             backend_auth_header,
+            edit_integration_mode,
+            edit_integration_config,
             now,
             now,
         ),

@@ -1244,3 +1244,229 @@ async def test_edit_other_company_service_rejected(wizard_client):
 
     resp = await wizard_client.post(f"/wizard/services/{svc_id}/edit", headers=auth_b)
     assert resp.status_code == 403
+
+
+# ===========================================================================
+# Jointly-Verified (JV) wizard tests
+# ===========================================================================
+
+
+async def _create_jv_draft(wizard_client, service_id="jv-test-svc", email="jv@test.example.com"):
+    """Helper: create company, parse, review, policy with JV mode. Returns (auth, draft_id, candidate)."""
+    company_resp = await wizard_client.post("/wizard/companies", json={
+        "name": "JVCorp",
+        "email": email,
+        "password": "pass1234",
+    })
+    token = company_resp.json()["session_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    parse_resp = await wizard_client.post("/wizard/specs/parse", json={
+        "raw_spec": SAMPLE_OPENAPI_JSON,
+    }, headers=auth)
+    draft_id = parse_resp.json()["draft_id"]
+    candidate = parse_resp.json()["candidate_menu"]
+
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/review", json={
+        "service_id": service_id,
+        "name": "JV Test Service",
+        "actions": candidate["actions"],
+        "excluded_actions": [],
+    }, headers=auth)
+
+    policy = {
+        a["action_id"]: {"scope": f"{service_id}:{a['action_id']}", "human_auth": True, "rate_limit": "10/minute"}
+        for a in candidate["actions"]
+    }
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/policy", json={
+        "actions": policy,
+        "backend_url": "https://api.jv.example.com",
+        "integration_mode": "jointly_verified",
+    }, headers=auth)
+
+    return auth, draft_id, candidate
+
+
+@pytest.mark.asyncio
+async def test_policy_saves_integration_mode(wizard_client):
+    """PUT policy with integration_mode persists it on the draft."""
+    _, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-policy-test", "jv-policy@test.example.com",
+    )
+    from agentcafe.db.engine import get_db
+    from agentcafe.wizard.review_engine import get_draft
+    db = await get_db()
+    draft = await get_draft(db, draft_id)
+    assert draft["integration_mode"] == "jointly_verified"
+
+
+@pytest.mark.asyncio
+async def test_integration_endpoint_saves_config(wizard_client):
+    """PUT integration with full JV config stores it on the draft."""
+    auth, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-integ-test", "jv-integ@test.example.com",
+    )
+    resp = await wizard_client.put(f"/wizard/drafts/{draft_id}/integration", json={
+        "integration_mode": "jointly_verified",
+        "integration_base_url": "https://hm.example.com",
+        "identity_matching": "opaque_id",
+        "has_direct_signup": False,
+        "cap_account_create": True,
+        "cap_revoke": True,
+    }, headers=auth)
+    assert resp.status_code == 200
+    assert resp.json()["wizard_step"] == "4b"
+
+    from agentcafe.db.engine import get_db
+    from agentcafe.wizard.review_engine import get_draft
+    db = await get_db()
+    draft = await get_draft(db, draft_id)
+    config = json.loads(draft["integration_config_json"])
+    assert config["integration_base_url"] == "https://hm.example.com"
+    assert config["cap_account_create"] is True
+
+
+@pytest.mark.asyncio
+async def test_integration_rejects_standard_mode(wizard_client):
+    """PUT integration with mode=standard returns 400."""
+    auth, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-std-test", "jv-std@test.example.com",
+    )
+    resp = await wizard_client.put(f"/wizard/drafts/{draft_id}/integration", json={
+        "integration_mode": "standard",
+        "integration_base_url": "https://example.com",
+        "cap_account_create": True,
+    }, headers=auth)
+    assert resp.status_code == 400
+    assert resp.json()["detail"]["error"] == "not_jv"
+
+
+@pytest.mark.asyncio
+async def test_integration_rejects_no_account_capability(wizard_client):
+    """PUT integration without any account capability returns 422."""
+    auth, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-nocap-test", "jv-nocap@test.example.com",
+    )
+    resp = await wizard_client.put(f"/wizard/drafts/{draft_id}/integration", json={
+        "integration_mode": "jointly_verified",
+        "integration_base_url": "https://example.com",
+        "cap_account_check": False,
+        "cap_account_create": False,
+        "cap_link_complete": False,
+        "cap_revoke": True,
+    }, headers=auth)
+    assert resp.status_code == 422
+    assert resp.json()["detail"]["error"] == "no_account_capability"
+
+
+@pytest.mark.asyncio
+async def test_publish_jv_creates_integration_config(wizard_client):
+    """Full JV publish creates service_integration_configs row and sets proxy integration_mode."""
+    auth, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-pub-test", "jv-pub@test.example.com",
+    )
+    # Save integration config
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/integration", json={
+        "integration_mode": "jointly_verified",
+        "integration_base_url": "https://hm.example.com",
+        "identity_matching": "opaque_id",
+        "cap_account_create": True,
+        "cap_revoke": True,
+    }, headers=auth)
+
+    # Preview + publish
+    await wizard_client.get(f"/wizard/drafts/{draft_id}/preview", headers=auth)
+    pub = await wizard_client.post(f"/wizard/drafts/{draft_id}/publish", headers=auth)
+    assert pub.status_code == 200
+
+    # Check service_integration_configs
+    from agentcafe.db.engine import get_db
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM service_integration_configs WHERE service_id = 'jv-pub-test'",
+    )
+    row = await cursor.fetchone()
+    assert row is not None
+    assert row["integration_base_url"] == "https://hm.example.com"
+    assert row["identity_matching"] == "opaque_id"
+    assert row["cap_account_create"] == 1
+
+    # Check proxy_configs has integration_mode
+    cursor = await db.execute(
+        "SELECT integration_mode FROM proxy_configs WHERE service_id = 'jv-pub-test' LIMIT 1",
+    )
+    proxy = await cursor.fetchone()
+    assert proxy["integration_mode"] == "jointly_verified"
+
+
+@pytest.mark.asyncio
+async def test_publish_standard_no_integration_config(wizard_client):
+    """Standard publish does not create service_integration_configs row."""
+    _, _svc_id = await _publish_service(
+        wizard_client, "std-nojv-test", "std-nojv@test.example.com",
+    )
+    from agentcafe.db.engine import get_db
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT * FROM service_integration_configs WHERE service_id = 'std-nojv-test'",
+    )
+    row = await cursor.fetchone()
+    assert row is None
+
+    cursor = await db.execute(
+        "SELECT integration_mode FROM proxy_configs WHERE service_id = 'std-nojv-test' LIMIT 1",
+    )
+    proxy = await cursor.fetchone()
+    assert proxy["integration_mode"] is None
+
+
+@pytest.mark.asyncio
+async def test_republish_jv_updates_config(wizard_client):
+    """Republishing a JV service updates the integration config."""
+    auth, draft_id, _ = await _create_jv_draft(
+        wizard_client, "jv-repub-test", "jv-repub@test.example.com",
+    )
+    await wizard_client.put(f"/wizard/drafts/{draft_id}/integration", json={
+        "integration_mode": "jointly_verified",
+        "integration_base_url": "https://v1.example.com",
+        "cap_account_create": True,
+        "cap_revoke": True,
+    }, headers=auth)
+    await wizard_client.get(f"/wizard/drafts/{draft_id}/preview", headers=auth)
+    await wizard_client.post(f"/wizard/drafts/{draft_id}/publish", headers=auth)
+
+    # Edit and republish with different URL
+    edit_resp = await wizard_client.post("/wizard/services/jv-repub-test/edit", headers=auth)
+    assert edit_resp.status_code == 200
+    draft_id_2 = edit_resp.json()["draft_id"]
+
+    # Re-do policy + integration + preview + publish
+    from agentcafe.db.engine import get_db
+    from agentcafe.wizard.review_engine import get_draft
+    db = await get_db()
+    draft = await get_draft(db, draft_id_2)
+    candidate = json.loads(draft["candidate_menu_json"])
+    policy = {
+        a["action_id"]: {"scope": f"jv-repub-test:{a['action_id']}", "human_auth": True, "rate_limit": "10/minute"}
+        for a in candidate.get("actions", [])
+    }
+    await wizard_client.put(f"/wizard/drafts/{draft_id_2}/policy", json={
+        "actions": policy,
+        "backend_url": "https://api.jv.example.com",
+        "integration_mode": "jointly_verified",
+    }, headers=auth)
+    await wizard_client.put(f"/wizard/drafts/{draft_id_2}/integration", json={
+        "integration_mode": "jointly_verified",
+        "integration_base_url": "https://v2.example.com",
+        "cap_account_create": True,
+        "cap_revoke": True,
+    }, headers=auth)
+    await wizard_client.get(f"/wizard/drafts/{draft_id_2}/preview", headers=auth)
+    pub2 = await wizard_client.post(f"/wizard/drafts/{draft_id_2}/publish", headers=auth)
+    assert pub2.status_code == 200
+
+    cursor = await db.execute(
+        "SELECT integration_base_url FROM service_integration_configs WHERE service_id = 'jv-repub-test'",
+    )
+    row = await cursor.fetchone()
+    assert row["integration_base_url"] == "https://v2.example.com"

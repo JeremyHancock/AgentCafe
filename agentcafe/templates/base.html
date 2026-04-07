@@ -315,10 +315,15 @@
 <body>
     <div class="header">
         <a href="/" class="logo">☕ AgentCafe</a>
-        {% if active_nav is defined and active_nav %}
+        {% if has_human_session or has_company_session %}
         <nav class="nav-links">
-            <a href="/tab" class="{% if active_nav == 'tab' %}active{% endif %}">Cards</a>
-            <a href="/dashboard" class="{% if active_nav == 'dashboard' %}active{% endif %}">Policies</a>
+            {% if has_human_session %}
+            <a href="/tab" class="{% if active_nav is defined and active_nav == 'tab' %}active{% endif %}">Cards</a>
+            <a href="/dashboard" class="{% if active_nav is defined and active_nav == 'dashboard' %}active{% endif %}">Policies</a>
+            {% endif %}
+            {% if has_company_session %}
+            <a href="/services" class="{% if active_nav is defined and active_nav == 'services' %}active{% endif %}">My Services</a>
+            {% endif %}
             <a href="/logout" class="nav-logout">Sign out</a>
         </nav>
         {% endif %}

@@ -54,6 +54,8 @@ async def publish_draft(
     backend_url = draft.get("backend_url", "")
     backend_auth_header = encrypt(draft.get("backend_auth_header", ""))
     policy_data = json.loads(draft.get("policy_json") or "{}")
+    integration_mode = draft.get("integration_mode") or "standard"
+    integration_config = json.loads(draft.get("integration_config_json") or "{}")
 
     # Check if this is a re-publish (edit flow) or a new service
     cursor = await db.execute(
@@ -136,8 +138,8 @@ async def publish_draft(
                    (id, service_id, action_id, backend_url, backend_path,
                     backend_method, backend_auth_header, scope,
                     human_auth_required, rate_limit, created_at,
-                    quarantine_until)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    quarantine_until, integration_mode)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(uuid.uuid4()),
                     service_id,
@@ -151,9 +153,60 @@ async def publish_draft(
                     rate_limit,
                     now,
                     quarantine_until,
+                    integration_mode if integration_mode != "standard" else None,
                 ),
             )
             actions_published += 1
+
+        # Insert/update service_integration_configs for JV services
+        if integration_mode == "jointly_verified" and integration_config:
+            ic = integration_config
+            auth_hdr = encrypt(ic.get("integration_auth_header", ""))
+
+            cursor = await db.execute(
+                "SELECT service_id FROM service_integration_configs WHERE service_id = ?",
+                (service_id,),
+            )
+            existing_sic = await cursor.fetchone()
+
+            sic_values = (
+                ic.get("integration_base_url", ""),
+                auth_hdr,
+                ic.get("identity_matching", "opaque_id"),
+                1 if ic.get("has_direct_signup") else 0,
+                1 if ic.get("cap_account_check") else 0,
+                1 if ic.get("cap_account_create") else 0,
+                1 if ic.get("cap_link_complete") else 0,
+                1 if ic.get("cap_unlink") else 0,
+                1 if ic.get("cap_revoke", True) else 0,
+                1 if ic.get("cap_grant_status") else 0,
+                ic.get("path_revoke"),
+            )
+
+            if existing_sic:
+                await db.execute(
+                    """UPDATE service_integration_configs
+                       SET integration_base_url = ?, integration_auth_header = ?,
+                           identity_matching = ?, has_direct_signup = ?,
+                           cap_account_check = ?, cap_account_create = ?,
+                           cap_link_complete = ?, cap_unlink = ?,
+                           cap_revoke = ?, cap_grant_status = ?,
+                           path_revoke = ?, updated_at = ?
+                       WHERE service_id = ?""",
+                    (*sic_values, now, service_id),
+                )
+            else:
+                await db.execute(
+                    """INSERT INTO service_integration_configs
+                       (service_id, integration_base_url, integration_auth_header,
+                        identity_matching, has_direct_signup,
+                        cap_account_check, cap_account_create,
+                        cap_link_complete, cap_unlink,
+                        cap_revoke, cap_grant_status,
+                        path_revoke, configured_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (service_id, *sic_values, now, now),
+                )
 
         # Update draft to step 6 (published)
         await db.execute(
