@@ -2,7 +2,7 @@
 
 ## Context
 
-Human Memory launched as the first real service on April 7, 2026 (7 actions, jointly-verified, quarantine until April 14). The project has open items scattered across 6+ docs. This consolidates everything into one prioritized backlog organized by milestones, with dependencies and gaps identified.
+Human Memory launched as the first real service on April 7, 2026 (7 actions, jointly-verified, quarantine until April 14). The project had open items scattered across 6+ docs. This consolidates everything into one prioritized backlog organized by milestones, with dependencies and gaps identified.
 
 **Team:** 1-2 people. **State:** Beta, 485 tests, pylint 10.00, live at agentcafe.io.
 
@@ -12,161 +12,166 @@ Human Memory launched as the first real service on April 7, 2026 (7 actions, joi
 
 | ID | Milestone | Definition | Horizon |
 |----|-----------|------------|---------|
-| **M0** | Protect what's live | No data-loss risk, no session exploit, HM quarantine lifts safely | Before April 14 |
-| **M1** | Ready for 2nd service | A company can self-serve through the wizard without a co-pilot | 4-6 weeks |
-| **M2** | Ready for public beta | 3+ services, 3+ real agent families tested, email verification, observability | 2-3 months |
-| **M3** | Scale | Postgres, SDK, full observability, accessibility | 6+ months |
+| **M0** | Protect what's live | No data-loss risk, no session/transport exploit, production config hardened | Immediately |
+| **M1** | Ready for 2nd service | A company can self-serve the wizard without hand-holding; real agents validated | 4-6 weeks |
+| **M2** | Ready for public beta | 3+ services, email verification, password recovery, observability, polished wizard | 2-3 months |
+| **M3** | Scale | Postgres, SDK, accessibility, advanced integration features | 6+ months |
 
 ---
 
-## M0 — Protect What's Live (before April 14)
+## M0 — Protect What's Live
 
-### Operations (do first — not code, just actions)
+### Operations (not code — just actions, do today)
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 0.1 | **Back up CAFE_ENCRYPTION_KEY** to password manager | 15 min | deployment-plan.md §4 |
-| 0.2 | **Back up RSA signing keys** (Passport + artifact private keys) | 15 min | *New — not in any doc* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 0.1 | **Back up CAFE_ENCRYPTION_KEY** to password manager | 15 min | Encrypts HM's backend credentials (AES-256-GCM). Losing it = ask every company to re-enter credentials. |
+| 0.2 | **Back up RSA signing keys** (Passport + artifact private keys) | 15 min | If auto-generated and lost, all issued tokens and artifacts become unverifiable. |
+| 0.3 | **Set `CORS_ALLOWED_ORIGINS=https://agentcafe.io`** in fly.toml | 15 min | Currently defaults to `"*"` (`config.py` line 65). Not set in `fly.toml`. |
+| 0.4 | **Set `CAFE_LOG_FORMAT=json`** in fly.toml | 15 min | Structured JSON logging is implemented (`logging_config.py`) but not enabled in production. Defaults to `text`. |
 
-### Security hardening (small, high-value)
+### Security hardening (small, high-value code changes)
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 0.3 | **Add `secure=True` to all `set_cookie` calls** — 5 call sites across `pages.py` (lines 84, 131, 1278) and `wizard_pages.py` (lines 124, 1252). Production is HTTPS-only but flag should be explicit. | 30 min | *New* |
-| 0.4 | **Normalize company email to lowercase** on registration and login — `wizard/router.py` lines 122, 137, 152 store/query raw case unlike `human.py` which lowercases. Prevents duplicate accounts. | 30 min | *New* |
-| 0.5 | **Fix wizard_pages CSRF to use `abs()`** — `wizard_pages.py` line 162 uses `now - token_time` (allows future-dated tokens). `pages.py` line 192 already uses `abs()`. Make consistent. | 15 min | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 0.5 | **Add `secure=True` to all `set_cookie` calls** | 30 min | 5 call sites: `pages.py` lines 84, 131, 1278; `wizard_pages.py` lines 124, 1252. Production is HTTPS-only (`force_https=true` in fly.toml) but the flag should be explicit to prevent cookie leakage on a downgrade. |
+| 0.6 | **Normalize company email to lowercase** on registration and login | 30 min | `wizard/router.py` lines 122, 137, 152 store/query raw case. `human.py` correctly lowercases. Inconsistency allows duplicate company accounts with different casing. |
+| 0.7 | **Fix wizard_pages CSRF to use `abs()`** | 15 min | `wizard_pages.py` line 162 uses `now - token_time` (accepts future-dated tokens). `pages.py` line 192 already uses `abs()`. One-line fix for consistency. |
 
-### Testing (validate JV before quarantine lifts)
+### Testing (validate JV before quarantine lifts April 14)
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 0.6 | **E2E JV integration test** — full path: consent → binding → grant → artifact → proxy → response. Individual pieces tested (45 + 25 tests) but no integrated flow test. | 4-6 hrs | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 0.8 | **E2E JV integration test** | 4-6 hrs | Full path: consent → binding → grant → artifact → proxy → response. Individual pieces tested (45 + 25 tests) but no single test covers the complete flow through `POST /cafe/order` with a JV service. Should pass before quarantine lifts. |
 
 ---
 
 ## M1 — Ready for 2nd Service (4-6 weeks)
 
-### Wizard scope/naming (biggest onboarding friction)
+### Wizard scope/naming (biggest onboarding friction — blocked HM onboarding)
 
-| # | Item | Effort | Source | Dep |
-|---|------|--------|--------|-----|
-| 1.1 | **Fix garbled scope strings** — derivation concatenates operationId fragments (`human-memory:retrievememoryretrievepost`). Support `x-ac-scope` extension, derive from path, or allow inline editing. Root cause in `spec_parser.py`. | 3-4 hrs | onboarding-improvements |  |
-| 1.2 | **Fix garbled action IDs** — same root cause as 1.1. Make editable in Review step. | 2-3 hrs | onboarding-improvements | 1.1 |
-| 1.3 | **POST != WRITE override** — all POST classified as WRITE/Tier-2. Allow override via UI toggle or `x-ac-read-only` extension. | 2-3 hrs | onboarding-improvements |  |
-| 1.4 | **operationId heuristic warning** — detect auto-generated IDs containing path segments or HTTP methods, offer path-based alternatives. | 2-3 hrs | onboarding-improvements | 1.1 |
+| # | Item | Effort | Notes | Dep |
+|---|------|--------|-------|-----|
+| 1.1 | **Fix garbled scope strings** | 3-4 hrs | Derivation concatenates operationId fragments (`human-memory:retrievememoryretrievepost` instead of `human-memory:retrieve`). Root cause in `spec_parser.py`. Options: support `x-ac-scope` extension, derive from path segments, or allow inline editing in Policy step. | |
+| 1.2 | **Fix garbled action IDs (not editable)** | 2-3 hrs | Same root cause as 1.1. Make action IDs editable in the Review step. | 1.1 |
+| 1.3 | **POST != WRITE classification override** | 2-3 hrs | All POST endpoints auto-classified as WRITE/MEDIUM RISK/Tier-2. Many APIs (GraphQL, Elasticsearch, HM) use POST for reads with request bodies. Allow override via UI toggle or `x-ac-read-only` extension. | |
+| 1.4 | **operationId heuristic warning** | 2-3 hrs | Detect auto-generated operationIds containing path segments or HTTP methods (e.g., `store_memory_store_post`) and warn the company, offering path-based alternatives. | 1.1 |
 
 ### Wizard state & autofill bugs
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 1.5 | **Navigation back resets fields** — integration mode, backend URL, auth header lost on back-navigation. Persist wizard state across steps. | 2-3 hrs | onboarding-improvements |
-| 1.6 | **Browser autofill on backend URL/auth header** — fields named in ways that trigger autofill with email/URL. Fix with `autocomplete="off"` or specific `autocomplete` attributes. | 1 hr | onboarding-improvements |
-| 1.7 | **JV integration re-asks for base URL/auth header** — carry forward from policy step or explain why they differ. | 1-2 hrs | onboarding-improvements |
-| 1.8 | **Endpoint filtering after parse** — framework specs include internal routes. Add include/exclude checkboxes per endpoint. | 3-4 hrs | onboarding-improvements |
-| 1.9 | **"Try a sample" button** — either wire up or remove. | 30 min | onboarding-improvements |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 1.5 | **Navigation back resets fields** | 2-3 hrs | Integration mode, backend URL, and auth header lost on back-navigation. Wizard state needs to persist across step transitions (save to draft on each step, reload on back). |
+| 1.6 | **Browser autofill pollutes fields** | 1 hr | Backend URL pre-fills with email, auth header pre-fills with spec URL. Affects both policy step and JV integration step. Fix with `autocomplete="new-password"` or more specific field names. Same root cause as 1.7. |
+| 1.7 | **JV integration re-asks for base URL/auth header** | 1-2 hrs | Step 3b requests values already provided in step 3. Either carry them forward as defaults or explain why they're different (JV integration endpoint vs backend proxy endpoint). |
+| 1.8 | **Endpoint filtering after parse** | 3-4 hrs | Framework-generated specs include internal routes (admin, auth, dashboard). Add include/exclude checkboxes per endpoint after parsing, or support OpenAPI tag-based filtering. |
+
+### Agent validation
+
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 1.9 | **Execute agent testing plan with real agents** | 8-16 hrs | 3-5 agent families (GPT-4o, Claude, Grok) against live HM + demo services. Plan exists at `docs/research/agent-testing-plan.md`. This is the highest information-gain activity — results will reprioritize M2 agent experience items. |
 
 ### Infrastructure & config
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 1.10 | **SQLite backup cron** — `sqlite3 .backup` to Fly volume + periodic copy to S3/R2. Deferred until real company onboarded — that's now. | 2-4 hrs | deployment-plan.md §4 |
-| 1.11 | **Config validation on startup** — fail fast if `PASSPORT_SIGNING_SECRET` empty (currently generates random = tokens invalid on restart), if `CAFE_ENCRYPTION_KEY` malformed, if `ISSUER_API_KEY` empty. | 1-2 hrs | *New* |
-| 1.12 | **Enforce USE_REAL_PASSPORT=true** — remove the toggle or add startup check refusing to start with `false` when real services are configured. | 1-2 hrs | SECURITY-DEBT SEC-5 |
-| 1.13 | **CORS tightening** — `cors_allowed_origins` defaults to `"*"` (`config.py` line 65). Set to `https://agentcafe.io` in `fly.toml`. | 30 min | *New* |
-| 1.14 | **Improved health endpoint** — currently only `SELECT 1`. Add migration version check and RSA key loading check. | 1-2 hrs | *New* |
-| 1.15 | **.env.example file** — document all env vars with examples. | 30 min | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 1.10 | **SQLite backup cron** | 2-4 hrs | `sqlite3 .backup` to Fly volume + periodic copy to S3/R2/Backblaze. Deferred in deployment plan "until first real company onboards" — that's happened. HM data is live and not backed up. |
+| 1.11 | **Config validation on startup** | 1-2 hrs | Fail fast if `PASSPORT_SIGNING_SECRET` empty (currently `config.py` line 98 silently generates a random key = all tokens invalid on restart), if `CAFE_ENCRYPTION_KEY` malformed, if `ISSUER_API_KEY` empty in production. |
+| 1.12 | **Enforce USE_REAL_PASSPORT=true** | 1-2 hrs | `fly.toml` sets it, but nothing prevents toggling. Remove the toggle entirely or add a startup guard when real services exist in the DB. | 
+| 1.13 | **Improved health endpoint** | 1-2 hrs | Currently only runs `SELECT 1`. Add checks for: migration version current, RSA keys loaded, encryption key present. This is what Fly.io polls every 30s. |
+| 1.14 | **.env.example file** | 30 min | Document all env vars with example values and required/optional annotations. Currently env vars are only documented in README and fly.toml. |
+| 1.15 | **Company account close/transfer** | 4-6 hrs | No way to clean up or hand off old company registrations. Needed before 2nd service since test accounts from development need cleanup. |
 
 ### Security
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 1.16 | **SEC-10: Card-agent relationship check on report-spend** — verify calling passport's `card_id` claim matches, or restrict to system API key. | 2-3 hrs | SECURITY-DEBT |
-| 1.17 | **JSON body size limits** — no payload size cap on any endpoint. Add middleware rejecting bodies > 1 MB (2 MB for spec upload). | 1-2 hrs | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 1.16 | **SEC-10: Card-agent relationship check on report-spend** | 2-3 hrs | `POST /cards/{card_id}/report-spend` accepts any Tier-1 passport. Practical risk is low (card IDs are UUIDs) but the API surface is unprotected. Fix: verify the calling passport's `card_id` claim matches, or restrict to system API key. |
+| 1.17 | **JSON body size limits** | 1-2 hrs | No payload size cap on any endpoint. A large request body could exhaust memory. Add middleware rejecting bodies > 1 MB (spec upload already has its own 2 MB check). |
 
 ---
 
 ## M2 — Ready for Public Beta (2-3 months)
 
-### Agent experience (highest information gain)
+### Agent experience
 
-| # | Item | Effort | Source | Dep |
-|---|------|--------|--------|-----|
-| 2.1 | **Execute agent testing plan** — 3-5 agent families (GPT-4o, Claude, Grok) against HM + demo services. Plan exists at `docs/research/agent-testing-plan.md`. Results inform priority of everything below. | 8-16 hrs | development-plan |  |
-| 2.2 | **Agent error code documentation** — publish error taxonomy. Responses are consistent (`{"error":"...", "message":"..."}`) but undocumented. | 3-4 hrs | ux-paths.md |  |
-| 2.3 | **Menu search/filter/pagination** — `cafe.search` does keyword matching but no category/tag filtering. Needed at 10+ services. | 4-8 hrs | ux-paths.md |  |
-| 2.4 | **Rate limit transparency** — add `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` response headers. `Retry-After` already returned on 429. | 2-3 hrs | *New* |
-| 2.5 | **Long-poll or webhook push for consent status** — agents currently poll. Reduces latency and load. | 4-6 hrs | ux-paths.md |  |
+| # | Item | Effort | Notes | Dep |
+|---|------|--------|-------|-----|
+| 2.1 | **Agent error code documentation** | 3-4 hrs | Responses are consistent (`{"error":"...", "message":"..."}`) but undocumented. Publish error taxonomy so agents can handle failures programmatically. | |
+| 2.2 | **Menu search/filter/pagination** | 4-8 hrs | `cafe.search` does keyword matching but no category/tag filtering. Not needed yet (2 services), becomes critical at 10+. | |
+| 2.3 | **Rate limit transparency** | 2-3 hrs | Add `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` response headers. `Retry-After` already returned on 429. Agents currently can't discover limits without reading code. | |
+| 2.4 | **Long-poll or webhook push for consent status** | 4-6 hrs | Agents currently poll `GET /cafe/order/{id}`. Polling works but adds latency and load. Long-poll is simplest; webhooks better for production agents. | 1.9 |
 
 ### Account security
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.6 | **Email verification** — neither account type verifies email. Add token flow for company registration at minimum. | 4-6 hrs | ux-paths.md |
-| 2.7 | **Password recovery** — no forgot-password for either account type. Companies are password-only. | 4-8 hrs | ux-paths.md |
+| # | Item | Effort | Notes | Dep |
+|---|------|--------|-------|-----|
+| 2.5 | **Email verification** | 4-6 hrs | Neither account type verifies email. Add token-based verification flow for company registration at minimum. Humans use passkeys so email is less critical there. | |
+| 2.6 | **Password recovery** | 4-8 hrs | No forgot-password for either account type. Companies are password-only, so a locked-out company has no recovery path today. | 2.5 |
 
 ### Wizard polish
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.8 | Prettify JSON in spec input window | 1-2 hrs | onboarding-improvements |
-| 2.9 | Spec upload example + docs link | 1-2 hrs | onboarding-improvements |
-| 2.10 | Info hoverables/tooltips everywhere | 4-8 hrs | onboarding-improvements |
-| 2.11 | Copy button on raw JSON preview | 30 min | onboarding-improvements |
-| 2.12 | Confidence score explanation | 2-3 hrs | onboarding-improvements |
-| 2.13 | Identity mode explanation | 1 hr | onboarding-improvements |
-| 2.14 | Extension field documentation (x-ac-*) | 2-3 hrs | onboarding-improvements |
-| 2.15 | Company account transfer/close | 4-6 hrs | onboarding-improvements |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 2.7 | **Prettify JSON in spec input window** | 1-2 hrs | Raw JSON is hard to scan. Auto-format on paste or provide a toggle. |
+| 2.8 | **Spec upload example + docs link** | 1-2 hrs | First-time companies don't know what format to provide. Link to OpenAPI docs and show a minimal example. |
+| 2.9 | **Info hoverables/tooltips everywhere** | 4-8 hrs | Terms like "jointly-verified," "Tier-2," and "binding" are Cafe-specific jargon. Add `(?)` tooltips on every wizard step. |
+| 2.10 | **Copy button on raw JSON preview** | 30 min | Review step shows generated JSON but no easy way to copy it. |
+| 2.11 | **Confidence score explanation** | 2-3 hrs | Spec parsing shows confidence % but doesn't explain what it means or what lowers it. |
+| 2.12 | **Identity mode explanation** | 1 hr | "Service" vs "Capability" identity model choice has no inline explanation of trade-offs. |
+| 2.13 | **Extension field documentation (x-ac-\*)** | 2-3 hrs | Custom OpenAPI extensions (`x-ac-scope`, `x-ac-read-only`, etc.) need a reference page so companies can enrich their specs before uploading. |
 
 ### Human-facing UX
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.16 | Consent text shows agent inputs | 3-4 hrs | ux-paths.md |
-| 2.17 | Human activity notifications | 4-6 hrs | development-plan |
-| 2.18 | Company usage notifications | 3-4 hrs | ux-paths.md |
-| 2.19 | Landing page → sign-up funnel | 4-8 hrs | development-plan |
-| 2.20 | Per-field form validation feedback | 3-4 hrs | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 2.14 | **Consent text shows agent inputs** | 3-4 hrs | Humans approve/deny consent but can't see what the agent is asking to do. Show the agent's requested parameters in the consent UI. |
+| 2.15 | **Human activity notifications** | 4-6 hrs | No way for humans to know when an agent requests consent except by checking the dashboard. Email or push notification on new consent requests. |
+| 2.16 | **Company usage notifications** | 3-4 hrs | Companies have no visibility into how their service is being used. Basic email digest: requests/day, unique agents, error rates. |
+| 2.17 | **Landing page → sign-up funnel** | 4-8 hrs | Landing page has no CTA for company registration. Add clear paths: "List your service" for companies, "Browse services" for humans. |
+| 2.18 | **Per-field form validation feedback** | 3-4 hrs | Wizard and registration forms show errors only on submit. Add inline validation (email format, URL format, password strength). |
 
 ### Observability
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.21 | Alerting on 5xx spikes (Fly.io Prometheus or UptimeRobot) | 2-4 hrs | development-plan |
-| 2.22 | Health/latency/error-rate dashboard (Grafana Cloud free tier) | 4-8 hrs | development-plan |
-| 2.23 | Graceful shutdown — drain in-flight requests on SIGTERM before closing DB | 2-3 hrs | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 2.19 | **Alerting on 5xx spikes** | 2-4 hrs | No alerting today. Use Fly.io Prometheus metrics or UptimeRobot. Even a basic "5xx rate > 1% for 5 min → email" would be a big improvement. |
+| 2.20 | **Health/latency/error-rate dashboard** | 4-8 hrs | Grafana Cloud free tier. Visualize request volume, p95 latency, error rates. Currently blind to performance trends. |
+| 2.21 | **Graceful shutdown** | 2-3 hrs | Drain in-flight requests on SIGTERM before closing DB. Currently deploys may interrupt active proxy requests or consent flows. |
 
 ### Testing
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.24 | E2E passkey account test (last go-live checklist item) | 2-4 hrs | SECURITY-DEBT |
-| 2.25 | Error path tests for wizard_pages.py | 3-4 hrs | *New* |
-| 2.26 | Concurrent card token issuance edge cases | 2-3 hrs | *New* |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 2.22 | **E2E passkey account test** | 2-4 hrs | Last unchecked go-live checklist item in SECURITY-DEBT. Requires WebAuthn test harness (e.g., `py_webauthn` soft authenticator). |
+| 2.23 | **Error path tests for wizard_pages.py** | 3-4 hrs | Happy paths well tested but error/edge cases (expired CSRF, malformed spec, concurrent draft edits) not covered. |
+| 2.24 | **Concurrent card token issuance edge cases** | 2-3 hrs | Two agents requesting tokens from the same Company Card simultaneously — verify budget accounting is atomic. |
 
 ### Service integration (deferred past HM MVS)
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 2.27 | `revoke_honored` grant state | 3-4 hrs | development-plan |
-| 2.28 | Grant-status reconciliation endpoint | 3-4 hrs | development-plan |
-| 2.29 | Company Card revocation fan-out | 2-3 hrs | development-plan |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 2.25 | **`revoke_honored` grant state** | 3-4 hrs | When a service confirms it has processed a revocation, mark the grant as `revoke_honored` (not just `revoked`). Needed for audit trail completeness. |
+| 2.26 | **Grant-status reconciliation endpoint** | 3-4 hrs | Services need a way to query "what grants are active for my service?" to reconcile their state with Cafe's. |
+| 2.27 | **Company Card revocation fan-out** | 2-3 hrs | Revoking a Company Card should revoke all grants issued under it. Currently only the card itself is revoked; child grants are orphaned. |
 
 ---
 
 ## M3 — Scale (6+ months)
 
-| # | Item | Effort | Source |
-|---|------|--------|--------|
-| 3.1 | SEC-7: Company wizard passkey auth | 8-16 hrs | SECURITY-DEBT |
-| 3.2 | Accessibility (aria labels, role="alert", aria-live) | 8-16 hrs | *New* |
-| 3.3 | Mobile responsiveness for consent/approval pages | 4-8 hrs | *New* |
-| 3.4 | Deferred binding background resolver | 4-6 hrs | development-plan |
-| 3.5 | Account linking/unlinking/reconciliation | 8-16 hrs | development-plan |
-| 3.6 | Two-phase audit log | 4-6 hrs | development-plan |
-| 3.7 | SQLite → PostgreSQL migration | 16-24 hrs | development-plan |
-| 3.8 | Agent SDK (`agentcafe-py`) | 16-24 hrs | development-plan |
-| 3.9 | OpenTelemetry distributed tracing | 8-16 hrs | development-plan |
-| 3.10 | Secrets manager integration | 2-4 hrs | development-plan |
+| # | Item | Effort | Notes |
+|---|------|--------|-------|
+| 3.1 | **Company wizard passkey auth** | 8-16 hrs | SEC-7: Company accounts use password-only auth. A compromised company account can publish malicious service definitions. Add passkey as primary auth, password as fallback during migration. |
+| 3.2 | **Accessibility** | 8-16 hrs | No aria labels, `role="alert"`, or `aria-live` regions. Consent and approval pages are critical flows that must be screen-reader accessible. |
+| 3.3 | **Mobile responsiveness** | 4-8 hrs | Consent and approval pages are the most likely to be accessed on mobile (human gets notification, taps link). Currently desktop-only layout. |
+| 3.4 | **Deferred binding background resolver** | 4-6 hrs | When a binding can't be established immediately (service down, async provisioning), queue it and resolve in background. Currently fails synchronously. |
+| 3.5 | **Account linking/unlinking/reconciliation** | 8-16 hrs | Humans may want multiple identities or to merge accounts. No account linking today — each passkey credential is one account. |
+| 3.6 | **Two-phase audit log** | 4-6 hrs | Current audit log is append-only but not tamper-evident. Add hash chaining so log entries can be verified as unmodified. |
+| 3.7 | **SQLite → PostgreSQL migration** | 16-24 hrs | SQLite works for single-instance deployment. PostgreSQL needed for horizontal scaling, concurrent writes, and connection pooling. |
+| 3.8 | **Agent SDK (`agentcafe-py`)** | 16-24 hrs | Python SDK wrapping the Cafe API: `cafe.discover()`, `cafe.order()`, `cafe.check_consent()`. Reduces integration friction for agent developers. |
+| 3.9 | **OpenTelemetry distributed tracing** | 8-16 hrs | Trace requests end-to-end: agent → Cafe → service backend. Critical for debugging latency in proxied requests. |
+| 3.10 | **Secrets manager integration** | 2-4 hrs | Move `CAFE_ENCRYPTION_KEY`, `PASSPORT_SIGNING_SECRET`, and RSA keys from env vars to Fly.io secrets or Vault. Reduces exposure surface. |
 
 ---
 
@@ -175,43 +180,54 @@ Human Memory launched as the first real service on April 7, 2026 (7 actions, joi
 | Item | Why |
 |------|-----|
 | **Audit log web viewer** | Admin dashboard already shows recent logs. Full tamper-detection browser is impressive engineering with zero user demand at this scale. |
-| **Consent delivery mechanism** | Correct architectural decision to leave this to agents. Cafe provides URL, not notification channel. |
+| **Consent delivery mechanism** | Correct architectural decision to leave this to agents. Cafe provides a consent URL; agents deliver it to humans via their own channels. Adding email/push here would duplicate what agents already do. |
 | **Admin pagination** | One admin user, hardcoded LIMIT 50 is fine until 50+ services. |
 | **Capability wizard UI for service identity model** | Superseded by JV integration page (step 3b) already built. |
+| **Agent-side SDK before real agent testing** | Building `agentcafe-py` (3.8) before testing with real agents (1.9) risks building for imagined pain points. Agent testing first, SDK shaped by results. |
 
 ---
 
 ## Dependency Map
 
 ```
-0.1 (backup key) ──── irreversible if lost, blocks nothing but consequences are permanent
-0.6 (E2E JV test) ──── should complete before quarantine lifts April 14
+M0 (do immediately)
+  0.1-0.4 (ops actions) ──── no code, just config/backups
+  0.5-0.7 (security hardening) ──── small code changes, no deps
+  0.8 (E2E JV test) ──── should pass before quarantine lifts April 14
 
-1.1 (garbled scopes) ──┬── 1.2 (garbled action IDs, same root cause)
-                       └── 1.4 (operationId heuristic, builds on same parser code)
-1.1 + 1.3 + 1.5 ──── block M1 (self-serve onboarding)
+M1 (2nd service ready)
+  1.1 (garbled scopes) ──┬── 1.2 (garbled action IDs, same parser code)
+                         └── 1.4 (operationId heuristic, builds on 1.1)
+  1.1 + 1.3 + 1.5 ──── block self-serve onboarding (M1 gate)
+  1.9 (agent testing) ──── results reprioritize M2 agent experience items
+  1.10 (SQLite backup) ──── HM data is live and unbackuped, urgent
 
-2.1 (agent testing) ──── informs priority of 2.2-2.5 (do first, then decide)
-2.6 (email verification) ──── 2.7 (password recovery needs verified email)
+M2 (public beta)
+  1.9 results ──── inform priority of 2.1-2.4
+  2.5 (email verification) ──── 2.6 (password recovery needs verified email)
+  2.25 (revoke_honored) ──── 2.26 (reconciliation endpoint uses this state)
 ```
 
 ---
 
-## Gaps Identified (not in any existing doc)
+## Gaps Found During Consolidation
 
-| Gap | Milestone | Reasoning |
-|-----|-----------|-----------|
-| RSA signing key backup | M0 | Same risk as encryption key — if auto-generated and lost, all tokens unverifiable |
-| Cookie `secure=True` flag | M0 | 5 call sites missing. Production is HTTPS but flag should be explicit |
-| Company email case normalization | M0 | Prevents duplicate accounts, data corruption |
-| Wizard CSRF `abs()` consistency | M0 | `pages.py` uses `abs()`, `wizard_pages.py` doesn't |
-| Config startup validation | M1 | Silent random secret generation = tokens invalid on restart |
-| CORS tightening | M1 | Defaults to `*` in production |
-| JSON body size limits | M1 | No payload cap on any endpoint |
-| .env.example file | M1 | No template for required env vars |
-| Rate limit headers on responses | M2 | Agents can't discover limits without reading code |
-| Graceful shutdown handling | M2 | In-flight requests interrupted during deploys |
+These items were not tracked in any existing document and were discovered during this audit:
+
+| Gap | Placed in | Why it matters |
+|-----|-----------|----------------|
+| RSA signing key backup | M0 (0.2) | Same catastrophic-loss risk as encryption key |
+| Cookie `secure=True` flag | M0 (0.5) | 5 call sites missing explicit flag |
+| Company email normalization | M0 (0.6) | Allows duplicate company accounts |
+| Wizard CSRF `abs()` fix | M0 (0.7) | Accepts future-dated CSRF tokens |
+| CORS tightening | M0 (0.3) | Defaults to `*` in production |
+| Structured logging in prod | M0 (0.4) | Implemented in code but not enabled |
+| Config startup validation | M1 (1.11) | Silent random secret = tokens invalid on restart |
+| JSON body size limits | M1 (1.17) | No payload cap on any endpoint |
+| `.env.example` file | M1 (1.14) | No template for required env vars |
+| Rate limit response headers | M2 (2.3) | Agents can't discover limits without reading code |
+| Graceful shutdown | M2 (2.21) | Deploys may interrupt active requests |
 
 ---
 
-*This document is the single source of truth for all open work. Items from `docs/todo-onboarding-improvements.md`, `docs/security/SECURITY-DEBT.md`, `docs/planning/development-plan.md`, and `docs/planning/ux-paths.md` are consolidated here.*
+*Single source of truth for all open work. Consolidated from `docs/todo-onboarding-improvements.md` (retired), `docs/security/SECURITY-DEBT.md`, `docs/planning/development-plan.md`, and `docs/planning/ux-paths.md`.*
