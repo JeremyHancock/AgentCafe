@@ -183,7 +183,7 @@ The strategic review (Grok + ChatGPT adversarial reviews, March 6 2026) identifi
   - Budget tracking: `report-spend` endpoint, budget enforcement on token issuance, period reset
   - 40 tests covering card lifecycle, edit constraints, Tab pages, card suggestions, budget tracking
   - See `docs/planning/company-cards-plan.md` for full design
-- 🔜 **8.2 First Real Service: Human Memory** — The Cafe's first real onboarded service and first jointly-verified integration. Developed as a **separate project/repo** with its own API and deployment. AC-side infrastructure complete (Service Integration Standard). HM-side implementation in progress: artifact validation, `/integration/revoke` endpoint, dual auth path. Onboards to the Cafe through the standard company wizard — dogfooding the onboarding flow. Creates the bootstrap traffic wedge.
+- ✅ **8.2 First Real Service: Human Memory** — Published April 7 2026. 7 actions, jointly-verified mode, quarantine until April 14. Onboarded through the standard company wizard (dogfooding the onboarding flow). Onboarding feedback captured in `docs/todo-onboarding-improvements.md`. HM advisor notes at `human-memory/docs/integration/ac-onboarding-wizard-notes.md`.
 - ✅ **8.3 MCP Server Adapter** — 4-tool LLM-native discovery pattern (`cafe.search`, `cafe.get_details`, `cafe.request_card`, `cafe.invoke`) via remote Streamable HTTP at `/mcp`. Stateless transport via official `mcp` SDK. MCP adapts to the Cafe — not the other way around (ADR-029).
   - `cafe/mcp_adapter.py`: FastMCP server with 4 tools, mounted at `/mcp` in main.py
   - `cafe.search`: keyword search across Menu, returns summaries only (service_id, action_id, name, short_description, risk_tier, relevance)

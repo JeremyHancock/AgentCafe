@@ -52,7 +52,7 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - Agents browse freely, order or leave.
 - Company Onboarding Wizard is the product we polish until it feels magical.
 - Human consent handling is explicitly an agent-side concern.
-- Three mocked services for MVP; first real service (Agent Memory) is a separate project that onboards through the wizard.
+- Three demo services for testing; Human Memory is the first real production service, onboarded April 7 2026 via the wizard (jointly-verified mode, 7 actions).
 - Security and company trust first.
 
 ## 4. Tech Stack (Locked)
@@ -87,7 +87,8 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
 - `ENRICHMENT_MODEL` configurable via env var, `x-agentcafe-*` extension merging
 - Confidence scores in review/preview, spec upload (multipart) + URL fetch
 - Company Onboarding Wizard Dashboard — **rebuilt as Jinja2 server-rendered pages** (replaced Next.js)
-  - Pages: `/services/login`, `/services/register`, `/services/onboard` (4-step wizard), `/services` (management), `/admin` (platform admin)
+  - Pages: `/services/register`, `/services/onboard` (4-step wizard + JV integration step), `/services` (management), `/admin` (platform admin)
+  - Login unified at `/login` (handles both human and company accounts); `/services/login` redirects to `/login`
 - 11 E2E integration tests
 
 **Phase 6 — COMPLETE.** Packaging & Release Prep:
@@ -148,7 +149,7 @@ When ordering: POST /cafe/order with service_id, action_id, passport, inputs.
   - Hooks in `pages.py` (dashboard policy revoke, tab card revoke) and `cards.py` (API card revoke)
   - Background retry task in `main.py` lifespan (own DB connection, polls every 30s)
   - 25 tests in `test_revocation_delivery.py`
-- **HM onboarding readiness:** Phase 2 answers sent (`docs/architecture/service-integration/phase-2-answers-for-hm.md`). AC infrastructure complete. Awaiting HM-side implementation (artifact validation, `/integration/revoke` endpoint, dual auth path).
+- **HM onboarded (2026-04-07):** Human Memory published as first real service — 7 actions, jointly-verified mode, quarantine until 2026-04-14. Onboarding feedback captured in `docs/todo-onboarding-improvements.md`.
 
 **Production Readiness — COMPLETE.** Security hardening for real traffic:
 - SEC-9: Card approval page now requires passkey assertion (matching consent pattern)
