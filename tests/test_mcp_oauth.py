@@ -6,8 +6,8 @@ and access AgentCafe's MCP tools.
 
 from __future__ import annotations
 
-import json
-import secrets
+# pylint: disable=redefined-outer-name
+
 import time
 
 import pytest
@@ -16,10 +16,9 @@ import pytest_asyncio
 from agentcafe.cafe.mcp_oauth import (
     AgentCafeOAuthProvider,
     ACCESS_TOKEN_TTL,
-    AUTH_CODE_TTL,
 )
 from agentcafe.db.engine import get_db
-from mcp.server.auth.provider import AccessToken, AuthorizationCode, AuthorizationParams, RefreshToken
+from mcp.server.auth.provider import AuthorizationParams
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -58,7 +57,7 @@ def _make_auth_params(**overrides) -> AuthorizationParams:
 # ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture(autouse=True)
-async def _ensure_db(seeded_db):
+async def _ensure_db(seeded_db):  # pylint: disable=unused-argument
     """Ensure the seeded database is available (includes migration 0015)."""
     yield
 
