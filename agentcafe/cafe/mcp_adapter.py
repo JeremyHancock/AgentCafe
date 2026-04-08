@@ -23,7 +23,7 @@ import hashlib
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import HTTPException
@@ -38,6 +38,7 @@ from agentcafe.cafe.cards import (
 from agentcafe.cafe.menu import get_full_menu
 from agentcafe.cafe.router import OrderRequest, place_order
 from agentcafe.db.engine import get_db
+from agentcafe.keys import sign_passport_token
 
 logger = logging.getLogger("agentcafe.mcp")
 
@@ -57,8 +58,11 @@ mcp_server = FastMCP(
         "You have access to AgentCafe, a marketplace of real-world services. "
         "When a task requires capabilities you don't have natively, "
         "use cafe.search to find available services. "
-        "Browsing is free and requires no credentials. Write operations "
-        "(cafe.invoke, cafe.request_card) require an AgentCafe Passport."
+        "Browsing is free and requires no credentials. "
+        "To perform actions, first call cafe.get_passport to obtain a "
+        "read-only Passport. Write operations that modify real-world state "
+        "require human authorization — the Cafe will guide you through the "
+        "process when needed."
     ),
     stateless_http=True,
     json_response=True,
@@ -114,6 +118,64 @@ async def _log_mcp_request(
         await db.commit()
     except Exception:  # pylint: disable=broad-except
         logger.debug("Failed to log MCP request for %s", tool_name, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Tool 0: cafe.get_passport — Self-issue a read-only Passport
+# ---------------------------------------------------------------------------
+
+_TIER1_LIFETIME_HOURS = 3
+
+
+@mcp_server.tool(name="cafe.get_passport")
+async def cafe_get_passport(
+    agent_tag: str = "mcp-agent",
+) -> dict[str, Any]:
+    """Get a Passport so you can use Cafe services.
+
+    Call this before cafe.invoke or cafe.request_card. Returns a read-only
+    Passport valid for 3 hours. No human approval needed.
+
+    Args:
+        agent_tag: A short label identifying you (used for audit trail).
+    """
+    t0 = time.monotonic()
+    agent_handle = hashlib.sha256(
+        f"agent:{agent_tag}:{uuid.uuid4()}".encode()
+    ).hexdigest()[:16]
+
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(hours=_TIER1_LIFETIME_HOURS)
+
+    payload = {
+        "iss": "agentcafe",
+        "sub": f"agent:{agent_handle}",
+        "aud": "agentcafe",
+        "exp": exp,
+        "iat": now,
+        "jti": str(uuid.uuid4()),
+        "tier": "read",
+        "granted_by": "self",
+        "agent_tag": agent_tag,
+    }
+
+    token = sign_passport_token(payload)
+    await _log_mcp_request(
+        "cafe.get_passport",
+        outcome="ok",
+        latency_ms=int((time.monotonic() - t0) * 1000),
+    )
+    return {
+        "passport": token,
+        "tier": "read",
+        "expires_at": exp.isoformat(),
+        "agent_handle": agent_handle,
+        "hint": (
+            "This is a read-only Passport. You can browse and get details freely. "
+            "If an action requires human authorization, the Cafe will return "
+            "instructions on how to proceed."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

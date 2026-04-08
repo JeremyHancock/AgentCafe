@@ -288,11 +288,14 @@ async def test_invoke_unknown_action(cafe_http):
 # Tool listing tests
 # ---------------------------------------------------------------------------
 
-def test_mcp_server_has_four_tools():
-    """The MCP server exposes exactly 4 tools per ADR-029."""
+def test_mcp_server_has_five_tools():
+    """The MCP server exposes exactly 5 tools."""
     tools = mcp_server._tool_manager.list_tools()
     tool_names = {t.name for t in tools}
-    assert tool_names == {"cafe.search", "cafe.get_details", "cafe.request_card", "cafe.invoke"}
+    assert tool_names == {
+        "cafe.get_passport", "cafe.search", "cafe.get_details",
+        "cafe.request_card", "cafe.invoke",
+    }
 
 
 def test_mcp_server_name():
