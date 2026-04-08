@@ -246,17 +246,135 @@ async def test_invoke_read_action_success(cafe_http):
 
 @pytest.mark.asyncio
 async def test_invoke_write_action_needs_auth(cafe_http):
-    """invoke a write action with Tier-1 passport returns HUMAN_AUTH_REQUIRED."""
+    """invoke a write action with Tier-1 passport returns HUMAN_AUTH_REQUIRED.
+
+    Uses fixright-home to avoid state leaking from prior card tests on stayright.
+    """
     passport = await _register_agent(cafe_http)
+    result = await cafe_invoke(
+        service_id="fixright-home",
+        action_id="book-appointment",
+        passport=passport,
+        inputs={"provider_id": "p1", "service_type": "plumbing", "date": "2026-05-01", "contact_name": "Test"},
+    )
+    assert result.get("error") == "HUMAN_AUTH_REQUIRED"
+    assert result.get("hint")
+
+
+# ---------------------------------------------------------------------------
+# cafe.invoke auto-resolve tests
+# ---------------------------------------------------------------------------
+
+async def _register_human_mcp(cafe_http_client) -> tuple[str, str]:
+    """Register a human via the API and return (user_id, session_token)."""
+    import uuid as uuid_mod
+    resp = await cafe_http_client.post("/human/register", json={
+        "email": f"mcp-{uuid_mod.uuid4().hex[:6]}@example.com",
+        "password": "secure-password-123",
+        "display_name": "MCPTestUser",
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    return data["user_id"], data["session_token"]
+
+
+async def _approve_card_via_api(cafe_http_client, card_id, user_id, session):
+    """Approve a card via the REST API (used by test helpers)."""
+    resp = await cafe_http_client.post(
+        f"/cards/{card_id}/approve",
+        json={
+            "passkey_challenge_id": user_id,
+            "passkey_credential": {},
+            "first_use_confirmation": False,
+            "duration_days": 30,
+        },
+        headers={"Authorization": f"Bearer {session}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_invoke_auto_resolves_with_approved_card(cafe_http):
+    """invoke with Tier-1 passport auto-resolves via an approved card."""
+    passport = await _register_agent(cafe_http)
+    user_id, session = await _register_human_mcp(cafe_http)
+
+    # Request and approve a card
+    card_result = await cafe_request_card(
+        service_id="stayright-hotels", passport=passport,
+    )
+    card_id = card_result["card_id"]
+    await _approve_card_via_api(cafe_http, card_id, user_id, session)
+
+    # Now invoke a write action — should auto-resolve
     result = await cafe_invoke(
         service_id="stayright-hotels",
         action_id="book-room",
         passport=passport,
-        inputs={"room_id": "room-101", "guest_name": "Test User", "nights": 2},
+        inputs={"room_id": "room-101", "guest_name": "Auto Test", "nights": 2},
+    )
+    # Should succeed (no HUMAN_AUTH_REQUIRED)
+    assert result.get("error") != "HUMAN_AUTH_REQUIRED", f"Auto-resolve failed: {result}"
+
+
+@pytest.mark.asyncio
+async def test_invoke_pending_card_returns_activation_code(cafe_http):
+    """invoke with a pending card returns the activation code in the error."""
+    passport = await _register_agent(cafe_http)
+
+    # Request a card but don't approve it (use quickbite to avoid state from other tests)
+    card_result = await cafe_request_card(
+        service_id="quickbite-delivery", passport=passport,
+    )
+
+    # invoke should fail but include the pending card info
+    result = await cafe_invoke(
+        service_id="quickbite-delivery",
+        action_id="place-order",
+        passport=passport,
+        inputs={"items": [{"name": "Sandwich", "quantity": 1}], "delivery_address": "123 Test St"},
     )
     assert result.get("error") == "HUMAN_AUTH_REQUIRED"
-    assert result.get("card_suggestion") is not None
-    assert result.get("hint")
+    assert result.get("card_id") == card_result["card_id"]
+    assert result.get("activation_code") == card_result["activation_code"]
+    assert "pending" in result.get("hint", "").lower()
+
+
+@pytest.mark.asyncio
+async def test_invoke_auto_resolve_excluded_action_fails(cafe_http):
+    """invoke auto-resolve skips cards where the action is excluded."""
+    passport = await _register_agent(cafe_http)
+    user_id, session = await _register_human_mcp(cafe_http)
+
+    # Request card
+    card_result = await cafe_request_card(
+        service_id="stayright-hotels", passport=passport,
+    )
+    card_id = card_result["card_id"]
+
+    # Approve with book-room excluded
+    resp = await cafe_http.post(
+        f"/cards/{card_id}/approve",
+        json={
+            "passkey_challenge_id": user_id,
+            "passkey_credential": {},
+            "first_use_confirmation": False,
+            "duration_days": 30,
+            "excluded_action_ids": ["book-room"],
+        },
+        headers={"Authorization": f"Bearer {session}"},
+    )
+    assert resp.status_code == 200
+
+    # invoke should not auto-resolve because the action is excluded
+    result = await cafe_invoke(
+        service_id="stayright-hotels",
+        action_id="book-room",
+        passport=passport,
+        inputs={"room_id": "room-101", "guest_name": "Test", "nights": 1},
+    )
+    assert result.get("error") == "HUMAN_AUTH_REQUIRED"
 
 
 @pytest.mark.asyncio
