@@ -1109,11 +1109,44 @@ async def activate_lookup(
         }, status_code=400)
 
     db = await get_db()
+
+    # Try consents table first (legacy consent flow)
     cursor = await db.execute(
         "SELECT * FROM consents WHERE activation_code = ? AND status = 'pending'",
         (code,),
     )
     consent = await cursor.fetchone()
+
+    # If not a consent code, try company_cards (Company Card flow)
+    if not consent:
+        card_cursor = await db.execute(
+            "SELECT id, status, expires_at FROM company_cards "
+            "WHERE activation_code = ? AND status = 'pending'",
+            (code,),
+        )
+        card = await card_cursor.fetchone()
+        if card:
+            # Check card expiry
+            card_expires = datetime.fromisoformat(card["expires_at"])
+            if card_expires.tzinfo is None:
+                card_expires = card_expires.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > card_expires:
+                return templates.TemplateResponse(request, "activate.html", {
+                    "step": "enter_code",
+                    "code": code,
+                    "error": "This activation code has expired. Ask the agent for a new one.",
+                    "csrf_token": _generate_csrf_token(request),
+                }, status_code=410)
+
+            # Card found — redirect to card approval page (with login gate)
+            session = _get_session(request)
+            if session:
+                return RedirectResponse(
+                    url=f"/tab/approve/{card['id']}", status_code=303,
+                )
+            return RedirectResponse(
+                url=f"/login?next=/tab/approve/{card['id']}", status_code=303,
+            )
 
     if not consent:
         return templates.TemplateResponse(request, "activate.html", {
@@ -1506,6 +1539,32 @@ async def tab_page(request: Request, action: str = ""):
         "active_nav": "tab",
         **nav,
     })
+
+
+# ---------------------------------------------------------------------------
+# GET /authorize/card/{card_id} — Public entry point for card approval
+#
+# This is the consent_url returned by POST /cards/request. It redirects
+# to the internal /tab/approve/{card_id} page with a login gate.
+# ---------------------------------------------------------------------------
+
+@pages_router.get("/authorize/card/{card_id}", response_class=HTMLResponse)
+async def authorize_card_redirect(request: Request, card_id: str):
+    """Redirect to the card approval page, requiring login."""
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, status FROM company_cards WHERE id = ?", (card_id,),
+    )
+    card = await cursor.fetchone()
+    if not card or card["status"] != "pending":
+        return RedirectResponse(url="/tab", status_code=303)
+
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse(
+            url=f"/login?next=/tab/approve/{card_id}", status_code=303,
+        )
+    return RedirectResponse(url=f"/tab/approve/{card_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
