@@ -9,9 +9,10 @@ Tools:
     cafe.request_card — Initiate a Company Card request
     cafe.invoke      — Execute a service action via the Cafe proxy
 
-OAuth 2.0 (backlog 1.18): MCP SDKs require OAuth for HTTP transport.
-The server is configured with an OAuthAuthorizationServerProvider that maps
-OAuth tokens to AgentCafe's Passport semantics. See mcp_oauth.py.
+Auth: OAuth 2.0 disabled — MCP clients (Claude Code, etc.) do not yet
+reliably support the OAuth flow for HTTP transport. The server is open.
+Write operations still require a valid Passport (checked inside each tool).
+OAuth can be re-enabled via mcp_oauth.py once clients catch up.
 
 See docs/strategy/strategic-review-briefing.md §8.2 and ADR-029.
 """
@@ -26,9 +27,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
-from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
-from pydantic import AnyHttpUrl
 
 from agentcafe.cafe.cards import (
     CardRequestBody,
@@ -36,50 +35,26 @@ from agentcafe.cafe.cards import (
     request_card as _cards_request_card,
 )
 from agentcafe.cafe.menu import get_full_menu
-from agentcafe.cafe.mcp_oauth import AgentCafeOAuthProvider
 from agentcafe.cafe.router import OrderRequest, place_order
 from agentcafe.db.engine import get_db
 
 logger = logging.getLogger("agentcafe.mcp")
 
 # ---------------------------------------------------------------------------
-# MCP Server — stateless, Streamable HTTP with OAuth 2.0
+# MCP Server — stateless, Streamable HTTP (open access)
+#
+# OAuth removed: MCP clients (Claude Code, etc.) do not yet reliably
+# support the OAuth 2.0 authorization flow for HTTP transport. The
+# server is open so any agent can connect and browse the Menu. Write
+# operations still require a valid Passport (checked inside each tool).
+# OAuth support can be re-enabled once MCP clients catch up.
 # ---------------------------------------------------------------------------
-
-# Default issuer URL — overridden by configure_mcp_server() at startup.
-_DEFAULT_ISSUER = AnyHttpUrl("http://localhost:8000/mcp")
-
-_oauth_provider = AgentCafeOAuthProvider()
-
-_auth_settings = AuthSettings(
-    issuer_url=_DEFAULT_ISSUER,
-    resource_server_url=_DEFAULT_ISSUER,
-    client_registration_options=ClientRegistrationOptions(
-        enabled=True,
-        valid_scopes=["cafe.search", "cafe.get_details", "cafe.request_card", "cafe.invoke"],
-        default_scopes=["cafe.search", "cafe.get_details", "cafe.request_card", "cafe.invoke"],
-    ),
-    revocation_options=RevocationOptions(enabled=True),
-    required_scopes=[],  # No required scopes — all 4 tools are accessible once authed
-)
 
 mcp_server = FastMCP(
     "AgentCafe",
     stateless_http=True,
     json_response=True,
-    auth=_auth_settings,
-    auth_server_provider=_oauth_provider,
 )
-
-
-def configure_mcp_server(public_url: str) -> None:
-    """Update issuer/resource URLs once public_url is known (called at startup)."""
-    if not public_url:
-        return
-    mcp_url = AnyHttpUrl(f"{public_url.rstrip('/')}/mcp")
-    mcp_server.settings.auth.issuer_url = mcp_url
-    mcp_server.settings.auth.resource_server_url = mcp_url
-    logger.info("MCP OAuth issuer URL: %s", mcp_url)
 
 
 # ---------------------------------------------------------------------------
