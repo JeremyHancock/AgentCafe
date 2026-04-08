@@ -28,6 +28,7 @@ from typing import Any
 from fastapi import HTTPException
 from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, RevocationOptions
 from mcp.server.fastmcp import FastMCP
+from pydantic import AnyHttpUrl
 
 from agentcafe.cafe.cards import (
     CardRequestBody,
@@ -46,7 +47,7 @@ logger = logging.getLogger("agentcafe.mcp")
 # ---------------------------------------------------------------------------
 
 # Default issuer URL — overridden by configure_mcp_server() at startup.
-_DEFAULT_ISSUER = "http://localhost:8000/mcp"
+_DEFAULT_ISSUER = AnyHttpUrl("http://localhost:8000/mcp")
 
 _oauth_provider = AgentCafeOAuthProvider()
 
@@ -75,7 +76,7 @@ def configure_mcp_server(public_url: str) -> None:
     """Update issuer/resource URLs once public_url is known (called at startup)."""
     if not public_url:
         return
-    mcp_url = f"{public_url.rstrip('/')}/mcp"
+    mcp_url = AnyHttpUrl(f"{public_url.rstrip('/')}/mcp")
     mcp_server.settings.auth.issuer_url = mcp_url
     mcp_server.settings.auth.resource_server_url = mcp_url
     logger.info("MCP OAuth issuer URL: %s", mcp_url)

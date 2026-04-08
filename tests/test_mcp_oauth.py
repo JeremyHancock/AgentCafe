@@ -293,3 +293,41 @@ async def test_as_metadata_under_mcp(seeded_db):  # pylint: disable=unused-argum
         assert "authorization_endpoint" in data
         assert "token_endpoint" in data
         assert "registration_endpoint" in data
+
+
+@pytest.mark.asyncio
+async def test_mcp_oauth_urls_use_public_url(seeded_db):  # pylint: disable=unused-argument
+    """Verify MCP OAuth metadata serves production URLs, not localhost defaults.
+
+    The MCP SDK snapshots issuer_url into Starlette routes when
+    streamable_http_app() is called. configure_mcp_server() must run
+    BEFORE create_cafe_app() so the correct URLs are baked in.
+    """
+    from agentcafe.cafe.mcp_adapter import configure_mcp_server
+    from agentcafe.main import create_cafe_app
+    from httpx import ASGITransport, AsyncClient
+
+    configure_mcp_server("https://example.com")
+    try:
+        app = create_cafe_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Check the authorization server metadata baked into the MCP sub-app
+            resp = await client.get("/mcp/.well-known/oauth-authorization-server")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["issuer"] == "https://example.com/mcp"
+            assert "https://example.com/mcp" in data["token_endpoint"]
+            assert "https://example.com/mcp" in data["authorization_endpoint"]
+
+            # Check the root-level protected resource metadata
+            resp2 = await client.get("/.well-known/oauth-protected-resource/mcp")
+            assert resp2.status_code == 200
+            data2 = resp2.json()
+            assert data2["resource"] == "https://example.com/mcp"
+            assert "https://example.com/mcp" in str(data2["authorization_servers"])
+    finally:
+        # Restore default for other tests
+        from agentcafe.cafe.mcp_adapter import _DEFAULT_ISSUER, mcp_server as _mcp
+        _mcp.settings.auth.issuer_url = _DEFAULT_ISSUER
+        _mcp.settings.auth.resource_server_url = _DEFAULT_ISSUER
