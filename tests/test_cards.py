@@ -994,3 +994,180 @@ async def test_report_spend_revoked_card(cafe_client):
         headers={"Authorization": f"Bearer {agent_token}"},
     )
     assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Card Activation Code Flow Tests
+# ---------------------------------------------------------------------------
+
+def _extract_csrf(html: str) -> str:
+    """Extract CSRF token from HTML form."""
+    import re
+    match = re.search(r'name="csrf_token"\s+value="([^"]+)"', html)
+    return match.group(1) if match else ""
+
+
+@pytest.mark.asyncio
+async def test_activate_card_code_logged_in_redirects(cafe_client):
+    """POST /activate with a card activation code while logged in should redirect to /tab/approve."""
+    agent_token = await _register_agent(cafe_client)
+    _, session = await _register_human(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_data = resp.json()
+    code = card_data["activation_code"]
+    card_id = card_data["card_id"]
+
+    # Set session cookie, then get CSRF so it matches the session
+    cafe_client.cookies.set("cafe_session", session)
+    page = await cafe_client.get("/activate")
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post(
+        "/activate",
+        data={"code": code, "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert f"/tab/approve/{card_id}" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_activate_card_code_not_logged_in_redirects_to_login(cafe_client):
+    """POST /activate with a card activation code while not logged in should redirect to login."""
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_data = resp.json()
+    code = card_data["activation_code"]
+    card_id = card_data["card_id"]
+
+    # Clear any cookies to ensure not logged in, then get CSRF
+    cafe_client.cookies.clear()
+    page = await cafe_client.get("/activate")
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post(
+        "/activate",
+        data={"code": code, "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/login" in resp.headers["location"]
+    assert f"/tab/approve/{card_id}" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_activate_expired_card_code_shows_error(cafe_client):
+    """POST /activate with an expired card activation code should show expiry error."""
+    from agentcafe.db.engine import get_db as _get_db
+    from datetime import datetime, timezone, timedelta
+
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_data = resp.json()
+    code = card_data["activation_code"]
+
+    # Expire the card
+    db = await _get_db()
+    expired = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    await db.execute(
+        "UPDATE company_cards SET expires_at = ? WHERE activation_code = ?",
+        (expired, code),
+    )
+    await db.commit()
+
+    page = await cafe_client.get("/activate")
+    csrf = _extract_csrf(page.text)
+
+    resp = await cafe_client.post(
+        "/activate",
+        data={"code": code, "csrf_token": csrf},
+    )
+    assert resp.status_code == 410
+    assert "expired" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# /authorize/card/{card_id} Route Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_authorize_card_logged_in_redirects_to_approve(cafe_client):
+    """GET /authorize/card/{card_id} while logged in should redirect to /tab/approve."""
+    agent_token = await _register_agent(cafe_client)
+    _, session = await _register_human(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_id = resp.json()["card_id"]
+
+    resp = await cafe_client.get(
+        f"/authorize/card/{card_id}",
+        cookies={"cafe_session": session},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert f"/tab/approve/{card_id}" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_card_not_logged_in_redirects_to_login(cafe_client):
+    """GET /authorize/card/{card_id} without session should redirect to login."""
+    agent_token = await _register_agent(cafe_client)
+
+    resp = await cafe_client.post(
+        "/cards/request",
+        json={"service_id": "stayright-hotels"},
+        headers={"Authorization": f"Bearer {agent_token}"},
+    )
+    card_id = resp.json()["card_id"]
+
+    resp = await cafe_client.get(
+        f"/authorize/card/{card_id}",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/login" in resp.headers["location"]
+    assert f"/tab/approve/{card_id}" in resp.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_authorize_card_nonexistent_redirects_to_tab(cafe_client):
+    """GET /authorize/card/{nonexistent} should redirect to /tab."""
+    resp = await cafe_client.get(
+        "/authorize/card/nonexistent-id",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/tab")
+
+
+@pytest.mark.asyncio
+async def test_authorize_card_already_approved_redirects_to_tab(cafe_client):
+    """GET /authorize/card/{card_id} for an already-approved card should redirect to /tab."""
+    _, _, session, card_id = await _request_and_approve_card(cafe_client)
+
+    resp = await cafe_client.get(
+        f"/authorize/card/{card_id}",
+        cookies={"cafe_session": session},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/tab")
