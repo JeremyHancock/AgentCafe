@@ -15,7 +15,6 @@ import json
 import logging
 import secrets
 import time
-from typing import Any
 
 from pydantic import AnyUrl
 
@@ -23,10 +22,7 @@ from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
     AuthorizationParams,
-    AuthorizeError,
-    OAuthAuthorizationServerProvider,
     RefreshToken,
-    TokenError,
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
