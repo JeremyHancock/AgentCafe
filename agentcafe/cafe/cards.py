@@ -329,10 +329,10 @@ async def _create_jv_grant_if_needed(
     service_id: str,
     card_id: str,
 ) -> None:
-    """Create an authorization grant if the card covers jointly-verified actions.
+    """Create identity binding + authorization grant for jointly-verified services.
 
     Called during card approval. For standard-mode services, this is a no-op.
-    The identity binding should already exist from prior consent approval.
+    Creates the human_service_accounts row (if missing) and the authorization grant.
     """
     cursor = await db.execute(
         "SELECT integration_mode FROM proxy_configs "
@@ -343,6 +343,36 @@ async def _create_jv_grant_if_needed(
         return
 
     now = datetime.now(timezone.utc).isoformat()
+
+    # Ensure identity binding exists (same pattern as consent.py)
+    cursor = await db.execute(
+        "SELECT id, binding_status FROM human_service_accounts "
+        "WHERE ac_human_id = ? AND service_id = ?",
+        (user_id, service_id),
+    )
+    binding_row = await cursor.fetchone()
+
+    if not binding_row:
+        binding_id = str(uuid.uuid4())
+        service_account_id = user_id  # MVS: AC user ID as service account ID
+        await db.execute(
+            """INSERT INTO human_service_accounts
+               (id, ac_human_id, service_id, service_account_id,
+                binding_method, binding_status, identity_binding,
+                linked_at, updated_at)
+               VALUES (?, ?, ?, ?, 'broker_delegated', 'active', 'broker_delegated', ?, ?)""",
+            (binding_id, user_id, service_id, service_account_id, now, now),
+        )
+        logger.info("Created service binding via card: user=%s service=%s",
+                     user_id, service_id)
+    elif binding_row["binding_status"] != "active":
+        await db.execute(
+            "UPDATE human_service_accounts SET binding_status = 'active', updated_at = ? "
+            "WHERE id = ?",
+            (now, binding_row["id"]),
+        )
+
+    # Create authorization grant
     grant_id = str(uuid.uuid4())
     await db.execute(
         """INSERT OR IGNORE INTO authorization_grants

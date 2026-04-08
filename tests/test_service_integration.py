@@ -758,6 +758,69 @@ class TestCardsJointlyVerified:
         assert grant["ac_human_id"] == TEST_USER_ID
 
     @pytest.mark.asyncio
+    async def test_jointly_verified_creates_binding(self, test_db):
+        """Jointly-verified card approval creates a human_service_accounts binding."""
+        from agentcafe.cafe.cards import _create_jv_grant_if_needed
+        await _seed_user(test_db)
+        await test_db.execute(
+            """INSERT INTO proxy_configs
+               (id, service_id, action_id, backend_url, backend_path, backend_method,
+                scope, created_at, integration_mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'jointly_verified')""",
+            (str(uuid.uuid4()), TEST_SERVICE, TEST_ACTION,
+             "http://localhost:9000", "/api/store", "POST", "write", NOW_ISO),
+        )
+        await test_db.commit()
+
+        card_id = f"card-{uuid.uuid4()}"
+        await _create_jv_grant_if_needed(test_db, TEST_USER_ID, TEST_SERVICE, card_id)
+
+        cursor = await test_db.execute(
+            "SELECT * FROM human_service_accounts "
+            "WHERE ac_human_id = ? AND service_id = ?",
+            (TEST_USER_ID, TEST_SERVICE),
+        )
+        binding = await cursor.fetchone()
+        assert binding is not None
+        assert binding["binding_status"] == "active"
+        assert binding["binding_method"] == "broker_delegated"
+        assert binding["service_account_id"] == TEST_USER_ID
+
+    @pytest.mark.asyncio
+    async def test_binding_reactivated_on_repeat(self, test_db):
+        """Card approval reactivates an existing inactive binding."""
+        from agentcafe.cafe.cards import _create_jv_grant_if_needed
+        await _seed_user(test_db)
+        await test_db.execute(
+            """INSERT INTO proxy_configs
+               (id, service_id, action_id, backend_url, backend_path, backend_method,
+                scope, created_at, integration_mode)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'jointly_verified')""",
+            (str(uuid.uuid4()), TEST_SERVICE, TEST_ACTION,
+             "http://localhost:9000", "/api/store", "POST", "write", NOW_ISO),
+        )
+        # Create an inactive binding
+        await test_db.execute(
+            """INSERT INTO human_service_accounts
+               (id, ac_human_id, service_id, service_account_id,
+                binding_method, binding_status, identity_binding,
+                linked_at, updated_at)
+               VALUES (?, ?, ?, ?, 'broker_delegated', 'unlinked', 'broker_delegated', ?, ?)""",
+            (str(uuid.uuid4()), TEST_USER_ID, TEST_SERVICE, TEST_USER_ID, NOW_ISO, NOW_ISO),
+        )
+        await test_db.commit()
+
+        card_id = f"card-{uuid.uuid4()}"
+        await _create_jv_grant_if_needed(test_db, TEST_USER_ID, TEST_SERVICE, card_id)
+
+        cursor = await test_db.execute(
+            "SELECT binding_status FROM human_service_accounts "
+            "WHERE ac_human_id = ? AND service_id = ?",
+            (TEST_USER_ID, TEST_SERVICE),
+        )
+        assert (await cursor.fetchone())["binding_status"] == "active"
+
+    @pytest.mark.asyncio
     async def test_idempotent_grant(self, test_db):
         """Calling twice with same card_id does not duplicate (INSERT OR IGNORE)."""
         from agentcafe.cafe.cards import _create_jv_grant_if_needed
@@ -779,6 +842,14 @@ class TestCardsJointlyVerified:
         cursor = await test_db.execute(
             "SELECT COUNT(*) as cnt FROM authorization_grants WHERE consent_ref = ?",
             (card_id,),
+        )
+        assert (await cursor.fetchone())["cnt"] == 1
+
+        # Binding should also only have one row
+        cursor = await test_db.execute(
+            "SELECT COUNT(*) as cnt FROM human_service_accounts "
+            "WHERE ac_human_id = ? AND service_id = ?",
+            (TEST_USER_ID, TEST_SERVICE),
         )
         assert (await cursor.fetchone())["cnt"] == 1
 
