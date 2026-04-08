@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,7 +31,7 @@ from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_artifact_keys, configure_keys, get_artifact_key_manager, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
 from agentcafe.wizard.router import configure_wizard, wizard_router
-from agentcafe.cafe.mcp_adapter import configure_mcp_server, mcp_server
+from agentcafe.cafe.mcp_adapter import mcp_server
 
 logger = logging.getLogger("agentcafe")
 
@@ -99,12 +98,11 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         issuer_api_key=cfg.issuer_api_key,
     )
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
-    configure_mcp_server(cfg.public_url)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
     else:
         logger.info("Passport mode: MVP (demo-passport only)")
-    logger.info("MCP adapter available at /mcp (OAuth 2.0 enabled)")
+    logger.info("MCP adapter available at /mcp")
 
     # Start background revocation retry loop (ADR-031)
     revocation_task = asyncio.create_task(_revocation_retry_loop(cfg.db_path))
@@ -167,33 +165,6 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     mcp_server.settings.streamable_http_path = "/"
     app.mount("/mcp", mcp_server.streamable_http_app())
 
-    # RFC 9728: Protected Resource Metadata must be at the root domain, not
-    # inside the /mcp sub-app. MCP clients discover auth by fetching:
-    #   GET /.well-known/oauth-protected-resource/mcp
-    # This tells them the authorization server URL (the /mcp sub-app),
-    # where they then fetch /.well-known/oauth-authorization-server etc.
-    if mcp_server.settings.auth and mcp_server.settings.auth.resource_server_url:
-        from mcp.shared.auth import ProtectedResourceMetadata
-        from mcp.server.auth.routes import build_resource_metadata_url
-
-        _pr_meta_url = build_resource_metadata_url(mcp_server.settings.auth.resource_server_url)
-        from urllib.parse import urlparse as _urlparse
-        _pr_meta_path = _urlparse(str(_pr_meta_url)).path
-
-        @app.get(_pr_meta_path)
-        async def oauth_protected_resource_metadata():
-            """RFC 9728 Protected Resource Metadata for MCP OAuth discovery.
-
-            Built dynamically from current settings so configure_mcp_server()
-            changes are always reflected.
-            """
-            meta = ProtectedResourceMetadata(
-                resource=mcp_server.settings.auth.resource_server_url,
-                authorization_servers=[mcp_server.settings.auth.issuer_url],
-                scopes_supported=mcp_server.settings.auth.required_scopes,
-            )
-            return meta.model_dump(exclude_none=True)
-
     @app.get("/health")
     async def health():
         try:
@@ -217,12 +188,6 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
 
 # Module-level app for standalone deployment (uvicorn agentcafe.main:app)
 # Tests use create_cafe_app() directly without lifespan.
-#
-# IMPORTANT: configure_mcp_server() MUST run before create_cafe_app() because
-# the MCP SDK snapshots issuer_url/resource_server_url into Starlette route
-# handlers when streamable_http_app() is called. Mutating settings after that
-# has no effect on the baked-in OAuth metadata.
-configure_mcp_server(os.environ.get("CAFE_PUBLIC_URL", ""))
 app = create_cafe_app(lifespan=_cafe_lifespan)
 
 

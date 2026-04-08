@@ -245,89 +245,38 @@ async def test_revoke_access_token(provider):
 
 
 # ---------------------------------------------------------------------------
-# MCP server configuration
+# MCP server configuration (open access — OAuth disabled)
 # ---------------------------------------------------------------------------
 
-def test_mcp_server_has_auth():
-    """Verify the MCP server was created with OAuth auth settings."""
+def test_mcp_server_no_auth():
+    """MCP server is open access (OAuth disabled for client compatibility)."""
     from agentcafe.cafe.mcp_adapter import mcp_server
-    assert mcp_server.settings.auth is not None
+    assert mcp_server.settings.auth is None
 
-
-def test_mcp_server_client_registration_enabled():
-    from agentcafe.cafe.mcp_adapter import mcp_server
-    assert mcp_server.settings.auth.client_registration_options is not None
-    assert mcp_server.settings.auth.client_registration_options.enabled is True
-
-
-# ---------------------------------------------------------------------------
-# OAuth discovery endpoints (HTTP-level)
-# ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_protected_resource_metadata_at_root(seeded_db):  # pylint: disable=unused-argument
-    """RFC 9728: /.well-known/oauth-protected-resource/mcp must be at the root."""
+async def test_mcp_endpoint_no_auth_challenge(seeded_db):  # pylint: disable=unused-argument
+    """MCP endpoint should NOT return 401 auth challenge (OAuth disabled)."""
     from httpx import ASGITransport, AsyncClient
     from agentcafe.main import create_cafe_app
     app = create_cafe_app()
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/.well-known/oauth-protected-resource/mcp")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "authorization_servers" in data
-        assert "resource" in data
-
-
-@pytest.mark.asyncio
-async def test_as_metadata_under_mcp(seeded_db):  # pylint: disable=unused-argument
-    """RFC 8414: /.well-known/oauth-authorization-server must be under /mcp."""
-    from httpx import ASGITransport, AsyncClient
-    from agentcafe.main import create_cafe_app
-    app = create_cafe_app()
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/mcp/.well-known/oauth-authorization-server")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert "authorization_endpoint" in data
-        assert "token_endpoint" in data
-        assert "registration_endpoint" in data
-
-
-@pytest.mark.asyncio
-async def test_mcp_oauth_urls_use_public_url(seeded_db):  # pylint: disable=unused-argument
-    """Verify MCP OAuth metadata serves production URLs, not localhost defaults.
-
-    The MCP SDK snapshots issuer_url into Starlette routes when
-    streamable_http_app() is called. configure_mcp_server() must run
-    BEFORE create_cafe_app() so the correct URLs are baked in.
-    """
-    from agentcafe.cafe.mcp_adapter import configure_mcp_server
-    from agentcafe.main import create_cafe_app
-    from httpx import ASGITransport, AsyncClient
-
-    configure_mcp_server("https://example.com")
-    try:
-        app = create_cafe_app()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            # Check the authorization server metadata baked into the MCP sub-app
-            resp = await client.get("/mcp/.well-known/oauth-authorization-server")
-            assert resp.status_code == 200
-            data = resp.json()
-            assert data["issuer"] == "https://example.com/mcp"
-            assert "https://example.com/mcp" in data["token_endpoint"]
-            assert "https://example.com/mcp" in data["authorization_endpoint"]
-
-            # Check the root-level protected resource metadata
-            resp2 = await client.get("/.well-known/oauth-protected-resource/mcp")
-            assert resp2.status_code == 200
-            data2 = resp2.json()
-            assert data2["resource"] == "https://example.com/mcp"
-            assert "https://example.com/mcp" in str(data2["authorization_servers"])
-    finally:
-        # Restore default for other tests
-        from agentcafe.cafe.mcp_adapter import _DEFAULT_ISSUER, mcp_server as _mcp
-        _mcp.settings.auth.issuer_url = _DEFAULT_ISSUER
-        _mcp.settings.auth.resource_server_url = _DEFAULT_ISSUER
+        resp = await client.post(
+            "/mcp/",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0.1"},
+                },
+                "id": 1,
+            },
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+        # Should NOT get 401 (which would mean OAuth is still active).
+        # 500 is expected because session_manager.run() isn't active
+        # in test mode (no lifespan), but that proves auth isn't blocking.
+        assert resp.status_code != 401
