@@ -28,6 +28,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from agentcafe.cafe.cards import (
     CardRequestBody,
@@ -54,6 +55,9 @@ mcp_server = FastMCP(
     "AgentCafe",
     stateless_http=True,
     json_response=True,
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=["agentcafe.io", "agentcafe.fly.dev", "localhost", "127.0.0.1"],
+    ),
 )
 
 
