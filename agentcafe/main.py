@@ -166,6 +166,29 @@ def create_cafe_app(lifespan=None, cors_origins: str = "*") -> FastAPI:
     mcp_server.settings.streamable_http_path = "/"
     app.mount("/mcp", mcp_server.streamable_http_app())
 
+    # RFC 9728: Protected Resource Metadata must be at the root domain, not
+    # inside the /mcp sub-app. MCP clients discover auth by fetching:
+    #   GET /.well-known/oauth-protected-resource/mcp
+    # This tells them the authorization server URL (the /mcp sub-app),
+    # where they then fetch /.well-known/oauth-authorization-server etc.
+    if mcp_server.settings.auth and mcp_server.settings.auth.resource_server_url:
+        from mcp.shared.auth import ProtectedResourceMetadata
+        from mcp.server.auth.routes import build_resource_metadata_url
+
+        _pr_meta = ProtectedResourceMetadata(
+            resource=mcp_server.settings.auth.resource_server_url,
+            authorization_servers=[mcp_server.settings.auth.issuer_url],
+            scopes_supported=mcp_server.settings.auth.required_scopes,
+        )
+        _pr_meta_url = build_resource_metadata_url(mcp_server.settings.auth.resource_server_url)
+        from urllib.parse import urlparse as _urlparse
+        _pr_meta_path = _urlparse(str(_pr_meta_url)).path
+
+        @app.get(_pr_meta_path)
+        async def oauth_protected_resource_metadata():
+            """RFC 9728 Protected Resource Metadata for MCP OAuth discovery."""
+            return _pr_meta.model_dump(exclude_none=True)
+
     @app.get("/health")
     async def health():
         try:

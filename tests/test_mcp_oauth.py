@@ -258,3 +258,38 @@ def test_mcp_server_client_registration_enabled():
     from agentcafe.cafe.mcp_adapter import mcp_server
     assert mcp_server.settings.auth.client_registration_options is not None
     assert mcp_server.settings.auth.client_registration_options.enabled is True
+
+
+# ---------------------------------------------------------------------------
+# OAuth discovery endpoints (HTTP-level)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_protected_resource_metadata_at_root(seeded_db):  # pylint: disable=unused-argument
+    """RFC 9728: /.well-known/oauth-protected-resource/mcp must be at the root."""
+    from httpx import ASGITransport, AsyncClient
+    from agentcafe.main import create_cafe_app
+    app = create_cafe_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/.well-known/oauth-protected-resource/mcp")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "authorization_servers" in data
+        assert "resource" in data
+
+
+@pytest.mark.asyncio
+async def test_as_metadata_under_mcp(seeded_db):  # pylint: disable=unused-argument
+    """RFC 8414: /.well-known/oauth-authorization-server must be under /mcp."""
+    from httpx import ASGITransport, AsyncClient
+    from agentcafe.main import create_cafe_app
+    app = create_cafe_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/mcp/.well-known/oauth-authorization-server")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "authorization_endpoint" in data
+        assert "token_endpoint" in data
+        assert "registration_endpoint" in data
