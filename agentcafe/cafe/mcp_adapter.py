@@ -1,7 +1,10 @@
-"""MCP Server Adapter — 4-tool LLM-native discovery pattern via Streamable HTTP.
+"""MCP Server Adapter — 5-tool LLM-native discovery pattern via Streamable HTTP.
 
 Exposes AgentCafe's Menu, Company Cards, and order proxy as MCP tools.
 MCP adapts to the Cafe — not the other way around (ADR-029).
+cafe.invoke auto-resolves active Company Cards: if a Tier-1 passport fails
+authorization, the adapter transparently upgrades to a Tier-2 token via the
+card's token endpoint and retries.
 
 Tools:
     cafe.search      — Semantic search across the Menu (summaries only)
@@ -32,7 +35,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from agentcafe.cafe.cards import (
     CardRequestBody,
+    CardTokenRequest,
     _validate_agent_passport,
+    get_card_token as _get_card_token,
     request_card as _cards_request_card,
 )
 from agentcafe.cafe.menu import get_full_menu
@@ -399,6 +404,61 @@ async def cafe_request_card(
 # Tool 4: cafe.invoke — Execute a service action via the Cafe proxy
 # ---------------------------------------------------------------------------
 
+async def _find_active_card(service_id: str, action_id: str):
+    """Find an active Company Card that covers the given service+action.
+
+    Returns the card row or None.
+    """
+    db = await get_db()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = await db.execute(
+        """SELECT * FROM company_cards
+           WHERE service_id = ? AND status = 'active' AND expires_at > ?
+           ORDER BY created_at DESC LIMIT 1""",
+        (service_id, now),
+    )
+    card = await cursor.fetchone()
+    if not card:
+        return None
+
+    # Check action is not excluded
+    if card["excluded_action_ids"]:
+        excluded = set(card["excluded_action_ids"].split(","))
+        if action_id in excluded:
+            return None
+
+    # Check action is in allowed list (if set)
+    if card["allowed_action_ids"]:
+        allowed = set(card["allowed_action_ids"].split(","))
+        if action_id not in allowed:
+            return None
+
+    # Check first-use confirmation
+    if card["first_use_confirmation"] and not card["first_use_confirmed_at"]:
+        return None
+
+    return card
+
+
+async def _auto_resolve_card_token(
+    service_id: str, action_id: str, passport: str,
+) -> str | None:
+    """Try to get a Tier-2 token from an active card. Returns token or None."""
+    card = await _find_active_card(service_id, action_id)
+    if not card:
+        return None
+
+    try:
+        token_resp = await _get_card_token(
+            card_id=card["id"],
+            req=CardTokenRequest(action_id=action_id),
+            authorization=f"Bearer {passport}",
+        )
+        return token_resp.token
+    except HTTPException:
+        return None
+
+
 @mcp_server.tool(name="cafe.invoke")
 async def cafe_invoke(
     service_id: str,
@@ -409,6 +469,7 @@ async def cafe_invoke(
     """Execute a real-world action through an external service.
 
     All authorization, consent, and policy enforcement is handled automatically.
+    If you have an approved Company Card, the token upgrade happens transparently.
     Use cafe.get_details first to check required inputs.
 
     Args:
@@ -435,22 +496,70 @@ async def cafe_invoke(
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         error_code = detail.get("error", "invocation_failed")
-        ms = int((time.monotonic() - t0) * 1000)
 
-        # Structured HUMAN_AUTH_REQUIRED error per ADR-029
+        # --- Auto-resolve: try to upgrade via an active Company Card ---
         if error_code in ("human_auth_required", "tier_insufficient", "scope_missing"):
-            await _log_mcp_request(
-                "cafe.invoke", service_id=service_id, action_id=action_id,
-                passport=passport, outcome="auth_required", error_code=error_code,
-                latency_ms=ms,
+            tier2_token = await _auto_resolve_card_token(
+                service_id, action_id, passport,
             )
-            return {
-                "error": "HUMAN_AUTH_REQUIRED",
-                "detail": detail.get("message", ""),
-                "card_suggestion": detail.get("card_suggestion"),
-                "hint": "Use cafe.request_card to get standing authorization for this service.",
-            }
+            if tier2_token:
+                # Retry with the Tier-2 token
+                retry_req = OrderRequest(
+                    service_id=service_id,
+                    action_id=action_id,
+                    passport=tier2_token,
+                    inputs=inputs or {},
+                )
+                try:
+                    result = await place_order(retry_req)
+                    await _log_mcp_request(
+                        "cafe.invoke", service_id=service_id,
+                        action_id=action_id, passport=passport,
+                        latency_ms=int((time.monotonic() - t0) * 1000),
+                    )
+                    return result if isinstance(result, dict) else {"result": result}
+                except HTTPException as retry_exc:
+                    # Retry failed — fall through to error handling
+                    detail = retry_exc.detail if isinstance(retry_exc.detail, dict) else {"message": str(retry_exc.detail)}
+                    error_code = detail.get("error", "invocation_failed")
 
+            # No card or card token failed — return actionable error
+            if not tier2_token:
+                ms = int((time.monotonic() - t0) * 1000)
+                await _log_mcp_request(
+                    "cafe.invoke", service_id=service_id,
+                    action_id=action_id, passport=passport,
+                    outcome="auth_required", error_code=error_code,
+                    latency_ms=ms,
+                )
+                # Check if there's a pending card already
+                db = await get_db()
+                pending_cursor = await db.execute(
+                    "SELECT id, activation_code FROM company_cards "
+                    "WHERE service_id = ? AND status = 'pending' "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (service_id,),
+                )
+                pending = await pending_cursor.fetchone()
+                if pending:
+                    return {
+                        "error": "HUMAN_AUTH_REQUIRED",
+                        "detail": detail.get("message", ""),
+                        "card_id": pending["id"],
+                        "activation_code": pending["activation_code"],
+                        "hint": (
+                            "A card request is already pending for this service. "
+                            "Ask the human to approve it using the activation code above."
+                        ),
+                    }
+                return {
+                    "error": "HUMAN_AUTH_REQUIRED",
+                    "detail": detail.get("message", ""),
+                    "card_suggestion": detail.get("card_suggestion"),
+                    "hint": "Use cafe.request_card to get standing authorization for this service.",
+                }
+
+        ms = int((time.monotonic() - t0) * 1000)
         await _log_mcp_request(
             "cafe.invoke", service_id=service_id, action_id=action_id,
             passport=passport, outcome="error", error_code=error_code,
