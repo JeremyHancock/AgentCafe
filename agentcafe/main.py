@@ -273,14 +273,16 @@ async def main() -> None:
     print(f"  Home Service backend: {cfg.home_service_backend_url}")
     print("=" * 60 + "\n")
 
-    # Run all four servers concurrently
+    # Run all four servers concurrently.
+    # The MCP session manager must be running for Streamable HTTP requests.
     try:
-        await asyncio.gather(
-            run_server(cafe_app, cfg.cafe_host, cfg.cafe_port, "AgentCafe"),
-            run_server(hotel_app, "127.0.0.1", cfg.hotel_backend_port, "HotelBookingService"),
-            run_server(lunch_app, "127.0.0.1", cfg.lunch_backend_port, "LunchDeliveryService"),
-            run_server(home_service_app, "127.0.0.1", cfg.home_service_backend_port, "HomeServiceAppointmentService"),
-        )
+        async with mcp_server.session_manager.run():
+            await asyncio.gather(
+                run_server(cafe_app, cfg.cafe_host, cfg.cafe_port, "AgentCafe"),
+                run_server(hotel_app, "127.0.0.1", cfg.hotel_backend_port, "HotelBookingService"),
+                run_server(lunch_app, "127.0.0.1", cfg.lunch_backend_port, "LunchDeliveryService"),
+                run_server(home_service_app, "127.0.0.1", cfg.home_service_backend_port, "HomeServiceAppointmentService"),
+            )
     finally:
         await close_http_client()
         await close_db()
