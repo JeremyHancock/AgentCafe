@@ -83,6 +83,17 @@ Human Memory launched as the first real service on April 7, 2026 (7 actions, joi
 | 1.14 | **.env.example file** | 30 min | Document all env vars with example values and required/optional annotations. Currently env vars are only documented in README and fly.toml. |
 | 1.15 | **Company account close/transfer** | 4-6 hrs | No way to clean up or hand off old company registrations. Needed before 2nd service since test accounts from development need cleanup. |
 
+### MCP interoperability
+
+| # | Item | Effort | Notes | Dep |
+|---|------|--------|-------|-----|
+| 1.18 | ~~**OAuth 2.0 on MCP endpoint (blocking)**~~ | — | **Done 2026-04-08.** Implemented minimal OAuth 2.0 AS via `mcp_oauth.py` (migration 0015). Auto-approves authorization (Tier-1 equivalent). See #18. Follow-up hardening tracked below (1.19–1.23). | |
+| 1.19 | **Rate-limit MCP OAuth endpoints** | 2-3 hrs | OAuth `/register`, `/authorize`, `/token` endpoints have no rate limiting. Passport registration has 30/min per IP; OAuth endpoints should match. Without this, clients can spam token requests or client registrations unbounded. | 1.18 |
+| 1.20 | **OAuth token expiry sweep** | 1-2 hrs | Expired access/refresh tokens and consumed auth codes are only cleaned up lazily (on access). Add a background task or startup sweep to prune `oauth_access_tokens`, `oauth_refresh_tokens`, and `oauth_auth_codes` tables. Without this, tables grow unbounded. | 1.18 |
+| 1.21 | **E2E MCP OAuth HTTP test** | 3-4 hrs | Current tests exercise the `AgentCafeOAuthProvider` directly. Need an integration test that hits the actual HTTP endpoints (`/.well-known/oauth-authorization-server`, `/register`, `/authorize`, `/token`) through the mounted MCP app to verify the SDK wiring works end-to-end. | 1.18 |
+| 1.22 | **Deferred: bridge OAuth identity to Passport** | 4-8 hrs | Currently the OAuth layer and Passport are independent — OAuth gates transport, Passport gates tools. Agents must OAuth to connect, then separately pass a Passport in tool params. Consider auto-issuing a Tier-1 Passport on OAuth token exchange so agents get a single auth flow. Deferred until validated by agent testing (1.9). | 1.18, 1.9 |
+| 1.23 | **Fix MCP OAuth issuer URL startup ordering** | 1 hr | `FastMCP` is created with a localhost issuer URL at import time, then mutated by `configure_mcp_server()` at startup. If `streamable_http_app()` is called before that (test or import order change), metadata endpoints advertise the wrong URL. Either defer `FastMCP` construction to startup, or make the metadata URL lazy. | 1.18 |
+
 ### Security
 
 | # | Item | Effort | Notes |
@@ -102,6 +113,7 @@ Human Memory launched as the first real service on April 7, 2026 (7 actions, joi
 | 2.2 | **Menu search/filter/pagination** | 4-8 hrs | `cafe.search` does keyword matching but no category/tag filtering. Not needed yet (2 services), becomes critical at 10+. | |
 | 2.3 | **Rate limit transparency** | 2-3 hrs | Add `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` response headers. `Retry-After` already returned on 429. Agents currently can't discover limits without reading code. | |
 | 2.4 | **Long-poll or webhook push for consent status** | 4-6 hrs | Agents currently poll `GET /cafe/order/{id}`. Polling works but adds latency and load. Long-poll is simplest; webhooks better for production agents. | 1.9 |
+| 2.4a | ~~**Clean response for MCP OAuth discovery**~~ | — | Done as part of M1 1.18. See #18. | |
 
 ### Account security
 
@@ -200,6 +212,12 @@ M1 (2nd service ready)
                          └── 1.4 (operationId heuristic, builds on 1.1)
   1.1 + 1.3 + 1.5 ──── block self-serve onboarding (M1 gate)
   1.9 (agent testing) ──── results reprioritize M2 agent experience items
+  1.18 (MCP OAuth) ──── DONE; follow-up hardening:
+    1.19 (rate limits) ──── unbounded OAuth endpoint spam risk
+    1.20 (token sweep) ──── unbounded table growth
+    1.21 (E2E HTTP test) ──── verify SDK wiring, not just provider
+    1.22 (OAuth→Passport bridge) ──── deferred until 1.9 agent testing
+    1.23 (issuer URL ordering) ──── fragile startup dependency
   1.10 (SQLite backup) ──── HM data is live and unbackuped, urgent
 
 M2 (public beta)
