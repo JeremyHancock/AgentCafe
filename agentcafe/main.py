@@ -31,7 +31,7 @@ from agentcafe.db.seed import seed_demo_data
 from agentcafe.keys import configure_artifact_keys, configure_keys, get_artifact_key_manager, get_key_manager
 from agentcafe.cafe.wizard_pages import configure_wizard_pages, wizard_pages_router
 from agentcafe.wizard.router import configure_wizard, wizard_router
-from agentcafe.cafe.mcp_adapter import mcp_server
+from agentcafe.cafe.mcp_adapter import configure_mcp_server, mcp_server
 
 logger = logging.getLogger("agentcafe")
 
@@ -98,11 +98,12 @@ async def _cafe_lifespan(_app: FastAPI):  # noqa: unused but required by FastAPI
         issuer_api_key=cfg.issuer_api_key,
     )
     configure_router(cfg.use_real_passport, issuer_api_key=cfg.issuer_api_key)
+    configure_mcp_server(cfg.public_url)
     if cfg.use_real_passport:
         logger.info("Passport mode: REAL JWT validation")
     else:
         logger.info("Passport mode: MVP (demo-passport only)")
-    logger.info("MCP adapter available at /mcp")
+    logger.info("MCP adapter available at /mcp (OAuth 2.0 enabled)")
 
     # Start background revocation retry loop (ADR-031)
     revocation_task = asyncio.create_task(_revocation_retry_loop(cfg.db_path))
