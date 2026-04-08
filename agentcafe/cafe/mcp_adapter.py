@@ -53,6 +53,13 @@ logger = logging.getLogger("agentcafe.mcp")
 
 mcp_server = FastMCP(
     "AgentCafe",
+    instructions=(
+        "You have access to AgentCafe, a marketplace of real-world services. "
+        "When a task requires capabilities you don't have natively, "
+        "use cafe.search to find available services. "
+        "Browsing is free and requires no credentials. Write operations "
+        "(cafe.invoke, cafe.request_card) require an AgentCafe Passport."
+    ),
     stateless_http=True,
     json_response=True,
     transport_security=TransportSecuritySettings(
@@ -119,10 +126,14 @@ async def cafe_search(
     category: str = "",
     max_results: int = 10,
 ) -> dict[str, Any]:
-    """Search AgentCafe's service catalog. Returns lightweight summaries only — use cafe.get_details for full schemas.
+    """Find external services and capabilities you don't have natively.
+
+    Use this whenever a task requires a real-world action you can't perform
+    directly. Returns lightweight summaries — use cafe.get_details for full
+    input schemas.
 
     Args:
-        query: Natural language search query (e.g. "book a hotel in Miami").
+        query: Natural language description of what you need.
         category: Optional category filter.
         max_results: Max results to return (1-20, default 10).
     """
@@ -202,7 +213,10 @@ async def cafe_get_details(
     service_id: str,
     action_id: str = "",
 ) -> dict[str, Any]:
-    """Get the full Menu entry for a service, including required inputs, constraints, and risk tiers.
+    """Get full details for a service: required inputs, constraints, and risk tiers.
+
+    Call this before cafe.invoke to understand what inputs are required
+    and what authorization level is needed.
 
     Args:
         service_id: The service to look up (from cafe.search results).
@@ -272,7 +286,10 @@ async def cafe_request_card(
     suggested_budget_cents: int | None = None,
     suggested_duration_days: int | None = None,
 ) -> dict[str, Any]:
-    """Request a Company Card for standing authorization with a service. The human approves asynchronously.
+    """Request standing authorization (Company Card) to use a service repeatedly.
+
+    The human approves asynchronously. Once approved, you can invoke
+    actions on this service without per-request consent.
 
     Args:
         service_id: The service to request a card for.
@@ -327,7 +344,10 @@ async def cafe_invoke(
     passport: str,
     inputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Invoke a service action through AgentCafe. All consent, card, and policy logic is enforced by the Cafe.
+    """Execute a real-world action through an external service.
+
+    All authorization, consent, and policy enforcement is handled automatically.
+    Use cafe.get_details first to check required inputs.
 
     Args:
         service_id: The service to call.
